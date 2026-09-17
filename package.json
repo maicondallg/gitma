@@ -1,0 +1,63 @@
+{
+  "name": "gitma-desktop",
+  "version": "0.1.1",
+  "description": "Blazing-fast, lightweight native Git desktop client powered by Rust and Tauri v2",
+  "license": "MIT",
+  "author": "Maicon Dall'Agnol",
+  "engines": {
+    "node": ">=22"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/maicondallg/gitma.git"
+  },
+  "keywords": [
+    "git",
+    "git-client",
+    "tauri",
+    "tauri-v2",
+    "rust",
+    "react",
+    "desktop-app",
+    "version-control",
+    "monaco-editor"
+  ],
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1 --port 1420 --strictPort",
+    "build": "tsc --noEmit && vite build",
+    "check": "tsc --noEmit",
+    "test": "vitest run",
+    "test:e2e": "playwright test",
+    "tauri": "tauri"
+  },
+  "dependencies": {
+    "@radix-ui/react-dropdown-menu": "^2",
+    "@radix-ui/react-tooltip": "^1",
+    "@tanstack/react-virtual": "^3",
+    "@tauri-apps/api": "^2",
+    "@tauri-apps/plugin-dialog": "^2",
+    "lucide-react": "^0.468",
+    "monaco-editor": "^0.52.2",
+    "radix-ui": "^1",
+    "react": "^19",
+    "react-dom": "^19",
+    "react-resizable-panels": "^2.1.9",
+    "zustand": "^5"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.58",
+    "@tauri-apps/cli": "^2",
+    "@testing-library/jest-dom": "^6",
+    "@testing-library/react": "^16",
+    "@testing-library/user-event": "^14",
+    "@types/node": "^22",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "@vitejs/plugin-react": "^5",
+    "jsdom": "^26",
+    "typescript": "^5.9",
+    "vite": "^7.3.1",
+    "vitest": "^4.1.11"
+  }
+}

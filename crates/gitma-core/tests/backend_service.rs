@@ -1,0 +1,230 @@
+use gitma_core::backend::{Backend, Operation};
+use std::path::Path;
+use std::process::Command;
+use std::sync::mpsc;
+use std::time::Duration;
+use tempfile::TempDir;
+
+fn git(dir: &Path, args: &[&str]) {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(args)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "git {args:?}: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+fn repo() -> TempDir {
+    let dir = TempDir::new().unwrap();
+    git(dir.path(), &["init", "-q"]);
+    git(
+        dir.path(),
+        &["config", "user.email", "test@example.invalid"],
+    );
+    git(dir.path(), &["config", "user.name", "Test"]);
+    dir
+}
+fn commit(dir: &Path, path: &str, text: &str, message: &str) {
+    std::fs::write(dir.join(path), text).unwrap();
+    git(dir, &["add", "--", path]);
+    git(dir, &["commit", "-qm", message]);
+}
+
+#[test]
+fn sessions_keep_file_ids_opaque_and_previews_use_real_sides() {
+    let left = repo();
+    let right = repo();
+    commit(left.path(), "note.txt", "one\n", "first");
+    commit(right.path(), "other.txt", "right\n", "first");
+    std::fs::write(left.path().join("note.txt"), "two\n").unwrap();
+
+    let backend = Backend::new();
+    let first = backend.open(left.path(), |_| {}).unwrap();
+    let second = backend.open(right.path(), |_| {}).unwrap();
+    let snapshot = backend.snapshot(&first.session_id, 4).unwrap();
+    let file = snapshot.unstaged.first().unwrap();
+    assert!(!file.id.contains("note.txt"));
+    let preview = backend
+        .file_preview(&first.session_id, 5, &file.id)
+        .unwrap();
+    assert_eq!(preview.kind, "text");
+    assert_eq!(preview.original, "one\n");
+    assert_eq!(preview.modified, "two\n");
+    std::fs::write(left.path().join("note.txt"), "changed again\n").unwrap();
+    let changed_preview = backend
+        .file_preview(&first.session_id, 6, &file.id)
+        .unwrap();
+    assert_ne!(
+        changed_preview.version, preview.version,
+        "preview content changes must recreate the editor model"
+    );
+    std::fs::write(left.path().join("note.txt"), "two\n").unwrap();
+    let unchanged = backend.snapshot(&first.session_id, 7).unwrap();
+    assert_eq!(
+        snapshot.revision, unchanged.revision,
+        "identical snapshots retain their identity"
+    );
+    assert!(backend
+        .file_preview(&second.session_id, 6, &file.id)
+        .is_err());
+
+    backend
+        .apply_operation(
+            &first.session_id,
+            8,
+            Operation::Stage,
+            std::slice::from_ref(&file.id),
+            "",
+        )
+        .unwrap();
+    std::fs::write(left.path().join("note.txt"), "three\n").unwrap();
+    let staged = backend.snapshot(&first.session_id, 9).unwrap();
+    let staged_preview = backend
+        .file_preview(&first.session_id, 10, &staged.staged[0].id)
+        .unwrap();
+    assert_eq!(
+        (staged_preview.original, staged_preview.modified),
+        ("one\n".into(), "two\n".into())
+    );
+    let unstaged_preview = backend
+        .file_preview(&first.session_id, 11, &staged.unstaged[0].id)
+        .unwrap();
+    assert_eq!(
+        (unstaged_preview.original, unstaged_preview.modified),
+        ("two\n".into(), "three\n".into())
+    );
+    backend.close(&first.session_id).unwrap();
+    backend.close(&second.session_id).unwrap();
+}
+
+#[test]
+fn commit_preview_handles_root_and_rename_paths() {
+    let dir = repo();
+    commit(dir.path(), "old.txt", "before\n", "root");
+    git(dir.path(), &["mv", "old.txt", "new.txt"]);
+    git(dir.path(), &["commit", "-qm", "rename"]);
+    let backend = Backend::new();
+    let session = backend.open(dir.path(), |_| {}).unwrap();
+    let history = backend.history(&session.session_id, 1, 0).unwrap();
+    let rename = history.rows.first().unwrap().commit.oid.clone();
+    let files = backend
+        .commit_files(&session.session_id, 2, &rename)
+        .unwrap();
+    let file = files
+        .files
+        .iter()
+        .find(|file| file.status == "renamed")
+        .unwrap();
+    let preview = backend
+        .file_preview(&session.session_id, 3, &file.id)
+        .unwrap();
+    assert_eq!(preview.kind, "text");
+    assert_eq!(preview.original, "before\n");
+    assert_eq!(preview.modified, "before\n");
+
+    let root = history
+        .rows
+        .iter()
+        .find(|row| row.commit.parents.is_empty())
+        .unwrap();
+    let root_file = backend
+        .commit_files(&session.session_id, 4, &root.commit.oid)
+        .unwrap()
+        .files
+        .remove(0);
+    let root_preview = backend
+        .file_preview(&session.session_id, 5, &root_file.id)
+        .unwrap();
+    assert_eq!(root_preview.original, "");
+    assert_eq!(root_preview.modified, "before\n");
+    backend.close(&session.session_id).unwrap();
+}
+
+#[test]
+fn staged_preview_in_an_unborn_repository_has_an_empty_head_side() {
+    let dir = repo();
+    std::fs::write(dir.path().join("first.txt"), "first\n").unwrap();
+    let backend = Backend::new();
+    let session = backend.open(dir.path(), |_| {}).unwrap();
+    let file = backend
+        .snapshot(&session.session_id, 1)
+        .unwrap()
+        .unstaged
+        .remove(0);
+    backend
+        .apply_operation(&session.session_id, 2, Operation::Stage, &[file.id], "")
+        .unwrap();
+    let staged = backend
+        .snapshot(&session.session_id, 3)
+        .unwrap()
+        .staged
+        .remove(0);
+    let preview = backend
+        .file_preview(&session.session_id, 4, &staged.id)
+        .unwrap();
+    assert_eq!(preview.kind, "text");
+    assert_eq!(preview.original, "");
+    assert_eq!(preview.modified, "first\n");
+    backend.close(&session.session_id).unwrap();
+}
+
+#[test]
+fn reads_do_not_touch_index_and_ignored_bursts_do_not_emit() {
+    let dir = repo();
+    commit(dir.path(), "tracked.txt", "one\n", "initial");
+    std::fs::write(dir.path().join(".gitignore"), "ignored.tmp\n").unwrap();
+    git(dir.path(), &["add", ".gitignore"]);
+    git(dir.path(), &["commit", "-qm", "ignore"]);
+    let (tx, rx) = mpsc::channel();
+    let backend = Backend::new();
+    let session = backend
+        .open(dir.path(), move |event| {
+            let _ = tx.send(event);
+        })
+        .unwrap();
+    let before = std::fs::metadata(dir.path().join(".git/index"))
+        .unwrap()
+        .modified()
+        .unwrap();
+    let _ = backend.snapshot(&session.session_id, 1).unwrap();
+    let after = std::fs::metadata(dir.path().join(".git/index"))
+        .unwrap()
+        .modified()
+        .unwrap();
+    assert_eq!(before, after, "read commands must not refresh the index");
+    if let Ok(event) = rx.recv_timeout(Duration::from_millis(750)) {
+        panic!("read commands unexpectedly notified the UI: {event:?}");
+    }
+
+    std::fs::write(dir.path().join("ignored.tmp"), "ignored\n").unwrap();
+    std::fs::create_dir_all(dir.path().join(".git/objects/test")).unwrap();
+    std::fs::write(dir.path().join(".git/objects/test/blob"), b"object").unwrap();
+    std::thread::sleep(Duration::from_millis(2300));
+    if let Ok(event) = rx.try_recv() {
+        panic!("ignored and object writes must not notify the UI: {event:?}");
+    }
+    std::fs::write(dir.path().join("tracked.txt"), "two\n").unwrap();
+    let event = rx
+        .recv_timeout(Duration::from_secs(3))
+        .expect("tracked worktree edit should notify");
+    assert!(matches!(event.scope.as_str(), "worktree" | "all"));
+    assert!(
+        event.paths.iter().any(|path| path == "tracked.txt"),
+        "worktree paths must be relative for UI preview matching: {event:?}"
+    );
+    std::fs::write(dir.path().join("tracked.txt"), "one\n").unwrap();
+    let restored = rx
+        .recv_timeout(Duration::from_secs(3))
+        .expect("restoring a tracked file to clean must notify");
+    assert!(restored.paths.iter().any(|path| path == "tracked.txt"));
+    assert!(backend
+        .snapshot(&session.session_id, 2)
+        .unwrap()
+        .unstaged
+        .is_empty());
+    backend.close(&session.session_id).unwrap();
+}

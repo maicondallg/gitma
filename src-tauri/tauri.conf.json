@@ -1,0 +1,29 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Gitma",
+  "version": "0.1.1",
+  "identifier": "dev.gitma.desktop",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://127.0.0.1:1420",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [{ "title": "Gitma", "width": 1440, "height": 900, "minWidth": 1100, "minHeight": 700 }],
+    "security": {
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' asset: http://asset.localhost data:; font-src 'self' data:; worker-src 'self' blob:; connect-src ipc: http://ipc.localhost",
+      "capabilities": [{ "identifier": "main", "windows": ["main"], "permissions": ["core:default", "dialog:allow-open"] }]
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["deb"],
+    "icon": ["icons/icon.png", "icons/icon.ico", "icons/icon.icns"],
+    "linux": {
+      "deb": {
+        "depends": ["git"]
+      }
+    }
+  }
+}

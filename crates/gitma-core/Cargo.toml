@@ -1,0 +1,20 @@
+[package]
+name = "gitma-core"
+version = "0.1.1"
+edition = "2021"
+description = "Core domain logic, Git process runner, graph layout engine, and diff service for Gitma"
+license = "MIT"
+authors = ["Maicon Dall'Agnol <maicon.dallagnol@unesp.br>"]
+repository = "https://github.com/maicondallg/Gitma"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+notify = "7"
+sha2 = "0.10"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[dev-dependencies]
+tempfile = "3"

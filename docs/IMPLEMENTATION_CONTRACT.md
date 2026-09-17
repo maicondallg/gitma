@@ -1,0 +1,15 @@
+# Tauri migration contract
+
+Shared DTO source: ui/src/lib/types.ts. RPC fields/arguments camelCase. Rust holds native paths; file IDs opaque and stable within session/area/context. Never reconstruct paths from display names. Errors JSON AppError.
+
+Commands: open_repository(path:string)->Session; close_repository(sessionId:string)->void; get_snapshot(sessionId,requestId:number)->Snapshot; get_history(sessionId,requestId,page:number)->History (200/page, layout continuity); get_commit_files(sessionId,requestId,oid)->CommitFiles; get_file_preview(sessionId,requestId,fileId)->Preview; apply_operation(sessionId,requestId,operation:Operation,fileIds:string[],message:string)->OperationResult.
+
+Event repo-changed: RepoChanged. Rust debounce500ms/max2s, no polling Git. Watch HEAD/index/refs/packed-refs/config; ignore lock/object/reflog writes and ignored worktree files (tracked always included). Reads GIT_OPTIONAL_LOCKS=0. Snapshot/read coordinator; writes serialized/validated. Events during work retained/coalesced.
+
+Frontend useAppStore state: session,snapshot,history (History|null, accumulated rows),context,commitFiles:FileEntry[],selectedFile:FileEntry|null,preview:Preview|null,diffMode,commitMessage,refreshing,opening,operation:Operation|null,notice:AppError|{message:string;category:'success'}|null. Actions openRepository(path?:string),refresh(reason?:'manual'|'focus'|'watcher'|'mutation',event?:RepoChanged),selectLocal(),selectCommit(oid),selectFile(file),loadMore(),runOperation(operation,fileIds?:string[]),setCommitMessage(value),setDiffMode(mode),dismissNotice(). Latest session/request only. Refresh never clears diff or blocks browsing. No-op retains object identities/editor models/scroll. History reload only historyKey change. Watcher paths determine preview reload; manual revalidates content. Preserve historical selection on local refresh.
+
+Components GraphPanel,FilesPanel,CommitForm: named exports no props, store selectors, ui/src/components own files. DiffPanel principal UI worker. Graph row56px, author/hash/date second row, compact refs with overflow tooltip. Files row40px basename/directory/status, stage checkbox separate; history no checkbox/form. Lists virtualized TanStack. No cards within rows; one panel header. Shared CSS vars --bg,--surface,--raised,--border,--text,--muted,--accent,--green,--red,--selected. Principal owns styles.css; lists worker Lists.css scoped only. Root manifests/types/config/docs.
+
+All assets/workers bundled; no CDN. Monaco read-only original/modified, renderSideBySide false/true, useInlineViewWhenSpaceIsLimited false, automaticLayout, minimap off, scrollBeyondLastLine false. Limits2MiB/20k lines per side -> tooLarge. Binary/missing/conflict explicit, no truncated fabricated full diff. Preview: unstaged index/worktree; staged HEAD/index; commit first-parent/commit; root empty. Rename old/new paths. Native OsStr args no shell.
+
+Implementation directories: crates/gitma-core (native Git service), src-tauri (desktop IPC), ui (React frontend). The previous Iced implementation has been removed.

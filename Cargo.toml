@@ -1,0 +1,4 @@
+[workspace]
+members = ["crates/gitma-core", "src-tauri"]
+default-members = ["crates/gitma-core"]
+resolver = "2"
