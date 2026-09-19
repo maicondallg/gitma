@@ -15,6 +15,7 @@ import {
   X,
 } from 'lucide-react';
 import { useI18n } from '../i18n';
+import logoSvg from '../../logo.svg';
 import type { SupportedLocale, ThemeColors, ThemeDefinition } from '../lib/types';
 import {
   deleteCustomTheme,
@@ -452,9 +453,7 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
             {activeSection === 'about' && (
               <div className="settings-section about-section">
                 <div className="about-hero">
-                  <div className="about-brand-badge">
-                    <GitBranch size={28} />
-                  </div>
+                  <img src={logoSvg} alt="Gitma" className="about-hero-logo" />
                   <h3>Gitma Desktop</h3>
                   <span className="about-version">v0.1.1 • Tauri v2 + Rust</span>
                 </div>

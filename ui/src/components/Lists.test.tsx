@@ -13,6 +13,7 @@ import { ResetModal } from './ResetModal'
 import App from '../App'
 import { useAppStore, type AppState } from '../store/app'
 import type { FileEntry } from '../lib/types'
+import { setLanguage } from '../i18n'
 
 const file = (id: string, pathDisplay: string, area: FileEntry['area']): FileEntry => {
   const bits = pathDisplay.split('/')
@@ -83,7 +84,11 @@ function state(overrides: Partial<AppState> = {}): AppState {
 }
 
 
-beforeEach(() => { vi.clearAllMocks(); useAppStore.setState(state()) })
+beforeEach(() => {
+  vi.clearAllMocks();
+  setLanguage('pt-BR');
+  useAppStore.setState(state());
+})
 afterEach(() => cleanup())
 
 describe('listas de alterações', () => {
@@ -167,7 +172,7 @@ describe('gráfico', () => {
     const selectLocal = vi.fn(async () => {})
     useAppStore.setState(state({ selectLocal }))
     render(<GraphPanel />)
-    const uncommittedRow = screen.getByText(/Uncommitted changes/i).closest('button')!
+    const uncommittedRow = screen.getByText(/Uncommitted changes|Alterações locais/i).closest('button')!
     fireEvent.click(uncommittedRow)
     expect(selectLocal).toHaveBeenCalledTimes(1)
   })
@@ -331,7 +336,7 @@ describe('Stash, Cherry-pick e RefPopover no GraphPanel', () => {
       />
     )
 
-    const cherryBtn = screen.getByText(/Cherry-pick este commit/i)
+    const cherryBtn = screen.getByText(/Cherry-pick.*commit/i)
     expect(cherryBtn).toBeInTheDocument()
     fireEvent.click(cherryBtn)
     expect(onCherryPick).toHaveBeenCalledWith('1234567890abcdef')
@@ -407,7 +412,7 @@ describe('Stash, Cherry-pick e RefPopover no GraphPanel', () => {
     expect(onClose).toHaveBeenCalledTimes(2)
   })
 
-  it('fecha RefPopover ao abrir ContextMenu a partir do popover', () => {
+  it('mantém RefPopover aberto ao abrir ContextMenu a partir do popover', () => {
     const commit = {
       oid: 'c99988877766',
       parents: [],
@@ -438,8 +443,8 @@ describe('Stash, Cherry-pick e RefPopover no GraphPanel', () => {
     const moreButtons = screen.getAllByTitle(/Mais ações/i)
     fireEvent.click(moreButtons[0])
 
-    // O popover deve ter sido fechado e o context menu aberto
-    expect(screen.queryByRole('dialog', { name: /Referências do commit/i })).not.toBeInTheDocument()
+    // O popover e o context menu devem ambos estar visíveis
+    expect(screen.getByRole('dialog', { name: /Referências do commit/i })).toBeInTheDocument()
     expect(screen.getByRole('menu')).toBeInTheDocument()
   })
 

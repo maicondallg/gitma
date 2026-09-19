@@ -14,6 +14,7 @@ import {
   Trash2,
   Undo2,
 } from 'lucide-react';
+import { useI18n } from '../i18n';
 
 export interface ContextMenuProps {
   x: number;
@@ -74,6 +75,7 @@ export function ContextMenu({
   onStashDrop,
   onCopyHash,
 }: ContextMenuProps) {
+  const { t } = useI18n();
   const menuRef = useRef<HTMLDivElement>(null);
   const [pos, setPos] = useState({
     x: Math.max(8, Math.min(x, (typeof window !== 'undefined' ? window.innerWidth : 1000) - 270)),
@@ -140,10 +142,10 @@ export function ContextMenu({
               onClose();
               onDeleteTag?.(tagName);
             }}
-            title={`Excluir tag ${tagName}`}
+            title={t('contextMenu.deleteTag', { name: tagName })}
           >
             <Trash2 size={14} />
-            <span>Excluir tag ({tagName})</span>
+            <span>{t('contextMenu.deleteTag', { name: tagName })}</span>
           </button>
           <div className="menu-separator" />
         </>
@@ -158,10 +160,10 @@ export function ContextMenu({
               onClose();
               onStashPop?.(branchName ?? undefined);
             }}
-            title="Aplica o stash e o remove da lista"
+            title={t('contextMenu.stashPopDesc')}
           >
             <Archive size={14} />
-            <span>Aplicar e remover (Pop)</span>
+            <span>{t('contextMenu.stashPop')}</span>
           </button>
           <button
             type="button"
@@ -170,10 +172,10 @@ export function ContextMenu({
               onClose();
               onStashApply?.(branchName ?? undefined);
             }}
-            title="Aplica o stash mantendo-o na lista"
+            title={t('contextMenu.stashApplyDesc')}
           >
             <Archive size={14} />
-            <span>Aplicar e manter (Apply)</span>
+            <span>{t('contextMenu.stashApply')}</span>
           </button>
           <button
             type="button"
@@ -182,10 +184,10 @@ export function ContextMenu({
               onClose();
               onStashDrop?.(branchName ?? undefined);
             }}
-            title="Descarta definitivamente este stash"
+            title={t('contextMenu.stashDropDesc')}
           >
             <Trash2 size={14} />
-            <span>Descartar stash (Drop)</span>
+            <span>{t('contextMenu.stashDrop')}</span>
           </button>
           <div className="menu-separator" />
         </>
@@ -203,7 +205,7 @@ export function ContextMenu({
             }}
           >
             <GitBranch size={14} />
-            <span>Fazer checkout ({branchName})</span>
+            <span>{t('contextMenu.checkout', { name: branchName })}</span>
           </button>
           <button
             type="button"
@@ -215,7 +217,7 @@ export function ContextMenu({
             }}
           >
             <Merge size={14} />
-            <span>Fazer merge em {currentBranchName ?? 'HEAD'}</span>
+            <span>{t('contextMenu.merge', { branch: currentBranchName ?? 'HEAD' })}</span>
           </button>
           <button
             type="button"
@@ -225,10 +227,10 @@ export function ContextMenu({
               onClose();
               onMergeSquash?.(branchName);
             }}
-            title="Mescla todas as alterações da branch em um único commit no stage"
+            title={t('contextMenu.mergeSquashDesc')}
           >
             <Layers size={14} />
-            <span>Fazer merge com squash</span>
+            <span>{t('contextMenu.mergeSquash')}</span>
           </button>
           <button
             type="button"
@@ -238,10 +240,10 @@ export function ContextMenu({
               onClose();
               onRebase?.(branchName);
             }}
-            title={`Rebasear ${currentBranchName ?? 'branch atual'} sobre ${branchName}`}
+            title={t('contextMenu.rebase', { branch: branchName })}
           >
             <GitPullRequest size={14} />
-            <span>Rebasear branch atual sobre {branchName}</span>
+            <span>{t('contextMenu.rebase', { branch: branchName })}</span>
           </button>
           <button
             type="button"
@@ -252,7 +254,7 @@ export function ContextMenu({
             }}
           >
             <GitFork size={14} />
-            <span>Criar nova branch a partir daqui...</span>
+            <span>{t('contextMenu.createBranchHere')}</span>
           </button>
           {!isRemoteBranch && (
             <button
@@ -265,7 +267,7 @@ export function ContextMenu({
               }}
             >
               <Trash2 size={14} />
-              <span>Excluir branch ({branchName})</span>
+              <span>{t('contextMenu.deleteBranch', { name: branchName })}</span>
             </button>
           )}
           {isRemoteBranch && (
@@ -276,10 +278,10 @@ export function ContextMenu({
                 onClose();
                 onDeleteRemoteBranch?.(branchName);
               }}
-              title={`Excluir branch ${branchName} no repositório remoto`}
+              title={t('contextMenu.deleteRemotePush')}
             >
               <Trash2 size={14} />
-              <span>Excluir no remoto (push --delete)</span>
+              <span>{t('contextMenu.deleteRemotePush')}</span>
             </button>
           )}
           <div className="menu-separator" />
@@ -297,7 +299,7 @@ export function ContextMenu({
             }}
           >
             <GitFork size={14} />
-            <span>Criar branch neste commit...</span>
+            <span>{t('contextMenu.createBranchAtCommit')}</span>
           </button>
           {currentBranchName && (
             <button
@@ -307,10 +309,10 @@ export function ContextMenu({
                 onClose();
                 onRebase?.(commitOid);
               }}
-              title={`Rebasear ${currentBranchName} sobre o commit ${commitOid.slice(0, 7)}`}
+              title={t('contextMenu.rebaseCurrentOverCommit')}
             >
               <GitPullRequest size={14} />
-              <span>Rebasear branch atual sobre este commit</span>
+              <span>{t('contextMenu.rebaseCurrentOverCommit')}</span>
             </button>
           )}
           <button
@@ -320,10 +322,10 @@ export function ContextMenu({
               onClose();
               onSquashTo?.(commitOid);
             }}
-            title="Consolida todos os commits posteriores em um único commit a partir deste ponto"
+            title={t('contextMenu.squashCommitsToHere')}
           >
             <Layers size={14} />
-            <span>Squash dos commits até aqui...</span>
+            <span>{t('contextMenu.squashCommitsToHere')}</span>
           </button>
         </>
       )}
@@ -336,10 +338,10 @@ export function ContextMenu({
             onClose();
             onCreateTag?.(commitOid);
           }}
-          title="Criar tag de versão neste commit"
+          title={t('contextMenu.createTagAtCommit')}
         >
           <Tag size={14} />
-          <span>Criar Tag neste commit...</span>
+          <span>{t('contextMenu.createTagAtCommit')}</span>
         </button>
       )}
 
@@ -350,10 +352,10 @@ export function ContextMenu({
           onClose();
           onCherryPick?.(commitOid);
         }}
-        title="Aplica este commit na branch atual"
+        title={t('contextMenu.cherryPick')}
       >
         <CopyPlus size={14} />
-        <span>Cherry-pick este commit</span>
+        <span>{t('contextMenu.cherryPick')}</span>
       </button>
 
       {!isStash && (
@@ -365,10 +367,10 @@ export function ContextMenu({
               onClose();
               onRevertCommit?.(commitOid);
             }}
-            title="Cria um novo commit desfazendo as alterações deste commit com segurança"
+            title={t('contextMenu.revert')}
           >
             <Undo2 size={14} />
-            <span>Reverter este commit...</span>
+            <span>{t('contextMenu.revertCommit')}</span>
           </button>
           <button
             type="button"
@@ -377,10 +379,16 @@ export function ContextMenu({
               onClose();
               onResetHead?.(commitOid);
             }}
-            title={`Resetar ${currentBranchName ? `a branch ${currentBranchName}` : 'HEAD'} para este commit`}
+            title={t('contextMenu.resetBranchToHere', {
+              branch: currentBranchName ? `(${currentBranchName})` : 'HEAD',
+            })}
           >
             <RotateCcw size={14} />
-            <span>Resetar {currentBranchName ? `branch (${currentBranchName})` : 'HEAD'} para aqui...</span>
+            <span>
+              {t('contextMenu.resetBranchToHere', {
+                branch: currentBranchName ? `(${currentBranchName})` : 'HEAD',
+              })}
+            </span>
           </button>
         </>
       )}
@@ -394,7 +402,7 @@ export function ContextMenu({
         }}
       >
         <Copy size={14} />
-        <span>Copiar hash ({commitOid.slice(0, 7)})</span>
+        <span>{t('contextMenu.copyHashWithOid', { hash: commitOid.slice(0, 7) })}</span>
       </button>
     </div>,
     document.body

@@ -1,11 +1,14 @@
 import { useEffect } from 'react';
 import { Keyboard, X } from 'lucide-react';
+import { useI18n } from '../i18n';
 
 interface ShortcutsModalProps {
   onClose: () => void;
 }
 
 export function ShortcutsModal({ onClose }: ShortcutsModalProps) {
+  const { t } = useI18n();
+
   useEffect(() => {
     const handleKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onClose();
@@ -16,58 +19,59 @@ export function ShortcutsModal({ onClose }: ShortcutsModalProps) {
 
   const shortcutGroups = [
     {
-      title: 'Gerenciamento de Abas',
+      title: t('shortcuts.tabMgmt'),
       shortcuts: [
-        { desc: 'Nova aba / Abrir projeto(s)', keys: ['Ctrl', 'N'] },
-        { desc: 'Fechar aba ativa', keys: ['Ctrl', 'W'] },
-        { desc: 'Fechar aba pelo mouse', keys: ['Botão do meio'] },
-        { desc: 'Fechar outras abas', keys: ['Ctrl', 'Shift', 'W'] },
-        { desc: 'Próxima aba', keys: ['Ctrl', 'Tab'] },
-        { desc: 'Aba anterior', keys: ['Ctrl', 'Shift', 'Tab'] },
-        { desc: 'Pular para aba 1 a 8', keys: ['Ctrl', '1..8'] },
-        { desc: 'Pular para última aba', keys: ['Ctrl', '9'] },
+        { desc: t('shortcuts.newTab'), keys: ['Ctrl', 'N'] },
+        { desc: t('shortcuts.closeTab'), keys: ['Ctrl', 'W'] },
+        { desc: t('shortcuts.closeTabMouse'), keys: [t('shortcuts.middleClick')] },
+        { desc: t('shortcuts.closeOtherTabs'), keys: ['Ctrl', 'Shift', 'W'] },
+        { desc: t('shortcuts.nextTab'), keys: ['Ctrl', 'Tab'] },
+        { desc: t('shortcuts.prevTab'), keys: ['Ctrl', 'Shift', 'Tab'] },
+        { desc: t('shortcuts.jumpToTab'), keys: ['Ctrl', '1..8'] },
+        { desc: t('shortcuts.jumpToLastTab'), keys: ['Ctrl', '9'] },
       ],
     },
     {
-      title: 'Repositório & Histórico',
+      title: t('shortcuts.repoAndHistory'),
       shortcuts: [
-        { desc: 'Abrir repositório local', keys: ['Ctrl', 'O'] },
-        { desc: 'Criar nova branch', keys: ['Ctrl', 'B'] },
-        { desc: 'Atualizar repositório', keys: ['Ctrl', 'R'] },
-        { desc: 'Opções de Push (Force with lease)', keys: ['Botão direito', 'Push'] },
+        { desc: t('shortcuts.openLocalRepo'), keys: ['Ctrl', 'O'] },
+        { desc: t('shortcuts.createNewBranch'), keys: ['Ctrl', 'B'] },
+        { desc: t('shortcuts.refreshRepo'), keys: ['Ctrl', 'R'] },
+        { desc: t('shortcuts.pushOptions'), keys: [t('shortcuts.rightClick'), 'Push'] },
       ],
     },
     {
-      title: 'Alterações & Commits',
+      title: t('shortcuts.changesAndCommit'),
       shortcuts: [
-        { desc: 'Alternar stage do arquivo', keys: ['Espaço'] },
-        { desc: 'Adicionar / remover do stage', keys: ['Duplo clique'] },
-        { desc: 'Confirmar commit', keys: ['Ctrl', 'Enter'] },
-        { desc: 'Emendar último commit', keys: ['Marcar Amend'] },
+        { desc: t('shortcuts.toggleStage'), keys: [t('shortcuts.space')] },
+        { desc: t('shortcuts.addRemoveStage'), keys: [t('shortcuts.doubleClick')] },
+        { desc: t('shortcuts.confirmCommit'), keys: ['Ctrl', 'Enter'] },
+        { desc: t('shortcuts.amendLastCommit'), keys: [t('shortcuts.markAmend')] },
       ],
     },
     {
-      title: 'Ajuda & Interface',
+      title: t('shortcuts.helpAndInterface'),
       shortcuts: [
-        { desc: 'Ver atalhos de teclado', keys: ['Ctrl', '/'] },
-        { desc: 'Fechar modais / menus', keys: ['Esc'] },
+        { desc: t('shortcuts.viewShortcuts'), keys: ['Ctrl', '/'] },
+        { desc: t('shortcuts.settingsShortcut'), keys: ['Ctrl', ','] },
+        { desc: t('shortcuts.closeModals'), keys: ['Esc'] },
       ],
     },
   ];
 
   return (
-    <div className="modal-backdrop" onClick={onClose} role="dialog" aria-modal="true" aria-label="Atalhos de teclado">
+    <div className="modal-backdrop" onClick={onClose} role="dialog" aria-modal="true" aria-label={t('shortcuts.title')}>
       <div className="modal-card shortcuts-modal-card" onClick={(e) => e.stopPropagation()}>
         <header className="modal-header">
           <div className="shortcuts-modal-title">
             <Keyboard size={18} className="shortcuts-icon" />
-            <strong>Atalhos de Teclado</strong>
+            <strong>{t('shortcuts.title')}</strong>
           </div>
           <button
             type="button"
             className="icon-button modal-close"
             onClick={onClose}
-            aria-label="Fechar janela de atalhos"
+            aria-label={t('shortcuts.close')}
           >
             <X size={16} />
           </button>

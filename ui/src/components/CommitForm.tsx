@@ -1,9 +1,11 @@
 import { FormEvent, KeyboardEvent, useState } from 'react'
 import { History } from 'lucide-react'
 import { useAppStore } from '../store/app'
+import { useI18n } from '../i18n'
 import './Lists.css'
 
 export function CommitForm() {
+  const { t } = useI18n()
   const message = useAppStore((state) => state.commitMessage)
   const setMessage = useAppStore((state) => state.setCommitMessage)
   const runOperation = useAppStore((state) => state.runOperation)
@@ -62,22 +64,22 @@ export function CommitForm() {
   }
 
   return (
-    <form className="lists-commit-form" onSubmit={submit} aria-label={isAmend ? 'Emendar commit' : 'Criar commit'}>
+    <form className="lists-commit-form" onSubmit={submit} aria-label={isAmend ? t('commit.buttonAmend') : t('commit.buttonCommit')}>
       <div className="lists-commit-header">
-        <label htmlFor="commit-message">Mensagem do commit</label>
+        <label htmlFor="commit-message">{t('commit.label')}</label>
         <label
           className={`lists-amend-toggle ${isAmend ? 'active' : ''}`}
-          title="Emendar alterações no último commit (git commit --amend)"
+          title={t('commit.amendToggle')}
         >
           <input
             type="checkbox"
             checked={isAmend}
             onChange={(e) => handleToggleAmend(e.target.checked)}
             disabled={Boolean(operation) || conflicted}
-            aria-label="Emendar último commit (amend)"
+            aria-label={t('commit.amendAriaLabel')}
           />
           <History size={12} />
-          <span>Amend</span>
+          <span>{t('commit.amendLabel')}</span>
         </label>
       </div>
 
@@ -86,27 +88,28 @@ export function CommitForm() {
         value={value}
         onChange={(event) => setMessage(event.target.value)}
         onKeyDown={onKeyDown}
-        placeholder={isAmend ? 'Edite a mensagem ou mantenha a anterior…' : 'Descreva suas alterações…'}
+        placeholder={isAmend ? t('commit.placeholderAmend') : t('commit.placeholder')}
         rows={3}
       />
 
       <div className="lists-commit-footer">
-        <span className="lists-character-count">{value.length} caracteres</span>
+        <span className="lists-character-count">{value.length} {t('commit.characters')}</span>
         <button
           type="submit"
           disabled={disabled}
           className={isAmend ? 'btn-amend' : ''}
           title={
             conflicted
-              ? 'Resolva os conflitos antes de criar o commit'
+              ? t('commit.conflictNotice')
               : stagedCount === 0 && !isAmend
-              ? 'Adicione arquivos ao stage'
+              ? t('commit.noFilesNotice')
               : undefined
           }
         >
-          {isAmend ? 'Emendar commit' : 'Criar commit'} <kbd>Ctrl</kbd><kbd>↵</kbd>
+          {isAmend ? t('commit.buttonAmend') : t('commit.buttonCommit')} <kbd>Ctrl</kbd><kbd>↵</kbd>
         </button>
       </div>
     </form>
   )
 }
+

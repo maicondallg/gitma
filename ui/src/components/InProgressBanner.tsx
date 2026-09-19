@@ -1,7 +1,9 @@
 import { AlertTriangle, Play, SkipForward, XCircle } from 'lucide-react';
 import { useAppStore } from '../store/app';
+import { useI18n } from '../i18n';
 
 export function InProgressBanner() {
+  const { t } = useI18n();
   const snapshot = useAppStore((state) => state.snapshot);
   const runOperation = useAppStore((state) => state.runOperation);
   const operation = useAppStore((state) => state.operation);
@@ -19,9 +21,9 @@ export function InProgressBanner() {
             <div className="in-progress-info">
               <AlertTriangle className="in-progress-icon" size={16} />
               <span>
-                <strong>Rebase em andamento:</strong>{' '}
-                {inProgress.message ? `sobre ${inProgress.message}. ` : ''}
-                Resolva os conflitos, prepare as alterações (stage) e continue, ou aborte.
+                <strong>{t('inProgress.rebaseTitle')}</strong>{' '}
+                {inProgress.message ? t('inProgress.rebaseOnto', { msg: inProgress.message }) + ' ' : ''}
+                {t('inProgress.rebaseDesc')}
               </span>
             </div>
             <div className="in-progress-actions">
@@ -30,34 +32,34 @@ export function InProgressBanner() {
                 className="btn btn-sm btn-primary"
                 disabled={isLoading}
                 onClick={() => void runOperation('rebaseContinue')}
-                title="Continuar o rebase após resolver os arquivos"
+                title={t('inProgress.rebaseContinueTitle')}
               >
                 <Play size={13} />
-                <span>Continuar Rebase</span>
+                <span>{t('inProgress.rebaseContinue')}</span>
               </button>
               <button
                 type="button"
                 className="btn btn-sm btn-secondary"
                 disabled={isLoading}
                 onClick={() => void runOperation('rebaseSkip')}
-                title="Pular este commit e prosseguir com os próximos"
+                title={t('inProgress.rebaseSkipTitle')}
               >
                 <SkipForward size={13} />
-                <span>Pular Commit</span>
+                <span>{t('inProgress.rebaseSkip')}</span>
               </button>
               <button
                 type="button"
                 className="btn btn-sm btn-danger"
                 disabled={isLoading}
                 onClick={() => {
-                  if (window.confirm('Tem certeza que deseja abortar o rebase? As alterações deste rebase serão descartadas.')) {
+                  if (window.confirm(t('inProgress.rebaseAbortConfirm'))) {
                     void runOperation('rebaseAbort');
                   }
                 }}
-                title="Cancelar o rebase e voltar ao estado original"
+                title={t('inProgress.rebaseAbortTitle')}
               >
                 <XCircle size={13} />
-                <span>Abortar Rebase</span>
+                <span>{t('inProgress.rebaseAbort')}</span>
               </button>
             </div>
           </>
@@ -69,9 +71,9 @@ export function InProgressBanner() {
             <div className="in-progress-info">
               <AlertTriangle className="in-progress-icon" size={16} />
               <span>
-                <strong>Merge em andamento:</strong>{' '}
+                <strong>{t('inProgress.mergeTitle')}</strong>{' '}
                 {inProgress.message ? `${inProgress.message}. ` : ''}
-                Resolva os conflitos e faça o commit para concluir, ou aborte.
+                {t('inProgress.mergeDesc')}
               </span>
             </div>
             <div className="in-progress-actions">
@@ -80,14 +82,14 @@ export function InProgressBanner() {
                 className="btn btn-sm btn-danger"
                 disabled={isLoading}
                 onClick={() => {
-                  if (window.confirm('Tem certeza que deseja abortar o merge?')) {
+                  if (window.confirm(t('inProgress.mergeAbortConfirm'))) {
                     void runOperation('mergeAbort');
                   }
                 }}
-                title="Cancelar o merge e voltar ao estado antes do merge"
+                title={t('inProgress.mergeAbortTitle')}
               >
                 <XCircle size={13} />
-                <span>Abortar Merge</span>
+                <span>{t('inProgress.mergeAbort')}</span>
               </button>
             </div>
           </>
@@ -99,8 +101,8 @@ export function InProgressBanner() {
             <div className="in-progress-info">
               <AlertTriangle className="in-progress-icon" size={16} />
               <span>
-                <strong>Cherry-pick em andamento:</strong>{' '}
-                Resolva os conflitos, prepare as alterações e continue, ou aborte.
+                <strong>{t('inProgress.cherryPickTitle')}</strong>{' '}
+                {t('inProgress.cherryPickDesc')}
               </span>
             </div>
             <div className="in-progress-actions">
@@ -111,20 +113,20 @@ export function InProgressBanner() {
                 onClick={() => void runOperation('cherryPickContinue')}
               >
                 <Play size={13} />
-                <span>Continuar</span>
+                <span>{t('inProgress.continue')}</span>
               </button>
               <button
                 type="button"
                 className="btn btn-sm btn-danger"
                 disabled={isLoading}
                 onClick={() => {
-                  if (window.confirm('Tem certeza que deseja abortar o cherry-pick?')) {
+                  if (window.confirm(t('inProgress.cherryPickAbortConfirm'))) {
                     void runOperation('cherryPickAbort');
                   }
                 }}
               >
                 <XCircle size={13} />
-                <span>Abortar</span>
+                <span>{t('inProgress.abort')}</span>
               </button>
             </div>
           </>
@@ -134,11 +136,11 @@ export function InProgressBanner() {
         return (
           <div className="in-progress-info">
             <AlertTriangle className="in-progress-icon" size={16} />
-            <span>Operação em andamento com conflitos pendentes.</span>
+            <span>{t('inProgress.generic')}</span>
           </div>
         );
     }
   };
 
-  return <aside className="in-progress-banner" aria-label="Operação em andamento">{renderContent()}</aside>;
+  return <aside className="in-progress-banner" aria-label={t('inProgress.ariaLabel')}>{renderContent()}</aside>;
 }

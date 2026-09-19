@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { GitBranch, X } from 'lucide-react';
+import { useI18n } from '../i18n';
 
 export interface NewBranchModalProps {
   isOpen: boolean;
@@ -9,6 +10,7 @@ export interface NewBranchModalProps {
 }
 
 export function NewBranchModal({ isOpen, startPoint, onClose, onSubmit }: NewBranchModalProps) {
+  const { t } = useI18n();
   const [name, setName] = useState('');
   const [checkout, setCheckout] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -38,11 +40,11 @@ export function NewBranchModal({ isOpen, startPoint, onClose, onSubmit }: NewBra
     e.preventDefault();
     const cleanName = name.trim();
     if (!cleanName) {
-      setError('O nome da branch é obrigatório.');
+      setError(t('newBranch.errorRequired'));
       return;
     }
     if (/\s/.test(cleanName) || /[~^:?*\[\\]/.test(cleanName)) {
-      setError('O nome da branch contém caracteres inválidos.');
+      setError(t('newBranch.errorInvalid'));
       return;
     }
     onSubmit({ name: cleanName, startPoint: startPoint || undefined, checkout });
@@ -55,15 +57,15 @@ export function NewBranchModal({ isOpen, startPoint, onClose, onSubmit }: NewBra
         <header className="modal-header">
           <div className="modal-title-group">
             <GitBranch size={18} className="modal-icon" />
-            <h3 id="modal-title">Criar nova branch</h3>
+            <h3 id="modal-title">{t('newBranch.title')}</h3>
           </div>
-          <button type="button" className="icon-button" onClick={onClose} aria-label="Fechar modal">
+          <button type="button" className="icon-button" onClick={onClose} aria-label={t('newBranch.cancel')}>
             <X size={16} />
           </button>
         </header>
         <form onSubmit={handleSubmit} className="modal-form">
           <div className="form-group">
-            <label htmlFor="branch-name">Nome da branch</label>
+            <label htmlFor="branch-name">{t('newBranch.nameLabel')}</label>
             <input
               id="branch-name"
               ref={inputRef}
@@ -74,7 +76,7 @@ export function NewBranchModal({ isOpen, startPoint, onClose, onSubmit }: NewBra
                 setName(e.target.value);
                 if (error) setError(null);
               }}
-              placeholder="ex: feature/minha-melhoria"
+              placeholder={t('newBranch.namePlaceholder')}
               autoComplete="off"
             />
             {error && <span className="form-error">{error}</span>}
@@ -82,7 +84,7 @@ export function NewBranchModal({ isOpen, startPoint, onClose, onSubmit }: NewBra
 
           {startPoint && (
             <div className="form-info">
-              <span>Ponto de partida:</span>
+              <span>{t('newBranch.startPoint')}</span>
               <code>{startPoint}</code>
             </div>
           )}
@@ -93,15 +95,15 @@ export function NewBranchModal({ isOpen, startPoint, onClose, onSubmit }: NewBra
               checked={checkout}
               onChange={(e) => setCheckout(e.target.checked)}
             />
-            <span>Mudar para a nova branch imediatamente (checkout)</span>
+            <span>{t('newBranch.checkoutLabel')}</span>
           </label>
 
           <footer className="modal-actions">
             <button type="button" className="btn btn-secondary" onClick={onClose}>
-              Cancelar
+              {t('newBranch.cancel')}
             </button>
             <button type="submit" className="btn btn-primary" disabled={!name.trim()}>
-              Criar branch
+              {t('newBranch.submit')}
             </button>
           </footer>
         </form>

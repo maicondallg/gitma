@@ -21,21 +21,25 @@ import logoSvg from '../../logo.svg';
 import { CloneModal } from './CloneModal';
 import { InitModal } from './InitModal';
 
-function formatRelativeTime(timestamp: number): string {
+function formatRelativeTime(
+  timestamp: number,
+  t: (key: string, params?: Record<string, any>) => string,
+  lang: string
+): string {
   const diffSec = Math.floor((Date.now() - timestamp) / 1000);
-  if (diffSec < 60) return 'Agora há pouco';
+  if (diffSec < 60) return t('timeAgo.now');
   const diffMin = Math.floor(diffSec / 60);
-  if (diffMin < 60) return `Há ${diffMin} min`;
+  if (diffMin < 60) return t('timeAgo.minutes', { count: diffMin });
   const diffHours = Math.floor(diffMin / 60);
-  if (diffHours < 24) return `Há ${diffHours} h`;
+  if (diffHours < 24) return t('timeAgo.hours', { count: diffHours });
   const diffDays = Math.floor(diffHours / 24);
-  if (diffDays === 1) return 'Ontem';
-  if (diffDays < 7) return `Há ${diffDays} dias`;
-  return new Date(timestamp).toLocaleDateString('pt-BR', { day: '2-digit', month: 'short' });
+  if (diffDays === 1) return t('timeAgo.yesterday');
+  if (diffDays < 7) return t(diffDays > 1 ? 'timeAgo.daysPlural' : 'timeAgo.days', { count: diffDays });
+  return new Date(timestamp).toLocaleDateString(lang, { day: '2-digit', month: 'short' });
 }
 
 export function HomeTab() {
-  const { t } = useI18n();
+  const { t, language } = useI18n();
 
   const tabs = useAppStore((s) => s.tabs);
   const recentRepos = useAppStore((s) => s.recentRepos);
@@ -114,7 +118,7 @@ export function HomeTab() {
                 className="home-primary-btn"
                 onClick={() => void openRepositories()}
                 disabled={opening || !!operation}
-                title="Abrir um ou mais repositórios locais (Ctrl + N ou Ctrl + O)"
+                title={t('home.openLocalRepoTitle')}
               >
                 {opening ? (
                   <>
@@ -206,7 +210,7 @@ export function HomeTab() {
                       setSelectMode(!selectMode);
                       setSelectedPaths([]);
                     }}
-                    title="Selecionar múltiplos repositórios"
+                    title={t('home.selectMultiple')}
                   >
                     <CheckSquare size={13} />
                     <span>{selectMode ? t('home.cancel') : t('home.select')}</span>
@@ -220,7 +224,7 @@ export function HomeTab() {
                         clearRecentRepos();
                       }
                     }}
-                    title="Limpar histórico de recentes"
+                    title={t('home.clearHistory')}
                   >
                     <Trash2 size={13} />
                     <span>{t('home.clear')}</span>
@@ -253,7 +257,7 @@ export function HomeTab() {
                     className="recents-open-selected-btn"
                     disabled={selectedPaths.length === 0}
                     onClick={() => void handleOpenSelected()}
-                    title="Abrir repositórios selecionados em abas"
+                    title={t('home.openSelectedInTabs')}
                   >
                     <FolderPlus size={13} />
                     <span>{t('home.openSelected', { count: selectedPaths.length })}</span>
@@ -264,7 +268,7 @@ export function HomeTab() {
                     className="recents-remove-selected-btn"
                     disabled={selectedPaths.length === 0}
                     onClick={handleRemoveSelected}
-                    title="Remover selecionados dos recentes"
+                    title={t('home.removeSelectedFromRecents')}
                   >
                     <Trash2 size={13} />
                   </button>
@@ -287,7 +291,7 @@ export function HomeTab() {
                     type="button"
                     onClick={() => setFilter('')}
                     className="search-clear"
-                    title="Limpar busca"
+                    title={t('home.clearFilter')}
                   >
                     <X size={12} />
                   </button>
@@ -350,7 +354,7 @@ export function HomeTab() {
                           }
                         }
                       }}
-                      title={selectMode ? (isSelected ? 'Desmarcar' : 'Selecionar') : `Abrir ${repo.path}`}
+                      title={selectMode ? (isSelected ? t('home.unselect') : t('home.select')) : `${t('home.openLocalRepo')}: ${repo.path}`}
                     >
                       {selectMode && (
                         <div className="recent-item-checkbox">
@@ -370,12 +374,12 @@ export function HomeTab() {
                         <div className="recent-item-top">
                           <strong className="recent-name">{repo.name}</strong>
                           {isOpenInTab && (
-                            <span className="open-pill" title="Já está aberto em uma aba">
+                            <span className="open-pill" title={t('home.alreadyOpenTitle')}>
                               {t('home.opened')}
                             </span>
                           )}
                           <span className="recent-time">
-                            {formatRelativeTime(repo.lastOpened)}
+                            {formatRelativeTime(repo.lastOpened, t, language)}
                           </span>
                         </div>
                         <span className="recent-path" title={repo.path}>

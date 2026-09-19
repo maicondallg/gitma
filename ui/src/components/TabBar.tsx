@@ -32,16 +32,19 @@ export const TAB_PRESET_COLORS = [
   { id: 'pink', color: '#ec4899', label: 'Rosa' },
 ];
 
-export function getGroupLabel(color: string | null | undefined, groupNames?: Record<string, string>): string {
-  if (!color) return 'Sem grupo';
+export function getGroupLabel(color: string | null | undefined, groupNames?: Record<string, string>, t?: (k: string, p?: any) => string): string {
+  if (!color) return t ? t('tabs.noGroup') : 'Sem grupo';
   const custom = groupNames ? groupNames[color.toLowerCase()] : undefined;
   if (custom && custom.trim().length > 0) return custom.trim();
   const found = TAB_PRESET_COLORS.find((c) => c.color.toLowerCase() === color.toLowerCase());
-  return found ? found.label : 'Grupo';
+  if (found) {
+    return t ? t(`colors.${found.id}`) : found.label;
+  }
+  return t ? t('tabs.group') : 'Grupo';
 }
 
-export function getColorLabel(color: string | null | undefined): string {
-  return getGroupLabel(color, loadSavedGroupNames());
+export function getColorLabel(color: string | null | undefined, t?: (k: string, p?: any) => string): string {
+  return getGroupLabel(color, loadSavedGroupNames(), t);
 }
 
 const COLLAPSED_COLORS_KEY = 'Gitma:collapsed-tab-colors';
@@ -446,11 +449,11 @@ export function TabBar() {
         type="button"
         className={`tab-item tab-home ${activeTabId === 'home' ? 'active' : ''}`}
         onClick={() => openHome()}
-        title="Início e repositórios recentes"
-        aria-label="Página inicial"
+        title={t('tabs.home')}
+        aria-label={t('tabs.home')}
       >
         <Home size={14} className="tab-icon" />
-        <span className="tab-title">Início</span>
+        <span className="tab-title">{t('tabs.home')}</span>
       </button>
 
       <div className="tab-separator" />
@@ -459,7 +462,7 @@ export function TabBar() {
       <div className="tab-list" ref={tabListRef}>
         {groups.map((group, groupIndex) => {
           const isCollapsed = group.color ? collapsedColors.has(group.color.toLowerCase()) : false;
-          const colorLabel = getGroupLabel(group.color, groupNames);
+          const colorLabel = getGroupLabel(group.color, groupNames, t);
           const hasMultiple = group.tabs.length > 1;
           const isEditing = editingGroupColor === group.color;
 
@@ -515,8 +518,8 @@ export function TabBar() {
                     });
                   }
                 }}
-                title={`Grupo ${colorLabel} (${group.tabs.length} abas):\n${group.tabs.map((t) => t.tab.name).join('\n')}\nClique para expandir • Dois cliques para renomear`}
-                aria-label={`Expandir grupo ${colorLabel}`}
+                title={`${t('tabs.group')} ${colorLabel} (${group.tabs.length}):\n${group.tabs.map((t) => t.tab.name).join('\n')}`}
+                aria-label={t('tabs.expandGroupAria', { name: colorLabel })}
               >
                 <span
                   className="tab-group-chip-dot"
@@ -564,8 +567,8 @@ export function TabBar() {
                         setEditingGroupColor(null);
                       }
                     }}
-                    title="Pressione Enter para salvar ou Esc para cancelar"
-                    aria-label="Nome do grupo"
+                    title={t('tabs.renameHint')}
+                    aria-label={t('tabs.groupNameAria')}
                   />
                 ) : (
                   <span
@@ -579,13 +582,13 @@ export function TabBar() {
                         setEditingGroupName(colorLabel);
                       }
                     }}
-                    title="Dois cliques para renomear"
+                    title={t('tabs.doubleClickToRename')}
                   >
                     {colorLabel} ({group.tabs.length})
                   </span>
                 )}
                 {activeTabInGroup && (
-                  <span className="tab-group-chip-active-tab" title={`Aba ativa: ${activeTabInGroup.tab.name}`}>
+                  <span className="tab-group-chip-active-tab" title={t('tabs.activeTabInGroup', { name: activeTabInGroup.tab.name })}>
                     {activeTabInGroup.tab.name}
                   </span>
                 )}
@@ -636,8 +639,8 @@ export function TabBar() {
                       });
                     }
                   }}
-                  title={`Grupo ${colorLabel} (${group.tabs.length} abas) • Clique para recolher • Dois cliques para renomear`}
-                  aria-label={`Recolher grupo ${colorLabel}`}
+                  title={t('tabs.groupTooltip', { name: colorLabel, count: group.tabs.length })}
+                  aria-label={t('tabs.collapseGroupAria', { name: colorLabel })}
                 >
                   <span
                     className="tab-group-chip-dot"
@@ -685,8 +688,8 @@ export function TabBar() {
                           setEditingGroupColor(null);
                         }
                       }}
-                      title="Pressione Enter para salvar ou Esc para cancelar"
-                      aria-label="Nome do grupo"
+                      title={t('tabs.renameHint')}
+                      aria-label={t('tabs.groupNameAria')}
                     />
                   ) : (
                     <span
@@ -700,7 +703,7 @@ export function TabBar() {
                           setEditingGroupName(colorLabel);
                         }
                       }}
-                      title="Dois cliques para renomear"
+                      title={t('tabs.doubleClickToRename')}
                     >
                       {colorLabel} ({group.tabs.length})
                     </span>
@@ -772,14 +775,14 @@ export function TabBar() {
                         void switchTab(tab.id);
                       }
                     }}
-                    title={`${tab.path}${tab.color ? ' (Grupo colorido)' : ''}\nClique do meio para fechar`}
+                    title={`${tab.path}${tab.color ? ` (${t('tabs.coloredGroup')})` : ''}\n${t('tabs.middleClickClose')}`}
                   >
                     {/* Ponto colorido de grupo */}
                     {tab.color ? (
                       <span
                         className="tab-color-dot"
                         style={{ backgroundColor: tab.color, boxShadow: `0 0 6px ${tab.color}99` }}
-                        title="Grupo colorido"
+                        title={t('tabs.coloredGroup')}
                       />
                     ) : (
                       <FolderGit2 size={13} className="tab-icon" />
@@ -823,8 +826,8 @@ export function TabBar() {
                             setEditingTabId(null);
                           }
                         }}
-                        title="Pressione Enter para salvar ou Esc para cancelar"
-                        aria-label="Nome da aba"
+                        title={t('tabs.renameHint')}
+                        aria-label={t('tabs.tabNameAria')}
                       />
                     ) : (
                       <span
@@ -836,7 +839,7 @@ export function TabBar() {
                           setEditingTabId(tab.id);
                           setEditingTabName(tab.name);
                         }}
-                        title="Dois cliques para renomear"
+                        title={t('tabs.doubleClickToRename')}
                       >
                         {tab.name}
                       </span>
@@ -857,8 +860,8 @@ export function TabBar() {
                         e.stopPropagation();
                         void closeTab(tab.id);
                       }}
-                      title="Fechar aba"
-                      aria-label={`Fechar aba ${tab.name}`}
+                      title={t('tabs.close')}
+                      aria-label={t('tabs.closeTabAria', { name: tab.name })}
                     >
                       <X size={12} />
                     </button>
@@ -968,6 +971,7 @@ function TabContextMenu({
   setEditingTabId,
   setEditingTabName,
 }: TabContextMenuProps) {
+  const { t } = useI18n();
   const menuRef = useRef<HTMLDivElement>(null);
   const [pos, setPos] = useState({
     x: Math.max(8, Math.min(x, (typeof window !== 'undefined' ? window.innerWidth : 1000) - 230)),
@@ -1027,12 +1031,13 @@ function TabContextMenu({
     >
       <div className="menu-header">
         <Palette size={12} />
-        <span>Cor / Grupo da aba</span>
+        <span>{t('tabs.colorGroupHeader')}</span>
       </div>
 
       <div className="tab-color-picker">
         {TAB_PRESET_COLORS.map((c) => {
           const isSelected = tab.color === c.color;
+          const colorName = t(`colors.${c.id}`) || c.label;
           return (
             <button
               key={c.id}
@@ -1043,8 +1048,8 @@ function TabContextMenu({
                 setTabColor(tab.id, c.color);
                 onClose();
               }}
-              title={c.label}
-              aria-label={`Definir cor ${c.label}`}
+              title={colorName}
+              aria-label={t('tabs.setColorAria', { label: colorName })}
             >
               {isSelected && <Check size={11} color="#fff" />}
             </button>
@@ -1057,8 +1062,8 @@ function TabContextMenu({
             setTabColor(tab.id, null);
             onClose();
           }}
-          title="Remover cor"
-          aria-label="Remover cor"
+          title={t('tabs.removeColor')}
+          aria-label={t('tabs.removeColor')}
         >
           <X size={12} />
         </button>
@@ -1079,12 +1084,12 @@ function TabContextMenu({
             {collapsedColors.has(tab.color.toLowerCase()) ? (
               <>
                 <ChevronRight size={13} />
-                <span>Expandir abas deste grupo ({getGroupLabel(tab.color, groupNames)})</span>
+                <span>{t('tabs.expandGroup', { name: getGroupLabel(tab.color, groupNames, t) })}</span>
               </>
             ) : (
               <>
                 <ChevronLeft size={13} />
-                <span>Recolher abas deste grupo ({getGroupLabel(tab.color, groupNames)})</span>
+                <span>{t('tabs.collapseGroup', { name: getGroupLabel(tab.color, groupNames, t) })}</span>
               </>
             )}
           </button>
@@ -1095,12 +1100,12 @@ function TabContextMenu({
             onClick={() => {
               const color = tab.color!;
               setEditingGroupColor(color);
-              setEditingGroupName(getGroupLabel(color, groupNames));
+              setEditingGroupName(getGroupLabel(color, groupNames, t));
               onClose();
             }}
           >
             <Edit2 size={13} />
-            <span>Renomear grupo ({getGroupLabel(tab.color, groupNames)})</span>
+            <span>{t('tabs.renameGroup', { name: getGroupLabel(tab.color, groupNames, t) })}</span>
           </button>
 
           {groupNames[tab.color.toLowerCase()] && (
@@ -1113,7 +1118,7 @@ function TabContextMenu({
               }}
             >
               <RotateCcw size={13} />
-              <span>Restaurar nome padrão ({getColorLabel(tab.color)})</span>
+              <span>{t('tabs.restoreGroupName', { name: getColorLabel(tab.color, t) })}</span>
             </button>
           )}
 
@@ -1128,7 +1133,7 @@ function TabContextMenu({
             }}
           >
             <XCircle size={13} />
-            <span>Fechar abas deste grupo</span>
+            <span>{t('tabs.closeGroup')}</span>
           </button>
 
           <div className="menu-separator" />
@@ -1145,7 +1150,7 @@ function TabContextMenu({
           }}
         >
           <ChevronRight size={13} />
-          <span>Expandir todos os grupos</span>
+          <span>{t('tabs.expandAllGroups')}</span>
         </button>
       ) : (
         <button
@@ -1157,7 +1162,7 @@ function TabContextMenu({
           }}
         >
           <ChevronLeft size={13} />
-          <span>Recolher todos os grupos</span>
+          <span>{t('tabs.collapseAllGroups')}</span>
         </button>
       )}
 
@@ -1173,7 +1178,7 @@ function TabContextMenu({
         }}
       >
         <Edit2 size={13} />
-        <span>Renomear aba</span>
+        <span>{t('tabs.renameTab')}</span>
       </button>
 
       <button
@@ -1185,7 +1190,7 @@ function TabContextMenu({
         }}
       >
         <X size={13} />
-        <span>Fechar aba</span>
+        <span>{t('tabs.close')}</span>
       </button>
 
       <button
@@ -1198,7 +1203,7 @@ function TabContextMenu({
         }}
       >
         <XCircle size={13} />
-        <span>Fechar outras abas</span>
+        <span>{t('tabs.closeOther')}</span>
       </button>
 
       <button
@@ -1210,7 +1215,7 @@ function TabContextMenu({
           onClose();
         }}
       >
-        <span>Fechar abas à direita</span>
+        <span>{t('tabs.closeToRight')}</span>
       </button>
 
       <div className="menu-separator" />
@@ -1224,7 +1229,7 @@ function TabContextMenu({
         }}
       >
         <Copy size={13} />
-        <span>Copiar caminho</span>
+        <span>{t('tabs.copyPath')}</span>
       </button>
     </div>,
     document.body

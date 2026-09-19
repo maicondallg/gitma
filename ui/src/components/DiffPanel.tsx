@@ -2,8 +2,11 @@ import { useEffect, useRef } from 'react';
 import { Columns2, FoldVertical, Maximize2, Minimize2, Rows3 } from 'lucide-react';
 import { useAppStore } from '../store/app';
 import { languageForPath, monaco } from '../lib/monaco';
+import { useI18n } from '../i18n';
+import { applyTheme, getThemeById, getActiveThemeId } from '../lib/theme';
 
 export function DiffPanel() {
+  const { t } = useI18n();
   const host = useRef<HTMLDivElement>(null);
   const editor = useRef<monaco.editor.IStandaloneDiffEditor | null>(null);
   const models = useRef<{ original: monaco.editor.ITextModel; modified: monaco.editor.ITextModel } | null>(null);
@@ -50,7 +53,9 @@ export function DiffPanel() {
         useShadows: false,
       },
     });
-    monaco.editor.setTheme('Gitma-dark');
+    try {
+      applyTheme(getThemeById(getActiveThemeId()));
+    } catch {}
     return () => {
       editor.current?.dispose();
       editor.current = null;
@@ -94,7 +99,7 @@ export function DiffPanel() {
     ? selectedFile.oldPathDisplay
       ? `${selectedFile.oldPathDisplay} → ${selectedFile.pathDisplay}`
       : selectedFile.pathDisplay
-    : 'Selecione um arquivo';
+    : t('diff.selectFile');
   const unavailable = preview && preview.kind !== 'text';
 
   return (
@@ -108,39 +113,39 @@ export function DiffPanel() {
             type="button"
             className={compactDiff ? 'active' : ''}
             onClick={() => setCompactDiff(!compactDiff)}
-            title={compactDiff ? 'Exibindo apenas trechos alterados' : 'Exibir apenas trechos alterados (ocultar linhas inalteradas)'}
+            title={compactDiff ? t('diff.compactDiffActive') : t('diff.compactDiffInactive')}
             aria-pressed={compactDiff}
           >
             <FoldVertical size={14} />
-            <span>Só alterações</span>
+            <span>{t('diff.compactDiff')}</span>
           </button>
           <button
             type="button"
             className={diffMode === 'unified' ? 'active' : ''}
             onClick={() => setDiffMode('unified')}
-            title="Unificado"
+            title={t('diff.unified')}
             aria-pressed={diffMode === 'unified'}
           >
             <Rows3 size={14} />
-            <span>Unificado</span>
+            <span>{t('diff.unified')}</span>
           </button>
           <button
             type="button"
             className={diffMode === 'split' ? 'active' : ''}
             onClick={() => setDiffMode('split')}
-            title="Lado a lado"
+            title={t('diff.split')}
             aria-pressed={diffMode === 'split'}
           >
             <Columns2 size={14} />
-            <span>Lado a lado</span>
+            <span>{t('diff.split')}</span>
           </button>
           <div className="diff-toolbar-separator" />
           <button
             type="button"
             className={`diff-expand-btn ${expandedDiff ? 'active' : ''}`}
             onClick={() => setExpandedDiff(!expandedDiff)}
-            title={expandedDiff ? 'Restaurar painel de histórico (tela normal)' : 'Expandir diff em tela cheia (ocultar histórico)'}
-            aria-label={expandedDiff ? 'Restaurar histórico' : 'Expandir diff'}
+            title={expandedDiff ? t('diff.restoreDiff') : t('diff.expandDiff')}
+            aria-label={expandedDiff ? t('diff.restoreDiff') : t('diff.expandDiff')}
             aria-pressed={expandedDiff}
           >
             {expandedDiff ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
@@ -148,19 +153,19 @@ export function DiffPanel() {
         </div>
       </header>
       <div className="diff-body">
-        {!preview && <div className="empty-state">Selecione um arquivo alterado para ver o diff.</div>}
+        {!preview && <div className="empty-state">{t('diff.selectFilePrompt')}</div>}
         {unavailable && (
           <div className="empty-state">
             <strong>
               {preview.kind === 'tooLarge'
-                ? 'Diff grande demais para exibir'
+                ? t('diff.tooLarge')
                 : preview.kind === 'binary'
-                ? 'Arquivo binário'
+                ? t('diff.binary')
                 : preview.kind === 'conflict'
-                ? 'Arquivo com conflitos'
-                : 'Arquivo indisponível'}
+                ? t('diff.conflict')
+                : t('diff.unavailable')}
             </strong>
-            <span>{preview.message ?? 'O Gitma não recebeu uma prévia de texto deste arquivo.'}</span>
+            <span>{preview.message ?? t('diff.noTextPreview')}</span>
           </div>
         )}
         <div ref={host} className="monaco-host" hidden={!preview || preview.kind !== 'text'} />
@@ -168,3 +173,4 @@ export function DiffPanel() {
     </section>
   );
 }
+

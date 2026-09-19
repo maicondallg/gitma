@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { Tag, X } from 'lucide-react';
+import { useI18n } from '../i18n';
 
 interface CreateTagModalProps {
   isOpen: boolean;
@@ -14,6 +15,7 @@ export function CreateTagModal({
   onClose,
   onSubmit,
 }: CreateTagModalProps) {
+  const { t } = useI18n();
   const [name, setName] = useState('');
   const [message, setMessage] = useState('');
 
@@ -39,9 +41,9 @@ export function CreateTagModal({
         <div className="modal-header">
           <div className="modal-title">
             <Tag size={16} />
-            <h3>Criar Tag</h3>
+            <h3>{t('createTag.title')}</h3>
           </div>
-          <button type="button" className="modal-close" onClick={onClose}>
+          <button type="button" className="modal-close" onClick={onClose} aria-label={t('createTag.cancel')}>
             <X size={16} />
           </button>
         </div>
@@ -49,16 +51,16 @@ export function CreateTagModal({
         <form onSubmit={handleSubmit}>
           <div className="modal-body">
             <p className="modal-description">
-              Criando tag no commit <code>{commitOid.slice(0, 7)}</code>
+              {t('createTag.description', { oid: commitOid.slice(0, 7) })}
             </p>
 
             <div className="form-group">
-              <label htmlFor="tag-name">Nome da Tag</label>
+              <label htmlFor="tag-name">{t('createTag.nameLabel')}</label>
               <input
                 id="tag-name"
                 type="text"
                 autoFocus
-                placeholder="Ex: v1.0.0, release-2026"
+                placeholder={t('createTag.namePlaceholder')}
                 value={name}
                 onChange={(e) => setName(e.target.value)}
                 required
@@ -66,11 +68,11 @@ export function CreateTagModal({
             </div>
 
             <div className="form-group">
-              <label htmlFor="tag-message">Mensagem (opcional para tag anotada)</label>
+              <label htmlFor="tag-message">{t('createTag.messageLabel')}</label>
               <textarea
                 id="tag-message"
                 rows={3}
-                placeholder="Descrição ou notas desta versão..."
+                placeholder={t('createTag.messagePlaceholder')}
                 value={message}
                 onChange={(e) => setMessage(e.target.value)}
               />
@@ -79,10 +81,10 @@ export function CreateTagModal({
 
           <div className="modal-footer">
             <button type="button" className="btn btn-secondary" onClick={onClose}>
-              Cancelar
+              {t('createTag.cancel')}
             </button>
             <button type="submit" className="btn btn-primary" disabled={!name.trim()}>
-              Criar Tag
+              {t('createTag.submit')}
             </button>
           </div>
         </form>

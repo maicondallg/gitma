@@ -22,6 +22,7 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 import { useAppStore } from '../store/app';
+import { useI18n } from '../i18n';
 import type { Area, FileEntry } from '../lib/types';
 import './Lists.css';
 
@@ -195,7 +196,10 @@ function FileRow({
   onSelect: () => void;
   onDiscard?: () => void;
 }) {
+  const { t } = useI18n();
   const Icon = statusGlyph[file.status];
+  const statusText = t(`files.status.${file.status}`);
+  const actionText = file.area === 'staged' ? t('files.unstageFile') : t('files.stageFile');
   return (
     <div
       className={`lists-file-row ${isTree ? 'is-tree-file-row' : ''}`}
@@ -214,7 +218,7 @@ function FileRow({
           checked={file.area === 'staged'}
           onChange={onStage}
           onClick={(e) => e.stopPropagation()}
-          aria-label={`${file.name}: ${file.area === 'staged' ? 'tirar do stage' : 'colocar no stage'}`}
+          aria-label={`${file.name}: ${actionText}`}
         />
       )}
       <button
@@ -231,9 +235,9 @@ function FileRow({
             onStage();
           }
         }}
-        title={`${file.pathDisplay}\n(Duplo clique para ${file.area === 'staged' ? 'tirar do stage' : 'colocar no stage'})`}
+        title={`${file.pathDisplay}\n(${t('files.doubleClickToToggle', { action: actionText })})`}
       >
-        <span className={`lists-status lists-status-${file.status} ${isTree ? 'is-tree-status' : ''}`} title={statusLabel[file.status]} aria-label={statusLabel[file.status]}>
+        <span className={`lists-status lists-status-${file.status} ${isTree ? 'is-tree-status' : ''}`} title={statusText} aria-label={statusText}>
           <Icon size={isTree ? 12 : 14} strokeWidth={2} aria-hidden="true" />
         </span>
         <span className={`lists-file-name ${isTree ? 'is-tree-file-name' : ''}`}>
@@ -250,8 +254,8 @@ function FileRow({
             e.stopPropagation();
             onDiscard();
           }}
-          title={`Descartar alterações em ${file.name}`}
-          aria-label="Descartar alterações"
+          title={t('files.discardFile', { name: file.name })}
+          aria-label={t('files.discard')}
         >
           <Undo2 size={isTree ? 11 : 13} />
         </button>
@@ -319,6 +323,8 @@ function FileGroup({
     }
   }, [selectedId, isTree, visibleItems, files, virtualizer]);
 
+  const { t } = useI18n();
+
   return (
     <div className="lists-file-group">
       <div className="lists-group-header">
@@ -333,13 +339,13 @@ function FileGroup({
                 disabled={disabled}
                 className="lists-text-action lists-text-action-danger"
                 onClick={onDiscardAll}
-                title="Descartar todas as alterações não preparadas"
+                title={t('files.discardTitle')}
               >
-                Descartar tudo
+                {t('files.discardAll')}
               </button>
             )}
             <button type="button" disabled={disabled} className="lists-text-action" onClick={onAll}>
-              {area === 'staged' ? 'Remover todos' : 'Adicionar todos'}
+              {area === 'staged' ? t('files.unstageAll') : t('files.stageAll')}
             </button>
           </div>
         )}
@@ -556,6 +562,7 @@ export function FilesPanel() {
   const setFileViewMode = useAppStore((state) => state.setFileViewMode);
   const activePane = useAppStore((state) => state.activePane);
   const setActivePane = useAppStore((state) => state.setActivePane);
+  const { t } = useI18n();
 
   const local = context?.kind === 'local';
   const staged = local ? snapshot?.staged ?? [] : [];
@@ -670,19 +677,19 @@ export function FilesPanel() {
   return (
     <section
       className={`lists-panel lists-files-panel ${activePane === 'files' ? 'is-pane-active' : ''}`}
-      aria-label="Arquivos"
+      aria-label={t('files.localChanges')}
       onClick={() => setActivePane('files')}
     >
       <header className="lists-panel-header">
-        <h2>{local ? 'Alterações locais' : 'Arquivos do commit'}</h2>
+        <h2>{local ? t('files.localChanges') : t('files.commitFiles')}</h2>
         <div className="panel-header-actions">
           <div className="view-mode-switch" role="group" aria-label="Modo de visualização dos arquivos">
             <button
               type="button"
               className={!isTree ? 'active' : ''}
               onClick={() => setFileViewMode('flat')}
-              title="Lista plana"
-              aria-label="Lista plana"
+              title={t('files.flatList')}
+              aria-label={t('files.flatList')}
             >
               <List size={13} />
             </button>
@@ -690,8 +697,8 @@ export function FilesPanel() {
               type="button"
               className={isTree ? 'active' : ''}
               onClick={() => setFileViewMode('tree')}
-              title="Árvore de pastas"
-              aria-label="Árvore de pastas"
+              title={t('files.treeList')}
+              aria-label={t('files.treeList')}
             >
               <FolderTree size={13} />
             </button>
@@ -710,12 +717,12 @@ export function FilesPanel() {
               type="button"
               className={`commit-info-hash-btn ${copiedHash === (selectedCommit?.oid ?? context?.oid) ? 'is-copied' : ''}`}
               onClick={() => void handleCopyHash(selectedCommit?.oid ?? context?.oid ?? '')}
-              title={`Hash completa: ${selectedCommit?.oid ?? context?.oid}\nClique para copiar`}
+              title={t('files.fullHash', { hash: selectedCommit?.oid ?? context?.oid ?? '' })}
             >
               {copiedHash === (selectedCommit?.oid ?? context?.oid) ? (
                 <>
                   <Check size={12} className="copy-icon-check" />
-                  <span>Copiado!</span>
+                  <span>{t('files.copied')}</span>
                 </>
               ) : (
                 <>
@@ -736,7 +743,7 @@ export function FilesPanel() {
               <time
                 className="commit-info-date"
                 dateTime={new Date(selectedCommit.timestamp * 1000).toISOString()}
-                title={new Date(selectedCommit.timestamp * 1000).toLocaleString('pt-BR')}
+                title={new Date(selectedCommit.timestamp * 1000).toLocaleString()}
               >
                 <Calendar size={12} className="commit-meta-icon" />
                 <span>{formatFullDate(selectedCommit.timestamp)}</span>
@@ -749,7 +756,7 @@ export function FilesPanel() {
       {local ? (
         <>
           <FileGroup
-            title="Em stage"
+            title={t('files.staged')}
             files={staged}
             selectedId={selectedFile?.id}
             area="staged"
@@ -762,7 +769,7 @@ export function FilesPanel() {
             onAll={() => runOperation('unstageAll')}
           />
           <FileGroup
-            title="Fora do stage"
+            title={t('files.unstaged')}
             files={unstaged}
             selectedId={selectedFile?.id}
             area="unstaged"
@@ -776,7 +783,7 @@ export function FilesPanel() {
             onDiscard={(file) => {
               if (
                 window.confirm(
-                  `Descartar alterações em "${file.name}"?\nEsta ação é definitiva e não pode ser desfeita.`
+                  t('files.discardConfirmFile', { name: file.name })
                 )
               ) {
                 void runOperation('discard', [file.id]);
@@ -785,7 +792,7 @@ export function FilesPanel() {
             onDiscardAll={() => {
               if (
                 window.confirm(
-                  `Descartar TODAS as alterações não preparadas (${unstaged.length} arquivos)?\nEsta ação é definitiva e não pode ser desfeita.`
+                  t('files.discardConfirmAll', { count: unstaged.length })
                 )
               ) {
                 void runOperation('discardAll');
@@ -806,3 +813,4 @@ export function FilesPanel() {
     </section>
   );
 }
+

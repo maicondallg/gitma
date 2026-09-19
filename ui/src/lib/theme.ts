@@ -225,6 +225,11 @@ export function applyTheme(theme: ThemeDefinition): void {
     root.style.setProperty('--tab-item-active-text', colors.text);
   }
 
+  root.style.setProperty(
+    '--surface-hover',
+    theme.type === 'light' ? 'rgba(0, 0, 0, 0.05)' : 'rgba(255, 255, 255, 0.05)'
+  );
+
   root.setAttribute('data-theme', theme.id);
   root.setAttribute('data-theme-type', theme.type);
 

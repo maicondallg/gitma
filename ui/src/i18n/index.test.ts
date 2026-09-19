@@ -1,4 +1,4 @@
-import { describe, expect, it, beforeEach } from 'vitest';
+import { describe, expect, it, beforeEach, afterAll } from 'vitest';
 import {
   SUPPORTED_LOCALES,
   getLanguage,
@@ -10,6 +10,10 @@ describe('i18n Engine', () => {
   beforeEach(() => {
     localStorage.clear();
     document.documentElement.lang = '';
+    setLanguage('pt-BR');
+  });
+
+  afterAll(() => {
     setLanguage('pt-BR');
   });
 

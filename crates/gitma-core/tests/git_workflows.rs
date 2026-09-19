@@ -820,7 +820,12 @@ fn init_repository_creates_new_git_repo_with_branch() {
 #[test]
 fn clone_repository_clones_local_repo() {
     let source_dir = repository();
-    commit_file(source_dir.path(), "test.txt", "hello clone\n", "Initial commit");
+    commit_file(
+        source_dir.path(),
+        "test.txt",
+        "hello clone\n",
+        "Initial commit",
+    );
     let temp = TempDir::new().unwrap();
     let cloned_path = temp.path().join("cloned-repo");
     git::operations::clone_repository(source_dir.path().to_str().unwrap(), &cloned_path).unwrap();

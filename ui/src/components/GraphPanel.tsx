@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { Archive, GitBranch, Search, Tag, User, X } from 'lucide-react';
 import { useAppStore } from '../store/app';
+import { useI18n } from '../i18n';
 import type { GraphRow } from '../lib/types';
 import { ContextMenu } from './ContextMenu';
 import { CreateTagModal } from './CreateTagModal';
@@ -311,6 +312,7 @@ export function GraphPanel() {
   const selectFile = useAppStore((state) => state.selectFile);
   const fileViewMode = useAppStore((state) => state.fileViewMode);
   const setCommitMessage = useAppStore((state) => state.setCommitMessage);
+  const { t } = useI18n();
 
   const [graphWidth, setGraphWidth] = useState<number>(() => {
     try {
@@ -708,13 +710,18 @@ export function GraphPanel() {
   return (
     <section
       className={`lists-panel lists-graph-panel ${activePane === 'history' ? 'is-pane-active' : ''}`}
-      aria-label="Histórico de commits"
+      aria-label={t('history.title')}
       onClick={() => setActivePane('history')}
     >
       <header className="lists-panel-header lists-graph-header-top">
         <div className="lists-panel-header-title">
-          <h2>Histórico</h2>
-          <span>{filteredRows.length}{searchFilter ? ` de ${rows.length}` : ''}{history?.hasMore ? '+' : ''} commits</span>
+          <h2>{t('history.title')}</h2>
+          <span className="lists-header-sep">-</span>
+          <span className="lists-header-count">
+            {filteredRows.length}
+            {searchFilter ? ` ${t('history.of')} ${rows.length}` : ''}
+            {history?.hasMore ? '+' : ''} {t('history.commitsCount')}
+          </span>
         </div>
         <div className="lists-history-search">
           <Search size={12} className="lists-search-icon" />
@@ -722,7 +729,7 @@ export function GraphPanel() {
             ref={searchInputRef}
             type="text"
             className="lists-search-input"
-            placeholder="Buscar commits (Ctrl+F)..."
+            placeholder={t('history.searchPlaceholder')}
             value={searchFilter}
             onChange={(e) => setSearchFilter(e.target.value)}
             onKeyDown={(e) => {
@@ -740,7 +747,7 @@ export function GraphPanel() {
               type="button"
               className="lists-search-clear"
               onClick={() => setSearchFilter('')}
-              title="Limpar busca"
+              title={t('history.clearSearch')}
             >
               <X size={12} />
             </button>
@@ -751,47 +758,47 @@ export function GraphPanel() {
       {/* Cabeçalho de 5 colunas com separadores verticais contínuos e redimensionadores */}
       <div className="lists-graph-header" role="row">
         <div className="lists-header-col-graph" style={{ width: `${effectiveGraphWidth}px` }}>
-          <span>Grafo</span>
+          <span>{t('history.colGraph')}</span>
         </div>
         <div className="lists-col-divider lists-col-divider-resizable">
           <div
             className="lists-header-resizer"
             onMouseDown={handleGraphResizeMouseDown}
-            title="Arraste para redimensionar a coluna do Grafo"
+            title={t('history.resizeGraph')}
             role="separator"
             aria-orientation="vertical"
           />
         </div>
         <div className="lists-header-col-msg">
-          <span>Mensagem</span>
+          <span>{t('history.colMsg')}</span>
         </div>
         <div className="lists-col-divider lists-col-divider-resizable">
           <div
             className="lists-header-resizer"
             onMouseDown={handleMsgResizeMouseDown}
-            title="Arraste para redimensionar a coluna de Mensagem"
+            title={t('history.resizeMsg')}
             role="separator"
             aria-orientation="vertical"
           />
         </div>
         <div className="lists-header-col-hash">
-          <span>Hash</span>
+          <span>{t('history.colHash')}</span>
         </div>
         <div className="lists-col-divider" />
         <div className="lists-header-col-author" style={{ width: `${authorWidth}px` }}>
-          <span>Autor</span>
+          <span>{t('history.colAuthor')}</span>
         </div>
         <div className="lists-col-divider lists-col-divider-resizable">
           <div
             className="lists-header-resizer"
             onMouseDown={handleAuthorDateResizeMouseDown}
-            title="Arraste para redimensionar as colunas de Autor e Data"
+            title={t('history.resizeAuthorDate')}
             role="separator"
             aria-orientation="vertical"
           />
         </div>
         <div className="lists-header-col-date" style={{ width: `${dateWidth}px` }}>
-          <span>Data</span>
+          <span>{t('history.colDate')}</span>
         </div>
       </div>
 
@@ -814,7 +821,7 @@ export function GraphPanel() {
                     void selectLocal();
                     (e.currentTarget as HTMLElement).blur();
                   }}
-                  title="Alterações locais de trabalho"
+                  title={t('history.uncommittedTitle')}
                 >
                   <div className="lists-col-graph" style={{ width: `${effectiveGraphWidth}px` }}>
                     <UncommittedLane
@@ -825,12 +832,19 @@ export function GraphPanel() {
                   </div>
                   <div className="lists-col-divider" />
                   <div className="lists-col-msg">
-                    <div className="lists-msg-container">
-                      <span className="lists-uncommitted-title">Uncommitted changes</span>
+                    <div
+                      className="lists-msg-container"
+                      title={`${t('history.uncommittedTitle')} ${
+                        totalLocalChanges === 0
+                          ? t('history.clean')
+                          : `(${totalLocalChanges} ${totalLocalChanges === 1 ? t('history.modified') : t('history.modifiedPlural')})`
+                      }`}
+                    >
+                      <span className="lists-uncommitted-title">{t('history.uncommittedTitle')}</span>
                       <span className="lists-uncommitted-sub">
                         {totalLocalChanges === 0
-                          ? '(limpo)'
-                          : `(${totalLocalChanges} ${totalLocalChanges === 1 ? 'modificado' : 'modificados'})`}
+                          ? t('history.clean')
+                          : `(${totalLocalChanges} ${totalLocalChanges === 1 ? t('history.modified') : t('history.modifiedPlural')})`}
                       </span>
                     </div>
                   </div>
@@ -840,7 +854,7 @@ export function GraphPanel() {
                   </div>
                   <div className="lists-col-divider" />
                   <div className="lists-col-author" style={{ width: `${authorWidth}px` }}>
-                    <span className="lists-meta-dash">Working Tree</span>
+                    <span className="lists-meta-dash">{t('history.uncommittedWorkingTree')}</span>
                   </div>
                   <div className="lists-col-divider" />
                   <div className="lists-col-date" style={{ width: `${dateWidth}px` }}>
@@ -914,13 +928,17 @@ export function GraphPanel() {
                     {commit.refs.length > 0 && (
                       <span className="lists-refs" title={commit.refs.join(', ')}>
                         {visibleRefs.map((ref) => {
+                          const isLight =
+                            typeof document !== 'undefined' &&
+                            document.documentElement.getAttribute('data-theme-type') === 'light';
+
                           const chipStyle: React.CSSProperties | undefined = ref.isTag
                             ? undefined
                             : ref.isStash
                             ? {
-                                background: 'rgba(245, 158, 11, 0.15)',
-                                borderColor: '#f59e0b',
-                                color: '#fcd34d',
+                                background: isLight ? 'rgba(245, 158, 11, 0.12)' : 'rgba(245, 158, 11, 0.15)',
+                                borderColor: isLight ? '#d97706' : '#f59e0b',
+                                color: isLight ? '#b45309' : '#fcd34d',
                               }
                             : ref.isHead
                             ? {
@@ -931,24 +949,40 @@ export function GraphPanel() {
                               }
                             : ref.isRemote
                             ? {
-                                background: `color-mix(in srgb, ${laneColor} 8%, transparent)`,
-                                borderColor: `color-mix(in srgb, ${laneColor} 50%, transparent)`,
-                                color: `color-mix(in srgb, ${laneColor} 70%, white)`,
+                                background: isLight
+                                  ? `color-mix(in srgb, ${laneColor} 10%, transparent)`
+                                  : `color-mix(in srgb, ${laneColor} 8%, transparent)`,
+                                borderColor: isLight
+                                  ? `color-mix(in srgb, ${laneColor} 60%, transparent)`
+                                  : `color-mix(in srgb, ${laneColor} 50%, transparent)`,
+                                color: isLight
+                                  ? `color-mix(in srgb, ${laneColor} 80%, black)`
+                                  : `color-mix(in srgb, ${laneColor} 70%, white)`,
                               }
                             : {
-                                background: `color-mix(in srgb, ${laneColor} 14%, transparent)`,
+                                background: isLight
+                                  ? `color-mix(in srgb, ${laneColor} 12%, transparent)`
+                                  : `color-mix(in srgb, ${laneColor} 14%, transparent)`,
                                 borderColor: laneColor,
-                                color: `color-mix(in srgb, ${laneColor} 85%, white)`,
+                                color: isLight
+                                  ? `color-mix(in srgb, ${laneColor} 85%, black)`
+                                  : `color-mix(in srgb, ${laneColor} 85%, white)`,
                               };
 
                           const iconColor = ref.isTag
-                            ? '#fbbf24'
+                            ? isLight
+                              ? '#b45309'
+                              : '#fbbf24'
                             : ref.isStash
-                            ? '#f59e0b'
+                            ? isLight
+                              ? '#b45309'
+                              : '#f59e0b'
                             : ref.isHead
                             ? '#ffffff'
                             : ref.isRemote
-                            ? `color-mix(in srgb, ${laneColor} 70%, white)`
+                            ? isLight
+                              ? `color-mix(in srgb, ${laneColor} 80%, black)`
+                              : `color-mix(in srgb, ${laneColor} 70%, white)`
                             : laneColor;
 
                           return (
@@ -999,7 +1033,7 @@ export function GraphPanel() {
                             role="button"
                             tabIndex={0}
                             className="lists-ref-overflow"
-                            title={`${overflowRefs.length} outras referências (clique para ver todas)`}
+                            title={`${overflowRefs.length} ${t('history.moreRefs')}`}
                             onClick={(e) => {
                               e.stopPropagation();
                               setContextMenu(null);
@@ -1050,18 +1084,18 @@ export function GraphPanel() {
                       e.stopPropagation();
                       void handleCopyHash(commit.oid);
                     }}
-                    title="Clique para copiar a hash"
+                    title={t('files.clickToCopy')}
                     role="button"
                     tabIndex={0}
                   >
-                    {copiedOid === commit.oid ? 'Copiado!' : shortHash(commit.oid)}
+                    {copiedOid === commit.oid ? t('history.copied') : shortHash(commit.oid)}
                   </code>
                 </div>
 
                 <div className="lists-col-divider" />
 
                 {/* Coluna 4: Autor */}
-                <div className="lists-col-author" style={{ width: `${authorWidth}px` }} title={`Autor: ${commit.author}`}>
+                <div className="lists-col-author" style={{ width: `${authorWidth}px` }} title={`${t('history.colAuthor')}: ${commit.author}`}>
                   <User size={11} className="lists-author-icon" />
                   <span className="lists-graph-author">{commit.author}</span>
                 </div>
@@ -1091,14 +1125,25 @@ export function GraphPanel() {
           refs={refPopover.refs}
           laneColor={refPopover.laneColor}
           currentBranch={snapshot?.branch}
-          onClose={() => setRefPopover(null)}
-          onCheckoutBranch={(branch) => void runOperation('switchBranch', [], branch)}
-          onOpenContextMenu={(e, ref) => {
+          activeRefName={
+            contextMenu && contextMenu.commitOid === refPopover.commitOid
+              ? (contextMenu.tagName ?? contextMenu.branchName)
+              : null
+          }
+          onClose={() => {
             setRefPopover(null);
+            setContextMenu(null);
+          }}
+          onCloseContextMenu={() => setContextMenu(null)}
+          onCheckoutBranch={(branch) => {
+            setContextMenu(null);
+            void runOperation('switchBranch', [], branch);
+          }}
+          onOpenContextMenu={(e, ref) => {
             setContextMenu({
               x: e.clientX,
               y: e.clientY,
-              branchName: ref.isTag || ref.isStash ? null : ref.name,
+              branchName: ref.isTag ? null : ref.name,
               tagName: ref.isTag ? ref.name : null,
               isCurrentBranch: ref.isHead,
               isRemoteBranch: ref.isRemote,
@@ -1131,7 +1176,7 @@ export function GraphPanel() {
           }}
           onMergeSquash={(branch) => {
             setRefPopover(null);
-            if (window.confirm(`Fazer merge com squash da branch "${branch}" em ${snapshot?.branch ?? 'HEAD'}?`)) {
+            if (window.confirm(t('history.squashConfirm', { branch, target: snapshot?.branch ?? 'HEAD' }))) {
               void runOperation('mergeSquash', [], branch);
             }
           }}
@@ -1139,9 +1184,10 @@ export function GraphPanel() {
             setRefPopover(null);
             if (
               window.confirm(
-                `Rebasear a branch atual (${snapshot?.branch ?? 'HEAD'}) sobre "${
-                  target.length === 40 ? target.slice(0, 7) : target
-                }"?`
+                t('history.rebaseConfirm', {
+                  branch: snapshot?.branch ?? 'HEAD',
+                  target: target.length === 40 ? target.slice(0, 7) : target,
+                })
               )
             ) {
               void runOperation('rebase', [], target);
@@ -1153,17 +1199,17 @@ export function GraphPanel() {
             if (targetIdx === -1) return;
             const squashedRows = rows.slice(0, targetIdx);
             if (squashedRows.length === 0) {
-              alert('O commit selecionado já é o commit mais recente (HEAD).');
+              alert(t('contextMenu.squashIsHeadAlert'));
               return;
             }
             const subjects = squashedRows.map((r) => `- ${r.commit.subject}`).join('\n');
-            const combinedMessage = `Squash de ${squashedRows.length} commits:\n\n${subjects}`;
+            const combinedMessage = `${t('contextMenu.squashCommitMessage', { count: squashedRows.length })}\n\n${subjects}`;
             if (
               window.confirm(
-                `Fazer squash de ${squashedRows.length} commits até "${commitOid.slice(
-                  0,
-                  7
-                )}"?\nAs alterações ficarão preparadas no stage para você revisar e comitar.`
+                t('contextMenu.squashConfirm', {
+                  count: squashedRows.length,
+                  target: commitOid.slice(0, 7),
+                })
               )
             ) {
               void runOperation('reset', [], JSON.stringify({ commitOid, mode: 'soft' })).then(() => {
@@ -1177,13 +1223,13 @@ export function GraphPanel() {
             setNewBranchModal({ isOpen: true, startPoint });
           }}
           onDeleteBranch={(branch) => {
-            if (window.confirm(`Tem certeza que deseja excluir a branch local "${branch}"?`)) {
+            if (window.confirm(t('contextMenu.deleteBranchConfirm', { branch }))) {
               setRefPopover(null);
               void runOperation('deleteBranch', [], JSON.stringify({ branch, force: true }));
             }
           }}
           onDeleteRemoteBranch={(branch) => {
-            if (window.confirm(`Tem certeza que deseja excluir a branch remota "${branch}" no servidor?`)) {
+            if (window.confirm(t('contextMenu.deleteRemoteBranchConfirm', { branch }))) {
               setRefPopover(null);
               void runOperation('deleteRemoteBranch', [], branch);
             }
@@ -1198,7 +1244,10 @@ export function GraphPanel() {
             const subj = commitRow?.commit.subject ?? commitOid.slice(0, 7);
             if (
               window.confirm(
-                `Reverter o commit ${commitOid.slice(0, 7)} ("${subj}")?\nIsso criará um novo commit desfazendo as alterações.`
+                t('contextMenu.revertCommitConfirm', {
+                  hash: commitOid.slice(0, 7),
+                  subject: subj,
+                })
               )
             ) {
               void runOperation('revertCommit', [], commitOid);
@@ -1212,7 +1261,7 @@ export function GraphPanel() {
             setRefPopover(null);
             const cleanTag = tagName.replace(/^refs\/tags\//, '').replace(/^tag:\s*/, '').trim();
             const deleteRemote = window.confirm(
-              `Deseja excluir a tag "${cleanTag}" também no servidor remoto (origin)?\n(Clique em Cancelar para excluir apenas localmente)`
+              t('contextMenu.deleteTagRemoteConfirm', { tag: cleanTag })
             );
             void runOperation('deleteTag', [], JSON.stringify({ name: cleanTag, deleteRemote }));
           }}
@@ -1234,12 +1283,15 @@ export function GraphPanel() {
             void runOperation('stashApply', [], stashRef ?? '');
           }}
           onStashDrop={(stashRef) => {
-            if (window.confirm(`Tem certeza que deseja descartar este stash (${stashRef ?? 'mais recente'})?`)) {
+            if (window.confirm(t('contextMenu.stashDropConfirm', { name: stashRef ?? 'HEAD' }))) {
               setRefPopover(null);
               void runOperation('stashDrop', [], stashRef ?? '');
             }
           }}
-          onCopyHash={(oid) => void navigator.clipboard.writeText(oid)}
+          onCopyHash={(oid) => {
+            setRefPopover(null);
+            void navigator.clipboard.writeText(oid);
+          }}
         />
       )}
 

@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { AlertTriangle, RotateCcw, X } from 'lucide-react';
+import { useI18n } from '../i18n';
 
 export interface ResetModalProps {
   isOpen: boolean;
@@ -18,6 +19,7 @@ export function ResetModal({
   onClose,
   onConfirm,
 }: ResetModalProps) {
+  const { t } = useI18n();
   const [mode, setMode] = useState<'mixed' | 'soft' | 'hard'>('mixed');
 
   useEffect(() => {
@@ -56,14 +58,14 @@ export function ResetModal({
           <div className="modal-title-group">
             <RotateCcw size={18} className="modal-icon" />
             <h3 id="reset-modal-title">
-              Resetar {currentBranchName ? `branch (${currentBranchName})` : 'HEAD'}
+              {t('reset.title', { target: currentBranchName ? `branch (${currentBranchName})` : 'HEAD' })}
             </h3>
           </div>
           <button
             type="button"
             className="icon-button"
             onClick={onClose}
-            aria-label="Fechar modal"
+            aria-label={t('reset.cancel')}
           >
             <X size={16} />
           </button>
@@ -72,7 +74,7 @@ export function ResetModal({
         <form onSubmit={handleSubmit} className="modal-form">
           <div className="reset-modal-target">
             <div className="reset-target-row">
-              <span className="reset-target-label">Commit alvo:</span>
+              <span className="reset-target-label">{t('reset.targetCommit')}</span>
               <code className="reset-target-oid">{commitOid.slice(0, 7)}</code>
             </div>
             {commitSubject && (
@@ -95,12 +97,11 @@ export function ResetModal({
               />
               <div className="reset-option-info">
                 <div className="reset-option-title">
-                  <strong>Misto (--mixed)</strong>
-                  <span className="reset-option-badge">Padrão</span>
+                  <strong>{t('reset.mixedTitle')}</strong>
+                  <span className="reset-option-badge">{t('reset.badgeDefault')}</span>
                 </div>
                 <div className="reset-option-desc">
-                  Move a branch para o commit alvo e mantém as alterações nos arquivos locais
-                  fora do stage (prontas para revisão).
+                  {t('reset.mixedDesc')}
                 </div>
               </div>
             </label>
@@ -117,11 +118,10 @@ export function ResetModal({
               />
               <div className="reset-option-info">
                 <div className="reset-option-title">
-                  <strong>Suave (--soft)</strong>
+                  <strong>{t('reset.softTitle')}</strong>
                 </div>
                 <div className="reset-option-desc">
-                  Move a branch para o commit alvo e mantém todas as alterações preparadas no
-                  stage (prontas para novo commit).
+                  {t('reset.softDesc')}
                 </div>
               </div>
             </label>
@@ -138,12 +138,11 @@ export function ResetModal({
               />
               <div className="reset-option-info">
                 <div className="reset-option-title danger-text">
-                  <strong>Rígido (--hard)</strong>
-                  <span className="reset-option-badge danger">Destrutivo</span>
+                  <strong>{t('reset.hardTitle')}</strong>
+                  <span className="reset-option-badge danger">{t('reset.badgeDestructive')}</span>
                 </div>
                 <div className="reset-option-desc">
-                  Descarta permanentemente todas as alterações nos arquivos e no stage feitas após
-                  este commit.
+                  {t('reset.hardDesc')}
                 </div>
               </div>
             </label>
@@ -153,21 +152,20 @@ export function ResetModal({
             <div className="reset-warning-box">
               <AlertTriangle size={16} />
               <span>
-                Atenção: todas as alterações não commitadas e arquivos modificados desde este
-                commit serão permanentemente descartados.
+                {t('reset.hardWarning')}
               </span>
             </div>
           )}
 
           <footer className="modal-actions">
             <button type="button" className="btn btn-secondary" onClick={onClose}>
-              Cancelar
+              {t('reset.cancel')}
             </button>
             <button
               type="submit"
               className={`btn ${mode === 'hard' ? 'btn-danger' : 'btn-primary'}`}
             >
-              {mode === 'hard' ? 'Resetar (Descartar alterações)' : 'Resetar branch'}
+              {mode === 'hard' ? t('reset.submitHard') : t('reset.submitNormal')}
             </button>
           </footer>
         </form>

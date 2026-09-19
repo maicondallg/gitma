@@ -142,7 +142,7 @@ describe('TabBar component', () => {
 
   it('opens home tab when clicking Inicio button', () => {
     render(<TabBar />);
-    fireEvent.click(screen.getByRole('button', { name: /Página inicial/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Início|Página inicial/i }));
     expect(actions.openHome).toHaveBeenCalled();
   });
 

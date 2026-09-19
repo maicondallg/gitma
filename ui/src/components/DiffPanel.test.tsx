@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, cleanup } from '@testing-library/react';
 import { DiffPanel } from './DiffPanel';
 import { useAppStore } from '../store/app';
+import { setLanguage } from '../i18n';
 
 vi.mock('../lib/monaco', () => ({
   monaco: {
@@ -23,6 +24,7 @@ vi.mock('../lib/monaco', () => ({
 describe('DiffPanel header e botões de ação', () => {
   beforeEach(() => {
     cleanup();
+    setLanguage('pt-BR');
     useAppStore.setState({
       selectedFile: {
         id: 'f1',

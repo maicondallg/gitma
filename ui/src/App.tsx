@@ -42,42 +42,7 @@ function savedLayout(): number[] | null {
   }
 }
 
-const operationLabel: Record<Operation, string> = {
-  stage: 'Colocando no stage',
-  unstage: 'Tirando do stage',
-  stageAll: 'Colocando tudo no stage',
-  unstageAll: 'Tirando tudo do stage',
-  discard: 'Descartando alterações',
-  discardAll: 'Descartando todas as alterações',
-  commit: 'Criando commit',
-  commitAmend: 'Emendando commit',
-  fetch: 'Buscando do remoto',
-  pull: 'Puxando do remoto',
-  push: 'Enviando ao remoto',
-  forcePushWithLease: 'Enviando ao remoto (force with lease)',
-  switchBranch: 'Alternando branch',
-  createBranch: 'Criando branch',
-  mergeBranch: 'Mesclando branch',
-  mergeSquash: 'Mesclando com squash',
-  mergeAbort: 'Abortando merge',
-  deleteBranch: 'Excluindo branch',
-  deleteRemoteBranch: 'Excluindo branch remota',
-  cherryPick: 'Aplicando commit (cherry-pick)',
-  cherryPickAbort: 'Abortando cherry-pick',
-  cherryPickContinue: 'Continuando cherry-pick',
-  stashPush: 'Guardando no stash',
-  stashPop: 'Aplicando stash (pop)',
-  stashApply: 'Aplicando stash (apply)',
-  stashDrop: 'Descartando stash (drop)',
-  reset: 'Resetando branch',
-  revertCommit: 'Revertendo commit',
-  createTag: 'Criando tag',
-  deleteTag: 'Excluindo tag',
-  rebase: 'Rebaseando branch',
-  rebaseContinue: 'Continuando rebase',
-  rebaseAbort: 'Abortando rebase',
-  rebaseSkip: 'Pulando commit no rebase',
-};
+
 
 export default function App() {
   const tabs = useAppStore((s) => s.tabs);
@@ -218,7 +183,7 @@ export default function App() {
             <div className="toolbar-left">
               <strong className="repo-name">{session.name}</strong>
               {snapshot?.branch && (
-                <span className="branch-badge" title="Branch atual em checkout">
+                <span className="branch-badge" title={t('toolbar.currentBranchCheckedOut')}>
                   <GitBranch size={13} />
                   <span>{snapshot.branch}</span>
                   <span className="branch-badge-dot">•</span>
@@ -228,24 +193,24 @@ export default function App() {
 
             <div className="toolbar-actions toolbar-center">
               {/* Grupo 1: Sincronização remota (Fetch, Pull, Push) */}
-              <div className="toolbar-group" role="group" aria-label="Sincronização remota">
+              <div className="toolbar-group" role="group" aria-label={t('toolbar.remoteSync')}>
                 <button
                   className="sync-button"
                   onClick={() => void runOperation('fetch')}
                   disabled={!!operation}
-                  title="Buscar referências remotas (Fetch)"
+                  title={t('toolbar.fetchTitle')}
                 >
                   <ArrowDownToLine size={14} />
-                  <span>Fetch</span>
+                  <span>{t('toolbar.fetch')}</span>
                 </button>
                 <button
                   className="sync-button"
                   onClick={() => void runOperation('pull')}
                   disabled={!!operation}
-                  title="Baixar e integrar alterações (Pull)"
+                  title={t('toolbar.pullTitle')}
                 >
                   <Download size={14} />
-                  <span>Pull</span>
+                  <span>{t('toolbar.pull')}</span>
                 </button>
                 <button
                   className="sync-button"
@@ -257,25 +222,25 @@ export default function App() {
                     setPushMenu({ x: e.clientX, y: e.clientY });
                   }}
                   disabled={!!operation}
-                  title={'Enviar alterações (Push)\nClique com o botão direito para opções (Force push with lease)'}
+                  title={t('toolbar.pushTitle')}
                 >
                   <Upload size={14} />
-                  <span>Push</span>
+                  <span>{t('toolbar.push')}</span>
                 </button>
               </div>
 
               <div className="toolbar-divider" />
 
               {/* Grupo 2: Branches e Stash */}
-              <div className="toolbar-group" role="group" aria-label="Gerenciamento local">
+              <div className="toolbar-group" role="group" aria-label={t('toolbar.localMgmt')}>
                 <button
                   className="sync-button"
                   onClick={() => setShowNewBranchModal(true)}
                   disabled={!!operation}
-                  title="Criar nova branch (Ctrl+B)"
+                  title={t('toolbar.newBranchTitle')}
                 >
                   <GitBranchPlus size={14} />
-                  <span>Nova branch</span>
+                  <span>{t('toolbar.newBranch')}</span>
                 </button>
                 <button
                   className="sync-button"
@@ -286,22 +251,22 @@ export default function App() {
                     setStashMenu(stashMenu ? null : { x: rect.left, y: rect.bottom });
                   }}
                   disabled={!!operation}
-                  title="Opções de Stash (guardar, pop, apply, drop)"
+                  title={t('toolbar.stashTitle')}
                 >
                   <Archive size={14} />
-                  <span>Stash</span>
+                  <span>{t('toolbar.stash')}</span>
                 </button>
               </div>
 
               <div className="toolbar-divider" />
 
               {/* Grupo 3: Recarregar */}
-              <div className="toolbar-group" role="group" aria-label="Atualização">
+              <div className="toolbar-group" role="group" aria-label={t('toolbar.refresh')}>
                 <button
                   className="icon-button"
                   onClick={() => void refresh('manual')}
                   disabled={refreshing}
-                  title="Atualizar (Ctrl+R)"
+                  title={t('toolbar.refreshTitle')}
                 >
                   <RefreshCw size={14} className={refreshing ? 'spin' : ''} />
                 </button>
@@ -323,7 +288,7 @@ export default function App() {
                 >
                 <div className="menu-header">
                   <Archive size={12} />
-                  <span>Opções de Stash</span>
+                  <span>{t('toolbar.stashOptions')}</span>
                 </div>
 
                 <button
@@ -334,10 +299,10 @@ export default function App() {
                     void runOperation('stashPush', [], '');
                   }}
                   disabled={!!operation}
-                  title="Salva as modificações atuais no stash"
+                  title={t('toolbar.stashSaveDesc')}
                 >
                   <Archive size={13} />
-                  <span>Guardar no stash</span>
+                  <span>{t('toolbar.stashSave')}</span>
                 </button>
 
                 <button
@@ -345,16 +310,16 @@ export default function App() {
                   className="menu-action-item"
                   onClick={() => {
                     setStashMenu(null);
-                    const msg = window.prompt('Mensagem para o stash (opcional):');
+                    const msg = window.prompt(t('toolbar.stashSaveMsgPrompt'));
                     if (msg !== null) {
                       void runOperation('stashPush', [], JSON.stringify({ message: msg, include_untracked: false }));
                     }
                   }}
                   disabled={!!operation}
-                  title="Salva no stash com mensagem personalizada"
+                  title={t('toolbar.stashSaveMsgDesc')}
                 >
                   <Archive size={13} />
-                  <span>Guardar com mensagem...</span>
+                  <span>{t('toolbar.stashSaveMsg')}</span>
                 </button>
 
                 <button
@@ -365,10 +330,10 @@ export default function App() {
                     void runOperation('stashPush', [], JSON.stringify({ message: '', include_untracked: true }));
                   }}
                   disabled={!!operation}
-                  title="Salva modificações e novos arquivos não monitorados (-u)"
+                  title={t('toolbar.stashSaveUntrackedDesc')}
                 >
                   <Archive size={13} />
-                  <span>Guardar com novos arquivos (-u)</span>
+                  <span>{t('toolbar.stashSaveUntracked')}</span>
                 </button>
 
                 <div className="menu-separator" />
@@ -381,10 +346,10 @@ export default function App() {
                     void runOperation('stashPop');
                   }}
                   disabled={!!operation}
-                  title="Aplica o stash mais recente e o remove"
+                  title={t('toolbar.stashPopDesc')}
                 >
                   <Download size={13} />
-                  <span>Aplicar e remover (Pop)</span>
+                  <span>{t('toolbar.stashPop')}</span>
                 </button>
 
                 <button
@@ -395,10 +360,10 @@ export default function App() {
                     void runOperation('stashApply');
                   }}
                   disabled={!!operation}
-                  title="Aplica o stash mais recente mantendo-o no histórico"
+                  title={t('toolbar.stashApplyDesc')}
                 >
                   <Download size={13} />
-                  <span>Aplicar e manter (Apply)</span>
+                  <span>{t('toolbar.stashApply')}</span>
                 </button>
 
                 <button
@@ -406,15 +371,15 @@ export default function App() {
                   className="menu-action-item menu-action-danger"
                   onClick={() => {
                     setStashMenu(null);
-                    if (window.confirm('Tem certeza que deseja descartar o stash mais recente?')) {
+                    if (window.confirm(t('toolbar.stashDropConfirm'))) {
                       void runOperation('stashDrop');
                     }
                   }}
                   disabled={!!operation}
-                  title="Descarta o stash mais recente"
+                  title={t('toolbar.stashDropDesc')}
                 >
                   <X size={13} />
-                  <span>Descartar stash (Drop)</span>
+                  <span>{t('toolbar.stashDrop')}</span>
                 </button>
               </div>,
               document.body
@@ -433,7 +398,7 @@ export default function App() {
                 >
                   <div className="menu-header">
                     <Upload size={12} />
-                    <span>Opções de Envio (Push)</span>
+                    <span>{t('toolbar.pushOptions')}</span>
                   </div>
 
                   <button
@@ -446,7 +411,7 @@ export default function App() {
                     disabled={!!operation}
                   >
                     <Upload size={13} />
-                    <span>Push padrão</span>
+                    <span>{t('toolbar.pushDefault')}</span>
                   </button>
 
                   <button
@@ -457,12 +422,12 @@ export default function App() {
                       void runOperation('forcePushWithLease');
                     }}
                     disabled={!!operation}
-                    title="Sobrescreve a branch remota verificando se ninguém mais enviou commits (--force-with-lease)"
+                    title={t('toolbar.forcePushWithLeaseTitle')}
                   >
                     <ShieldAlert size={14} />
                     <div className="menu-action-text-col">
-                      <span>Force push (with lease)</span>
-                      <small>Seguro contra alterações alheias</small>
+                      <span>{t('toolbar.forcePushWithLease')}</span>
+                      <small>{t('toolbar.forcePushDesc')}</small>
                     </div>
                   </button>
                 </div>,
@@ -546,8 +511,8 @@ export default function App() {
             type="button"
             className="footer-help-btn"
             onClick={() => setShowShortcutsModal(true)}
-            title="Atalhos de teclado (Ctrl+/ ou F1)"
-            aria-label="Atalhos de teclado"
+            title={`${t('shortcuts.title')} (Ctrl+/ ou F1)`}
+            aria-label={t('shortcuts.title')}
           >
             <HelpCircle size={13} />
           </button>
@@ -569,13 +534,13 @@ export default function App() {
               )}
               <span className="notice-message">{notice.message}</span>
             </div>
-            <button className="notice-close" onClick={dismissNotice} aria-label="Fechar aviso">
+            <button className="notice-close" onClick={dismissNotice} aria-label={t('app.closeNotice')}>
               <X size={14} />
             </button>
           </div>
           {'details' in notice && notice.details && (
             <details className="notice-expandable">
-              <summary className="notice-summary">Detalhes</summary>
+              <summary className="notice-summary">{t('app.details')}</summary>
               <pre className="notice-details">{notice.details}</pre>
             </details>
           )}

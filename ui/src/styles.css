@@ -9,10 +9,14 @@
   --green: #61c482;
   --red: #ed7171;
   --selected: #26394d;
+  --surface-hover: rgba(255, 255, 255, 0.05);
   color: var(--text);
   background: var(--bg);
   font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   font-size: 14px;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
 }
 * { box-sizing: border-box; }
 html, body, #root { width: 100%; min-width: 980px; height: 100%; min-height: 640px; margin: 0; overflow: hidden; }
@@ -35,7 +39,6 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
   user-select: none;
   overflow: hidden;
   contain: layout paint;
-  transform: translateZ(0);
 }
 .tab-bar-brand {
   display: flex;
@@ -57,7 +60,7 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
   flex-shrink: 0;
 }
 .tab-bar-brand .brand-text {
-  color: #fff;
+  color: var(--text);
   font-size: 13px;
   font-weight: 750;
 }
@@ -79,7 +82,6 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
   scrollbar-width: none;
   -ms-overflow-style: none;
   contain: layout;
-  transform: translateZ(0);
 }
 .tab-list::-webkit-scrollbar {
   display: none;
@@ -96,7 +98,7 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
   border-radius: 6px 6px 0 0;
   font-size: 12px;
   font-weight: 500;
-  color: #9ca3af;
+  color: var(--muted);
   background: transparent;
   border: 1px solid transparent;
   border-top-width: 2.5px;
@@ -111,29 +113,29 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
   user-select: none;
 }
 .tab-item:hover {
-  background: rgba(255, 255, 255, 0.05);
+  background: var(--surface-hover);
   color: var(--text);
 }
 .tab-item.active {
-  background: #232830;
-  color: #ffffff;
+  background: var(--tab-item-active-bg, var(--surface));
+  color: var(--tab-item-active-text, var(--text));
   border-top: 2.5px solid var(--accent);
-  border-left: 1px solid #323842;
-  border-right: 1px solid #323842;
-  border-bottom: 1px solid #232830;
+  border-left: 1px solid var(--border);
+  border-right: 1px solid var(--border);
+  border-bottom: 1px solid var(--tab-item-active-bg, var(--surface));
   margin-bottom: -1px;
   font-weight: 600;
-  box-shadow: 0 -1px 0 rgba(255, 255, 255, 0.08), 0 3px 10px rgba(0, 0, 0, 0.4);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.15);
   z-index: 2;
 }
 .tab-item.active .tab-title {
-  color: #ffffff;
+  color: var(--tab-item-active-text, var(--text));
   font-weight: 600;
 }
 .tab-item.is-sliding {
-  background: #282f3a;
+  background: var(--raised);
   opacity: 0.95;
-  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.6);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.3);
   z-index: 10;
   cursor: grabbing;
 }
@@ -163,9 +165,9 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
   align-items: center;
   gap: 3px;
   padding: 1px 6px;
-  background: #1e293b;
-  border: 1px solid #3b82f6;
-  color: #93c5fd;
+  background: var(--raised);
+  border: 1px solid var(--border);
+  color: var(--accent);
   border-radius: 9999px;
   font-size: 10px;
   font-weight: 600;
@@ -241,7 +243,7 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
   border-radius: 6px;
   font-size: 11.5px;
   font-weight: 600;
-  color: #e6edf3;
+  color: var(--text);
   cursor: pointer;
   white-space: nowrap;
   flex-shrink: 0;
@@ -252,8 +254,8 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
 }
 
 .tab-group-chip:hover {
-  border-color: rgba(255, 255, 255, 0.2);
-  background-color: rgba(255, 255, 255, 0.08);
+  border-color: var(--border);
+  background-color: var(--surface-hover);
 }
 
 .tab-group-chip.is-group-dragging {
@@ -274,7 +276,7 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
 }
 
 .tab-group-chip.collapsed.active {
-  color: #ffffff;
+  color: var(--text);
 }
 
 .tab-group-chip-dot {
@@ -336,9 +338,9 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
 
 .tab-group-chip-active-tab {
   font-size: 10.5px;
-  color: #ffffff;
-  background: rgba(255, 255, 255, 0.12);
-  border: 1px solid rgba(255, 255, 255, 0.2);
+  color: var(--text);
+  background: var(--surface-hover);
+  border: 1px solid var(--border);
   padding: 1px 6px;
   border-radius: 4px;
   max-width: 120px;
@@ -396,7 +398,7 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
   transform: scale(1.2);
 }
 .color-swatch.selected {
-  box-shadow: 0 0 0 2px #fff;
+  box-shadow: 0 0 0 2px var(--text);
 }
 .color-swatch-clear {
   width: 18px;
@@ -428,7 +430,7 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
 }
 .menu-action-item:hover:not(:disabled) {
   background: var(--raised);
-  color: #fff;
+  color: var(--text);
 }
 .menu-action-item:disabled {
   opacity: 0.35;
@@ -499,7 +501,7 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
   color: var(--text);
   cursor: pointer;
 }
-.open-button:hover, .toolbar-btn:hover { border-color: #58616c; background: #272c33; }
+.open-button:hover, .toolbar-btn:hover { border-color: var(--accent); background: var(--surface); }
 
 .toolbar-left {
   display: flex;
@@ -521,9 +523,9 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
   align-items: center;
   gap: 6px;
   padding: 3px 9px;
-  background: #1e293b;
-  border: 1px solid #3b82f6;
-  color: #93c5fd;
+  background: var(--raised);
+  border: 1px solid var(--border);
+  color: var(--accent);
   border-radius: 9999px;
   font-size: 12px;
   font-weight: 550;
@@ -533,7 +535,7 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
 .branch-badge-dot {
   font-size: 14px;
   font-weight: 900;
-  color: #60a5fa;
+  color: var(--accent);
   margin-left: 1px;
 }
 
@@ -806,7 +808,7 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
   border: 0;
 }
 .btn-danger:hover {
-  filter: brightness(1.1);
+  opacity: 0.9;
 }
 
 /* Context Menu */
@@ -835,7 +837,7 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
   cursor: pointer;
   text-align: left;
 }
-.menu-item:hover { background: var(--selected); color: #fff; }
+.menu-item:hover { background: var(--selected); color: var(--text); }
 .menu-item:disabled { opacity: 0.4; cursor: not-allowed; }
 .menu-item-danger { color: var(--red); }
 .menu-item-danger:hover { background: rgba(237, 113, 113, 0.2); color: #ff8b8b; }
@@ -848,7 +850,6 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
   flex: 1;
   min-height: 0;
   contain: layout;
-  transform: translateZ(0);
 }
 .resize-handle { width: 1px; background: var(--border); position: relative; z-index: 2; }
 .resize-handle::after { content: ""; position: absolute; inset: 0 -3px; }
@@ -2192,6 +2193,16 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
   text-align: center;
   padding: 16px 0 8px 0;
   gap: 6px;
+}
+
+.about-hero-logo {
+  width: 56px;
+  height: 56px;
+  border-radius: 12px;
+  margin-bottom: 4px;
+  filter: drop-shadow(0 6px 18px rgba(32, 214, 244, 0.25));
+  display: inline-block;
+  user-select: none;
 }
 
 .about-brand-badge {
