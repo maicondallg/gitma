@@ -765,6 +765,58 @@ fn tag_operations_create_and_delete() {
 }
 
 #[test]
+fn tag_operations_checkout_and_push() {
+    let remote = TempDir::new().unwrap();
+    assert_success(
+        &["init", "--bare", "-q"],
+        Command::new("git")
+            .arg("init")
+            .arg("--bare")
+            .arg("-q")
+            .arg(remote.path())
+            .output()
+            .unwrap(),
+    );
+
+    let dir = repository();
+    commit_file(dir.path(), "file.txt", "content\n", "initial commit");
+    assert_success(
+        &["remote", "add", "origin"],
+        Command::new("git")
+            .arg("-C")
+            .arg(dir.path())
+            .args(["remote", "add", "origin"])
+            .arg(remote.path())
+            .output()
+            .unwrap(),
+    );
+
+    let repo = GitRepository::open(dir.path()).unwrap();
+    let head_oid = repo.history(0, 1).unwrap().commits[0].oid.clone();
+
+    // Create tag
+    repo.create_tag("v2.0.0", Some(&head_oid), None).unwrap();
+
+    // Checkout tag with 'tag: ' prefix (detached HEAD)
+    repo.checkout_branch("tag: v2.0.0").unwrap();
+    let snap = repo.snapshot().unwrap();
+    assert!(snap.branch.is_none());
+
+    // Push tag to remote
+    repo.push_tag("v2.0.0", None).unwrap();
+
+    // Verify remote has the tag
+    let remote_refs = Command::new("git")
+        .arg("--git-dir")
+        .arg(remote.path())
+        .args(["tag", "-l"])
+        .output()
+        .unwrap();
+    let remote_tags = String::from_utf8_lossy(&remote_refs.stdout);
+    assert!(remote_tags.contains("v2.0.0"));
+}
+
+#[test]
 fn rebase_operations_and_in_progress_detection() {
     let dir = repository();
     commit_file(dir.path(), "base.txt", "base\n", "base commit");

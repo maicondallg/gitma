@@ -981,4 +981,83 @@ describe('CreateTagModal', () => {
     });
     expect(onClose).toHaveBeenCalled();
   });
+
+  it('permite criar tag e marcar envio para o remoto (push)', () => {
+    const onSubmit = vi.fn();
+    const onClose = vi.fn();
+
+    render(
+      <CreateTagModal
+        isOpen={true}
+        commitOid="abcdef1234567890"
+        onClose={onClose}
+        onSubmit={onSubmit}
+      />
+    );
+
+    const nameInput = screen.getByLabelText(/Nome da Tag/i);
+    fireEvent.change(nameInput, { target: { value: 'v1.0.0' } });
+
+    const pushCheckbox = screen.getByLabelText(/Enviar tag para o repositório remoto/i);
+    fireEvent.click(pushCheckbox);
+
+    const submitBtn = screen.getByRole('button', { name: /Criar Tag/i });
+    fireEvent.click(submitBtn);
+
+    expect(onSubmit).toHaveBeenCalledWith({
+      name: 'v1.0.0',
+      message: undefined,
+      oid: 'abcdef1234567890',
+      push: true,
+    });
+    expect(onClose).toHaveBeenCalled();
+  });
+});
+
+describe('ContextMenu Tag Actions', () => {
+  it('exibe opções de checkout e push quando tagName estiver definido', () => {
+    const onCheckoutTag = vi.fn();
+    const onPushTag = vi.fn();
+    const onDeleteTag = vi.fn();
+    const onClose = vi.fn();
+
+    render(
+      <ContextMenu
+        x={100}
+        y={100}
+        tagName="v1.0.0"
+        commitOid="abcdef123456"
+        onClose={onClose}
+        onCheckoutTag={onCheckoutTag}
+        onPushTag={onPushTag}
+        onDeleteTag={onDeleteTag}
+      />
+    );
+
+    const checkoutBtn = screen.getByText(/Fazer checkout da tag \(v1\.0\.0\)/i);
+    expect(checkoutBtn).toBeInTheDocument();
+    fireEvent.click(checkoutBtn);
+    expect(onCheckoutTag).toHaveBeenCalledWith('v1.0.0');
+    expect(onClose).toHaveBeenCalled();
+
+    cleanup();
+
+    render(
+      <ContextMenu
+        x={100}
+        y={100}
+        tagName="v1.0.0"
+        commitOid="abcdef123456"
+        onClose={onClose}
+        onCheckoutTag={onCheckoutTag}
+        onPushTag={onPushTag}
+        onDeleteTag={onDeleteTag}
+      />
+    );
+
+    const pushBtn = screen.getByText(/Enviar tag ao remoto/i);
+    expect(pushBtn).toBeInTheDocument();
+    fireEvent.click(pushBtn);
+    expect(onPushTag).toHaveBeenCalledWith('v1.0.0');
+  });
 });

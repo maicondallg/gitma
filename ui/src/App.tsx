@@ -13,6 +13,7 @@ import {
   RefreshCw,
   Settings,
   ShieldAlert,
+  Tag,
   Upload,
   X,
 } from 'lucide-react';
@@ -182,13 +183,19 @@ export default function App() {
           <header className="app-toolbar">
             <div className="toolbar-left">
               <strong className="repo-name">{session.name}</strong>
-              {snapshot?.branch && (
+              {snapshot?.branch ? (
                 <span className="branch-badge" title={t('toolbar.currentBranchCheckedOut')}>
                   <GitBranch size={13} />
                   <span>{snapshot.branch}</span>
                   <span className="branch-badge-dot">•</span>
                 </span>
-              )}
+              ) : snapshot ? (
+                <span className="branch-badge branch-badge-detached" title={t('toolbar.detachedHead')}>
+                  <GitBranch size={13} />
+                  <span>HEAD ({t('toolbar.detached')})</span>
+                  <span className="branch-badge-dot">•</span>
+                </span>
+              ) : null}
             </div>
 
             <div className="toolbar-actions toolbar-center">
@@ -412,6 +419,20 @@ export default function App() {
                   >
                     <Upload size={13} />
                     <span>{t('toolbar.pushDefault')}</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    className="menu-action-item"
+                    onClick={() => {
+                      setPushMenu(null);
+                      void runOperation('pushTag', [], '--tags');
+                    }}
+                    disabled={!!operation}
+                    title={t('toolbar.pushAllTagsTitle')}
+                  >
+                    <Tag size={13} />
+                    <span>{t('toolbar.pushAllTags')}</span>
                   </button>
 
                   <button

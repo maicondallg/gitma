@@ -86,6 +86,10 @@
     "forcePushWithLease": "Force push (with lease)",
     "forcePushWithLeaseTitle": "Overwrite remote branch checking that no one else pushed (--force-with-lease)",
     "forcePushDesc": "Safe against remote overwritten commits",
+    "pushAllTags": "Push all tags (--tags)",
+    "pushAllTagsTitle": "Push all local tags to the remote repository (--tags)",
+    "detachedHead": "HEAD detached",
+    "detached": "detached",
     "currentBranchCheckedOut": "Current checked out branch"
   },
   "tabs": {
@@ -232,6 +236,8 @@
     "resetBranchToHere": "Reset branch {{branch}} to here...",
     "createTag": "Create Tag...",
     "createTagAtCommit": "Create Tag at this commit...",
+    "checkoutTag": "Checkout tag ({{name}})",
+    "pushTag": "Push tag to remote",
     "deleteTag": "Delete tag ({{name}})",
     "copyHash": "Copy commit hash",
     "copyHashWithOid": "Copy hash ({{hash}})",
@@ -272,8 +278,11 @@
     "namePlaceholder": "e.g.: v1.0.0, release-2026",
     "messageLabel": "Message (optional for annotated tag)",
     "messagePlaceholder": "Description or release notes...",
+    "pushLabel": "Push tag to remote repository",
     "submit": "Create Tag",
-    "cancel": "Cancel"
+    "cancel": "Cancel",
+    "errorRequired": "Tag name is required.",
+    "errorInvalid": "Tag name cannot contain spaces."
   },
   "reset": {
     "title": "Reset {{target}}",
@@ -324,6 +333,7 @@
     "revertCommit": "Reverting commit",
     "createTag": "Creating tag",
     "deleteTag": "Deleting tag",
+    "pushTag": "Pushing tag to remote",
     "rebase": "Rebasing branch",
     "rebaseContinue": "Continuing rebase",
     "rebaseAbort": "Aborting rebase",

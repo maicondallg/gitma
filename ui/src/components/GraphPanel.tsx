@@ -992,7 +992,7 @@ export function GraphPanel() {
                               className={`lists-ref ${ref.isHead ? 'lists-ref-head' : ref.isRemote ? 'lists-ref-remote' : ref.isTag ? 'lists-ref-tag' : ref.isStash ? 'lists-ref-stash' : 'lists-ref-local'}`}
                               title={ref.raw}
                               onClick={(e) => {
-                                if (!ref.isTag && !ref.isStash) {
+                                if (!ref.isStash) {
                                   e.stopPropagation();
                                   if (!ref.isHead) {
                                     void runOperation('switchBranch', [], ref.name);
@@ -1169,6 +1169,16 @@ export function GraphPanel() {
           onCheckoutBranch={(branch) => {
             setRefPopover(null);
             void runOperation('switchBranch', [], branch);
+          }}
+          onCheckoutTag={(tagName) => {
+            setRefPopover(null);
+            const cleanTag = tagName.replace(/^refs\/tags\//, '').replace(/^tag:\s*/, '').trim();
+            void runOperation('switchBranch', [], cleanTag);
+          }}
+          onPushTag={(tagName) => {
+            setRefPopover(null);
+            const cleanTag = tagName.replace(/^refs\/tags\//, '').replace(/^tag:\s*/, '').trim();
+            void runOperation('pushTag', [], JSON.stringify({ name: cleanTag }));
           }}
           onMergeBranch={(branch) => {
             setRefPopover(null);

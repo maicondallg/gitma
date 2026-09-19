@@ -13,6 +13,7 @@ import {
   Tag,
   Trash2,
   Undo2,
+  Upload,
 } from 'lucide-react';
 import { useI18n } from '../i18n';
 
@@ -28,6 +29,8 @@ export interface ContextMenuProps {
   commitOid: string;
   onClose: () => void;
   onCheckoutBranch?: (branch: string) => void;
+  onCheckoutTag?: (tagName: string) => void;
+  onPushTag?: (tagName: string) => void;
   onMergeBranch?: (branch: string) => void;
   onMergeSquash?: (branch: string) => void;
   onCreateBranch?: (startPoint: string) => void;
@@ -58,6 +61,8 @@ export function ContextMenu({
   commitOid,
   onClose,
   onCheckoutBranch,
+  onCheckoutTag,
+  onPushTag,
   onMergeBranch,
   onMergeSquash,
   onCreateBranch,
@@ -135,6 +140,34 @@ export function ContextMenu({
     >
       {tagName && (
         <>
+          <button
+            type="button"
+            className="menu-item"
+            onClick={() => {
+              onClose();
+              if (onCheckoutTag) {
+                onCheckoutTag(tagName);
+              } else {
+                onCheckoutBranch?.(tagName);
+              }
+            }}
+            title={t('contextMenu.checkoutTag', { name: tagName })}
+          >
+            <Tag size={14} />
+            <span>{t('contextMenu.checkoutTag', { name: tagName })}</span>
+          </button>
+          <button
+            type="button"
+            className="menu-item"
+            onClick={() => {
+              onClose();
+              onPushTag?.(tagName);
+            }}
+            title={t('contextMenu.pushTag', { name: tagName })}
+          >
+            <Upload size={14} />
+            <span>{t('contextMenu.pushTag', { name: tagName })}</span>
+          </button>
           <button
             type="button"
             className="menu-item menu-item-danger"

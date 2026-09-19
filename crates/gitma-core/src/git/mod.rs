@@ -447,6 +447,9 @@ impl GitRepository {
     ) -> GitResult<()> {
         operations::delete_tag(&self.context.root, name, delete_remote, remote)
     }
+    pub fn push_tag(&self, tag: &str, remote: Option<&str>) -> GitResult<String> {
+        operations::push_tag(&self.context.root, tag, remote)
+    }
     pub fn rebase(&self, target: &str) -> GitResult<String> {
         operations::rebase(&self.context.root, target)
     }

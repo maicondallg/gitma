@@ -107,7 +107,13 @@ pub fn push_force_with_lease(root: &Path) -> GitResult<()> {
     mutate(root, &["push", "--force-with-lease"]).map(|_| ())
 }
 pub fn checkout_branch(root: &Path, branch: &str) -> GitResult<()> {
-    let trimmed = branch.trim();
+    let mut trimmed = branch.trim();
+    if let Some(stripped) = trimmed.strip_prefix("tag: ") {
+        trimmed = stripped.trim();
+    }
+    if let Some(stripped) = trimmed.strip_prefix("refs/tags/") {
+        trimmed = stripped.trim();
+    }
     let normalized = trimmed.strip_prefix("remotes/").unwrap_or(trimmed);
 
     let remote_ref = format!("refs/remotes/{normalized}");
@@ -407,6 +413,48 @@ pub fn delete_tag(
             }
         }
     }
+}
+
+pub fn push_tag(root: &Path, tag: &str, remote: Option<&str>) -> GitResult<String> {
+    let mut trimmed = tag.trim();
+    if let Some(stripped) = trimmed.strip_prefix("tag: ") {
+        trimmed = stripped.trim();
+    }
+    if let Some(stripped) = trimmed.strip_prefix("refs/tags/") {
+        trimmed = stripped.trim();
+    }
+    if trimmed.is_empty() {
+        return Err(GitError {
+            category: GitErrorCategory::Process,
+            message: "Nome da tag não pode ser vazio".into(),
+            details: None,
+        });
+    }
+    let remote_name = if let Some(r) = remote.map(str::trim).filter(|r| !r.is_empty()) {
+        r.to_string()
+    } else if let Ok(remotes_out) = super::runner::read(root, &["remote"]) {
+        let remotes_str = String::from_utf8_lossy(&remotes_out);
+        let first = remotes_str
+            .lines()
+            .map(str::trim)
+            .find(|s| !s.is_empty())
+            .map(str::to_string);
+        if remotes_str.lines().map(str::trim).any(|s| s == "origin") {
+            "origin".to_string()
+        } else {
+            first.unwrap_or_else(|| "origin".to_string())
+        }
+    } else {
+        "origin".to_string()
+    };
+
+    let out = if trimmed == "--tags" || trimmed == "all" {
+        mutate(root, &["push", &remote_name, "--tags"])?
+    } else {
+        let ref_spec = format!("refs/tags/{trimmed}");
+        mutate(root, &["push", &remote_name, &ref_spec])?
+    };
+    Ok(String::from_utf8_lossy(&out).into_owned())
 }
 
 pub fn rebase(root: &Path, target: &str) -> GitResult<String> {

@@ -207,6 +207,7 @@ pub enum Operation {
     RevertCommit,
     CreateTag,
     DeleteTag,
+    PushTag,
     Rebase,
     RebaseContinue,
     RebaseAbort,
@@ -728,12 +729,14 @@ impl Backend {
                     name: String,
                     oid: Option<String>,
                     message: Option<String>,
+                    #[serde(default)]
+                    push: bool,
                 }
-                let (name, oid, msg) =
+                let (name, oid, msg, push) =
                     if let Ok(params) = serde_json::from_str::<CreateTagParams>(message) {
-                        (params.name, params.oid, params.message)
+                        (params.name, params.oid, params.message, params.push)
                     } else {
-                        (message.trim().to_string(), None, None)
+                        (message.trim().to_string(), None, None, false)
                     };
                 if name.trim().is_empty() {
                     return Err(invalid("O nome da tag é obrigatório"));
@@ -741,6 +744,9 @@ impl Backend {
                 state
                     .repo
                     .create_tag(name.trim(), oid.as_deref(), msg.as_deref())?;
+                if push {
+                    state.repo.push_tag(name.trim(), None)?;
+                }
             }
             Operation::DeleteTag => {
                 reject_files(file_ids)?;
@@ -763,6 +769,26 @@ impl Backend {
                 state
                     .repo
                     .delete_tag(name.trim(), delete_remote, remote.as_deref())?;
+            }
+            Operation::PushTag => {
+                reject_files(file_ids)?;
+                #[derive(Deserialize)]
+                struct PushTagParams {
+                    name: String,
+                    remote: Option<String>,
+                }
+                let (name, remote) =
+                    if let Ok(params) = serde_json::from_str::<PushTagParams>(message) {
+                        (params.name, params.remote)
+                    } else {
+                        (message.trim().to_string(), None)
+                    };
+                if name.trim().is_empty() {
+                    return Err(invalid("O nome da tag é obrigatório"));
+                }
+                state
+                    .repo
+                    .push_tag(name.trim(), remote.as_deref())?;
             }
             Operation::Rebase => {
                 reject_files(file_ids)?;
@@ -840,6 +866,7 @@ impl Backend {
             Operation::RevertCommit => "Commit revertido com sucesso",
             Operation::CreateTag => "Tag criada com sucesso",
             Operation::DeleteTag => "Tag excluída com sucesso",
+            Operation::PushTag => "Tag enviada ao repositório remoto com sucesso",
             Operation::Rebase => "Rebase concluído com sucesso",
             Operation::RebaseContinue => "Rebase continuado com sucesso",
             Operation::RebaseAbort => "Rebase abortado com sucesso",

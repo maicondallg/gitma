@@ -43,6 +43,7 @@ export type Operation =
   | 'revertCommit'
   | 'createTag'
   | 'deleteTag'
+  | 'pushTag'
   | 'rebase'
   | 'rebaseContinue'
   | 'rebaseAbort'

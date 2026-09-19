@@ -86,6 +86,10 @@
     "forcePushWithLease": "Force push (with lease)",
     "forcePushWithLeaseTitle": "Sobrescreve a branch remota verificando se ninguém mais enviou commits (--force-with-lease)",
     "forcePushDesc": "Seguro contra alterações alheias",
+    "pushAllTags": "Enviar todas as tags (--tags)",
+    "pushAllTagsTitle": "Enviar todas as tags locais para o repositório remoto (--tags)",
+    "detachedHead": "HEAD desconectado (detached)",
+    "detached": "detached",
     "currentBranchCheckedOut": "Branch atual em checkout"
   },
   "tabs": {
@@ -232,6 +236,8 @@
     "resetBranchToHere": "Resetar branch {{branch}} para aqui...",
     "createTag": "Criar Tag...",
     "createTagAtCommit": "Criar Tag neste commit...",
+    "checkoutTag": "Fazer checkout da tag ({{name}})",
+    "pushTag": "Enviar tag ao remoto (push)",
     "deleteTag": "Excluir tag ({{name}})",
     "copyHash": "Copiar hash do commit",
     "copyHashWithOid": "Copiar hash ({{hash}})",
@@ -272,8 +278,11 @@
     "namePlaceholder": "Ex: v1.0.0, release-2026",
     "messageLabel": "Mensagem (opcional para tag anotada)",
     "messagePlaceholder": "Descrição ou notas da versão...",
+    "pushLabel": "Enviar tag para o repositório remoto (push)",
     "submit": "Criar Tag",
-    "cancel": "Cancelar"
+    "cancel": "Cancelar",
+    "errorRequired": "O nome da tag é obrigatório.",
+    "errorInvalid": "O nome da tag não pode conter espaços."
   },
   "reset": {
     "title": "Resetar {{target}}",
@@ -324,6 +333,7 @@
     "revertCommit": "Revertendo commit",
     "createTag": "Criando tag",
     "deleteTag": "Excluindo tag",
+    "pushTag": "Enviando tag ao remoto",
     "rebase": "Rebaseando branch",
     "rebaseContinue": "Continuando rebase",
     "rebaseAbort": "Abortando rebase",

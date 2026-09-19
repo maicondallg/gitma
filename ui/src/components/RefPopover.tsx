@@ -121,7 +121,7 @@ export function RefPopover({
             : undefined
         }
         onClick={() => {
-          if (!ref.isTag && !ref.isStash && !ref.isHead) {
+          if (!ref.isStash && !ref.isHead) {
             onCheckoutBranch(ref.name);
             onClose();
           }

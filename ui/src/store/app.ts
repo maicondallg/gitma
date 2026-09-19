@@ -913,7 +913,7 @@ export const useAppStore = create<AppState>((set, get) => {
           'deleteBranch', 'deleteRemoteBranch',
           'cherryPick', 'cherryPickAbort', 'cherryPickContinue',
           'stashPush', 'stashPop', 'stashApply', 'stashDrop', 'commit', 'commitAmend',
-          'reset', 'revertCommit', 'createTag', 'deleteTag',
+          'reset', 'revertCommit', 'createTag', 'deleteTag', 'pushTag',
           'rebase', 'rebaseContinue', 'rebaseAbort', 'rebaseSkip'
         ]);
         const ids = fileIds ?? (NO_FILE_OPERATIONS.has(operation) ? [] : state.selectedFile ? [state.selectedFile.id] : []);

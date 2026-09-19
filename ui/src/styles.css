@@ -753,6 +753,13 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
   border-color: var(--accent);
   outline: 2px solid color-mix(in srgb, var(--accent) 30%, transparent);
 }
+.modal-textarea {
+  height: auto;
+  min-height: 64px;
+  padding: 8px 10px;
+  line-height: 1.4;
+  resize: vertical;
+}
 .form-error { font-size: 11px; color: var(--red); }
 .form-info {
   display: flex;
