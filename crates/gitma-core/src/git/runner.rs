@@ -97,6 +97,14 @@ fn run<'a>(
         // inherited pipes cannot keep our reader threads alive.
         command.process_group(0);
     }
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        // Prevent Windows from allocating a visible console window (cmd/conhost)
+        // for background Git CLI subprocesses in a GUI application.
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
     let mut child = command
         .spawn()
         .map_err(|error| io_error("Não foi possível iniciar o Git", error))?;

@@ -99,7 +99,13 @@ export default function App() {
   }, [pushMenu, stashMenu]);
 
   useEffect(() => {
-    const onFocus = () => void refresh('focus');
+    let lastFocusTime = 0;
+    const onFocus = () => {
+      const now = Date.now();
+      if (now - lastFocusTime < 1000) return;
+      lastFocusTime = now;
+      void refresh('focus');
+    };
     const onKey = (event: KeyboardEvent) => {
       if (event.key === 'F1') {
         event.preventDefault();

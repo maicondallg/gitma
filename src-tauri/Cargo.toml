@@ -1,6 +1,6 @@
 [package]
 name = "gitma-desktop"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2021"
 description = "Gitma Desktop native application powered by Tauri v2 and Rust"
 license = "MIT"
