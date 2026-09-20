@@ -750,16 +750,28 @@ impl Backend {
             }
             Operation::DeleteTag => {
                 reject_files(file_ids)?;
-                #[derive(Deserialize)]
-                struct DeleteTagParams {
-                    name: String,
-                    #[serde(rename = "deleteRemote", default)]
-                    delete_remote: bool,
-                    remote: Option<String>,
-                }
                 let (name, delete_remote, remote) =
-                    if let Ok(params) = serde_json::from_str::<DeleteTagParams>(message) {
-                        (params.name, params.delete_remote, params.remote)
+                    if let Ok(val) = serde_json::from_str::<serde_json::Value>(message) {
+                        if let Some(obj) = val.as_object() {
+                            let name = obj
+                                .get("name")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .to_string();
+                            let delete_remote = obj
+                                .get("deleteRemote")
+                                .and_then(|v| v.as_bool())
+                                .unwrap_or(false);
+                            let remote = obj
+                                .get("remote")
+                                .and_then(|v| v.as_str())
+                                .map(|s| s.to_string());
+                            (name, delete_remote, remote)
+                        } else if let Some(s) = val.as_str() {
+                            (s.to_string(), false, None)
+                        } else {
+                            (message.trim().to_string(), false, None)
+                        }
                     } else {
                         (message.trim().to_string(), false, None)
                     };
@@ -772,14 +784,24 @@ impl Backend {
             }
             Operation::PushTag => {
                 reject_files(file_ids)?;
-                #[derive(Deserialize)]
-                struct PushTagParams {
-                    name: String,
-                    remote: Option<String>,
-                }
                 let (name, remote) =
-                    if let Ok(params) = serde_json::from_str::<PushTagParams>(message) {
-                        (params.name, params.remote)
+                    if let Ok(val) = serde_json::from_str::<serde_json::Value>(message) {
+                        if let Some(obj) = val.as_object() {
+                            let name = obj
+                                .get("name")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .to_string();
+                            let remote = obj
+                                .get("remote")
+                                .and_then(|v| v.as_str())
+                                .map(|s| s.to_string());
+                            (name, remote)
+                        } else if let Some(s) = val.as_str() {
+                            (s.to_string(), None)
+                        } else {
+                            (message.trim().to_string(), None)
+                        }
                     } else {
                         (message.trim().to_string(), None)
                     };

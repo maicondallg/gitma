@@ -375,6 +375,15 @@ pub fn delete_tag(
     remote: Option<&str>,
 ) -> GitResult<()> {
     let mut trimmed = name.trim();
+    let parsed_name;
+    if trimmed.starts_with('{') {
+        if let Ok(val) = serde_json::from_str::<serde_json::Value>(trimmed) {
+            if let Some(n) = val.get("name").and_then(|v| v.as_str()) {
+                parsed_name = n.to_string();
+                trimmed = &parsed_name;
+            }
+        }
+    }
     if let Some(stripped) = trimmed.strip_prefix("tag: ") {
         trimmed = stripped.trim();
     }
@@ -391,14 +400,36 @@ pub fn delete_tag(
     let local_result = mutate(root, &["tag", "-d", trimmed]);
     let mut remote_err = None;
     if delete_remote {
-        let remote_name = remote.unwrap_or("origin").trim();
+        let remote_name = if let Some(r) = remote.map(str::trim).filter(|r| !r.is_empty()) {
+            r.to_string()
+        } else if let Ok(remotes_out) = super::runner::read(root, &["remote"]) {
+            let remotes_str = String::from_utf8_lossy(&remotes_out);
+            let first = remotes_str
+                .lines()
+                .map(str::trim)
+                .find(|s| !s.is_empty())
+                .map(str::to_string);
+            if remotes_str.lines().map(str::trim).any(|s| s == "origin") {
+                "origin".to_string()
+            } else {
+                first.unwrap_or_else(|| "origin".to_string())
+            }
+        } else {
+            "origin".to_string()
+        };
         let ref_spec = format!(":refs/tags/{trimmed}");
-        if let Err(e) = mutate(root, &["push", remote_name, &ref_spec]) {
+        if let Err(e) = mutate(root, &["push", &remote_name, &ref_spec]) {
             remote_err = Some(e);
         }
     }
     match local_result {
-        Ok(_) => Ok(()),
+        Ok(_) => {
+            if let Some(err) = remote_err {
+                Err(err)
+            } else {
+                Ok(())
+            }
+        }
         Err(err) => {
             let msg = err.message.to_lowercase();
             let details = err.details.as_deref().unwrap_or("").to_lowercase();
@@ -408,6 +439,8 @@ pub fn delete_tag(
                 || details.contains("não encontrada");
             if is_not_found && delete_remote && remote_err.is_none() {
                 Ok(())
+            } else if let Some(r_err) = remote_err {
+                Err(r_err)
             } else {
                 Err(err)
             }

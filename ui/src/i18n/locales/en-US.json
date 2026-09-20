@@ -238,7 +238,8 @@
     "createTagAtCommit": "Create Tag at this commit...",
     "checkoutTag": "Checkout tag ({{name}})",
     "pushTag": "Push tag to remote",
-    "deleteTag": "Delete tag ({{name}})",
+    "deleteTag": "Delete local tag ({{name}})",
+    "deleteRemoteTagPush": "Delete tag on remote (push --delete)",
     "copyHash": "Copy commit hash",
     "copyHashWithOid": "Copy hash ({{hash}})",
     "createBranchAtCommit": "Create branch at this commit...",
@@ -257,7 +258,8 @@
     "deleteBranchConfirm": "Are you sure you want to delete local branch \"{{branch}}\"?",
     "deleteRemoteBranchConfirm": "Are you sure you want to delete remote branch \"{{branch}}\" on the server?",
     "revertCommitConfirm": "Revert commit {{hash}} (\"{{subject}}\")?\nThis will create a new commit undoing the changes.",
-    "deleteTagRemoteConfirm": "Do you also want to delete tag \"{{tag}}\" on the remote server (origin)?\n(Click Cancel to delete only locally)",
+    "deleteTagConfirm": "Are you sure you want to delete local tag \"{{tag}}\"?",
+    "deleteRemoteTagConfirm": "Are you sure you want to delete tag \"{{tag}}\" on the remote server (origin)?",
     "stashDropConfirm": "Are you sure you want to drop this stash ({{name}})?"
   },
   "newBranch": {

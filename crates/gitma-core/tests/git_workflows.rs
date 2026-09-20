@@ -762,6 +762,12 @@ fn tag_operations_create_and_delete() {
     repo.delete_branch("refs/tags/v1.1.0", false).unwrap();
     let hist4 = repo.history(0, 1).unwrap();
     assert!(!hist4.commits[0].refs.iter().any(|r| r.contains("v1.1.0")));
+
+    // 5. Delete tag via JSON string (fallback handling)
+    repo.create_tag("v1.2.0", Some(&head_oid), None).unwrap();
+    repo.delete_tag(r#"{"name":"v1.2.0","deleteRemote":{}}"#, false, None).unwrap();
+    let hist5 = repo.history(0, 1).unwrap();
+    assert!(!hist5.commits[0].refs.iter().any(|r| r.contains("v1.2.0")));
 }
 
 #[test]

@@ -1059,5 +1059,29 @@ describe('ContextMenu Tag Actions', () => {
     expect(pushBtn).toBeInTheDocument();
     fireEvent.click(pushBtn);
     expect(onPushTag).toHaveBeenCalledWith('v1.0.0');
+
+    const localDeleteBtn = screen.getByText(/Excluir tag local \(v1\.0\.0\)/i);
+    expect(localDeleteBtn).toBeInTheDocument();
+    fireEvent.click(localDeleteBtn);
+    expect(onDeleteTag).toHaveBeenCalledWith('v1.0.0');
+
+    cleanup();
+
+    const onDeleteRemoteTag = vi.fn();
+    render(
+      <ContextMenu
+        x={100}
+        y={100}
+        tagName="v1.0.0"
+        commitOid="abcdef123456"
+        onClose={onClose}
+        onDeleteRemoteTag={onDeleteRemoteTag}
+      />
+    );
+
+    const remoteDeleteBtn = screen.getByText(/Excluir tag no remoto/i);
+    expect(remoteDeleteBtn).toBeInTheDocument();
+    fireEvent.click(remoteDeleteBtn);
+    expect(onDeleteRemoteTag).toHaveBeenCalledWith('v1.0.0');
   });
 });

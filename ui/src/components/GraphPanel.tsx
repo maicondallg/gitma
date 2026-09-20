@@ -4,6 +4,7 @@ import { Archive, GitBranch, Search, Tag, User, X } from 'lucide-react';
 import { useAppStore } from '../store/app';
 import { useI18n } from '../i18n';
 import type { GraphRow } from '../lib/types';
+import { confirmDialog } from '../lib/bridge';
 import { ContextMenu } from './ContextMenu';
 import { CreateTagModal } from './CreateTagModal';
 import { NewBranchModal } from './NewBranchModal';
@@ -1267,13 +1268,25 @@ export function GraphPanel() {
             setRefPopover(null);
             setCreateTagModal({ isOpen: true, commitOid });
           }}
-          onDeleteTag={(tagName) => {
+          onDeleteTag={async (tagName) => {
             setRefPopover(null);
             const cleanTag = tagName.replace(/^refs\/tags\//, '').replace(/^tag:\s*/, '').trim();
-            const deleteRemote = window.confirm(
-              t('contextMenu.deleteTagRemoteConfirm', { tag: cleanTag })
+            const confirmed = await confirmDialog(
+              t('contextMenu.deleteTagConfirm', { tag: cleanTag })
             );
-            void runOperation('deleteTag', [], JSON.stringify({ name: cleanTag, deleteRemote }));
+            if (confirmed) {
+              void runOperation('deleteTag', [], JSON.stringify({ name: cleanTag, deleteRemote: false }));
+            }
+          }}
+          onDeleteRemoteTag={async (tagName) => {
+            setRefPopover(null);
+            const cleanTag = tagName.replace(/^refs\/tags\//, '').replace(/^tag:\s*/, '').trim();
+            const confirmed = await confirmDialog(
+              t('contextMenu.deleteRemoteTagConfirm', { tag: cleanTag })
+            );
+            if (confirmed) {
+              void runOperation('deleteTag', [], JSON.stringify({ name: cleanTag, deleteRemote: true }));
+            }
           }}
           onResetHead={(commitOid) => {
             setRefPopover(null);

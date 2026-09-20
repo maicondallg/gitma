@@ -41,6 +41,7 @@ export interface ContextMenuProps {
   onRevertCommit?: (commitOid: string) => void;
   onCreateTag?: (commitOid: string) => void;
   onDeleteTag?: (tagName: string) => void;
+  onDeleteRemoteTag?: (tagName: string) => void;
   onRebase?: (target: string) => void;
   onSquashTo?: (commitOid: string) => void;
   onStashPop?: (stashRef?: string) => void;
@@ -73,6 +74,7 @@ export function ContextMenu({
   onRevertCommit,
   onCreateTag,
   onDeleteTag,
+  onDeleteRemoteTag,
   onRebase,
   onSquashTo,
   onStashPop,
@@ -179,6 +181,18 @@ export function ContextMenu({
           >
             <Trash2 size={14} />
             <span>{t('contextMenu.deleteTag', { name: tagName })}</span>
+          </button>
+          <button
+            type="button"
+            className="menu-item menu-item-danger"
+            onClick={() => {
+              onClose();
+              onDeleteRemoteTag?.(tagName);
+            }}
+            title={t('contextMenu.deleteRemoteTagPush', { name: tagName })}
+          >
+            <Trash2 size={14} />
+            <span>{t('contextMenu.deleteRemoteTagPush', { name: tagName })}</span>
           </button>
           <div className="menu-separator" />
         </>

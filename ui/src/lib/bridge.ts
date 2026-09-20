@@ -71,4 +71,16 @@ export function isFixtureMode() {
   return new URLSearchParams(window.location.search).has('fixture');
 }
 
+export async function confirmDialog(message: string, title = 'Gitma'): Promise<boolean> {
+  if (isTauri()) {
+    try {
+      const { confirm } = await import('@tauri-apps/plugin-dialog');
+      return await confirm(message, { title, kind: 'warning' });
+    } catch {
+      // Fallback to window.confirm if plugin fails
+    }
+  }
+  return Boolean(window.confirm(message));
+}
+
 export type { Context, FileEntry };
