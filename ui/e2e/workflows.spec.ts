@@ -17,7 +17,7 @@ test.describe('fluxos do workspace', () => {
     await expect(page.locator('.monaco-editor .view-lines').first()).toContainText('refreshRepository')
     const checkbox = page.getByRole('checkbox', { name: /schema\.prisma/i })
     await checkbox.check()
-    await expect(page.getByText('Em stage').locator('..').getByText('3')).toBeVisible()
+    await expect(page.getByText('Em stage').locator('..').getByText('3', { exact: true })).toBeVisible()
     await page.getByRole('button', { name: /Criar commit/i }).click()
     await expect(page.locator('#commit-message')).toHaveValue('')
     await page.screenshot({ path: 'target/visual/workflow-local.png', fullPage: true })

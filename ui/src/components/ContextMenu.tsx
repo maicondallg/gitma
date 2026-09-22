@@ -48,6 +48,7 @@ export interface ContextMenuProps {
   onStashApply?: (stashRef?: string) => void;
   onStashDrop?: (stashRef?: string) => void;
   onCopyHash?: (oid: string) => void;
+  onCompareWith?: (oid: string) => void;
 }
 
 export function ContextMenu({
@@ -81,6 +82,7 @@ export function ContextMenu({
   onStashApply,
   onStashDrop,
   onCopyHash,
+  onCompareWith,
 }: ContextMenuProps) {
   const { t } = useI18n();
   const menuRef = useRef<HTMLDivElement>(null);
@@ -404,6 +406,21 @@ export function ContextMenu({
         <CopyPlus size={14} />
         <span>{t('contextMenu.cherryPick')}</span>
       </button>
+
+      {onCompareWith && (
+        <button
+          type="button"
+          className="menu-item"
+          onClick={() => {
+            onClose();
+            onCompareWith(commitOid);
+          }}
+          title={t('compare.compareWith')}
+        >
+          <GitFork size={14} />
+          <span>{t('compare.compareWith')}</span>
+        </button>
+      )}
 
       {!isStash && (
         <>

@@ -1,17 +1,24 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import {
+  ArrowDown,
+  ArrowUp,
   Check,
   ChevronLeft,
   ChevronRight,
+  Code2,
   Copy,
   FolderGit2,
+  FolderOpen,
   GitBranch,
+  Globe,
+  History,
   Home,
   Palette,
   Plus,
   RotateCcw,
   Settings,
+  Terminal,
   Edit2,
   X,
   XCircle,
@@ -85,8 +92,12 @@ export function TabBar() {
   const setGroupName = useAppStore((s) => s.setGroupName);
   const openRepository = useAppStore((s) => s.openRepository);
   const openSettings = useAppStore((s) => s.openSettings);
+  const openReflog = useAppStore((s) => s.openReflog);
+  const openRemotesModal = useAppStore((s) => s.openRemotesModal);
   const opening = useAppStore((s) => s.opening);
   const operation = useAppStore((s) => s.operation);
+  const runOperation = useAppStore((s) => s.runOperation);
+  const openTerminal = useAppStore((s) => s.openTerminal);
   const { t } = useI18n();
 
   const [editingGroupColor, setEditingGroupColor] = useState<string | null>(null);
@@ -886,6 +897,78 @@ export function TabBar() {
       </div>
 
       <div className="tab-bar-right-actions">
+        {activeTabId !== 'home' && (
+          <>
+            {snapshot && (snapshot.ahead ?? 0) > 0 && (
+              <button
+                type="button"
+                className="tab-bar-badge-btn ahead-badge"
+                onClick={() => void runOperation('push')}
+                title={t('sync.pushAhead', { count: snapshot.ahead ?? 0 })}
+                aria-label={t('sync.pushAhead', { count: snapshot.ahead ?? 0 })}
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '3px',
+                  fontSize: '11px',
+                  fontWeight: 600,
+                  color: 'var(--green)',
+                  background: 'rgba(16, 185, 129, 0.12)',
+                  border: '1px solid rgba(16, 185, 129, 0.25)',
+                  borderRadius: '4px',
+                  padding: '2px 6px',
+                  cursor: 'pointer'
+                }}
+              >
+                <ArrowUp size={12} />
+                <span>{snapshot.ahead}</span>
+              </button>
+            )}
+            {snapshot && (snapshot.behind ?? 0) > 0 && (
+              <button
+                type="button"
+                className="tab-bar-badge-btn behind-badge"
+                onClick={() => void runOperation('pull')}
+                title={t('sync.pullBehind', { count: snapshot.behind ?? 0 })}
+                aria-label={t('sync.pullBehind', { count: snapshot.behind ?? 0 })}
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '3px',
+                  fontSize: '11px',
+                  fontWeight: 600,
+                  color: 'var(--accent)',
+                  background: 'rgba(59, 130, 246, 0.12)',
+                  border: '1px solid rgba(59, 130, 246, 0.25)',
+                  borderRadius: '4px',
+                  padding: '2px 6px',
+                  cursor: 'pointer'
+                }}
+              >
+                <ArrowDown size={12} />
+                <span>{snapshot.behind}</span>
+              </button>
+            )}
+            <button
+              type="button"
+              className="tab-bar-action-btn"
+              onClick={openRemotesModal}
+              title={t('remotes.title')}
+              aria-label={t('remotes.title')}
+            >
+              <Globe size={15} />
+            </button>
+            <button
+              type="button"
+              className="tab-bar-action-btn"
+              onClick={openReflog}
+              title={t('reflog.title')}
+              aria-label={t('reflog.title')}
+            >
+              <History size={15} />
+            </button>
+          </>
+        )}
         <button
           type="button"
           className="tab-bar-action-btn"
@@ -920,6 +1003,9 @@ export function TabBar() {
           collapseAllColors={collapseAllColors}
           setEditingTabId={setEditingTabId}
           setEditingTabName={setEditingTabName}
+          onOpenTerminal={() => void openTerminal()}
+          onOpenEditor={() => void runOperation('openEditor', [], '')}
+          onRevealFile={() => void runOperation('revealFile', [], '')}
         />
       )}
     </nav>
@@ -947,6 +1033,9 @@ interface TabContextMenuProps {
   collapseAllColors: () => void;
   setEditingTabId: (id: string | null) => void;
   setEditingTabName: (name: string) => void;
+  onOpenTerminal?: () => void;
+  onOpenEditor?: () => void;
+  onRevealFile?: () => void;
 }
 
 function TabContextMenu({
@@ -970,6 +1059,9 @@ function TabContextMenu({
   collapseAllColors,
   setEditingTabId,
   setEditingTabName,
+  onOpenTerminal,
+  onOpenEditor,
+  onRevealFile,
 }: TabContextMenuProps) {
   const { t } = useI18n();
   const menuRef = useRef<HTMLDivElement>(null);
@@ -1231,6 +1323,48 @@ function TabContextMenu({
         <Copy size={13} />
         <span>{t('tabs.copyPath')}</span>
       </button>
+
+      {onOpenTerminal && (
+        <button
+          type="button"
+          className="menu-action-item"
+          onClick={() => {
+            onClose();
+            onOpenTerminal();
+          }}
+        >
+          <Terminal size={13} />
+          <span>{t('tabs.openTerminal')}</span>
+        </button>
+      )}
+
+      {onOpenEditor && (
+        <button
+          type="button"
+          className="menu-action-item"
+          onClick={() => {
+            onClose();
+            onOpenEditor();
+          }}
+        >
+          <Code2 size={13} />
+          <span>{t('tabs.openEditor')}</span>
+        </button>
+      )}
+
+      {onRevealFile && (
+        <button
+          type="button"
+          className="menu-action-item"
+          onClick={() => {
+            onClose();
+            onRevealFile();
+          }}
+        >
+          <FolderOpen size={13} />
+          <span>{t('tabs.revealFile')}</span>
+        </button>
+      )}
     </div>,
     document.body
   );

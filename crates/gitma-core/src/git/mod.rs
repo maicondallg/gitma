@@ -36,7 +36,61 @@ impl GitRepository {
             &self.context.root,
             &["status", "--porcelain=v1", "--untracked-files=all", "-z"],
         )?;
-        let (staged, unstaged, conflicted) = status::parse_porcelain_z(&raw);
+        let (mut staged, mut unstaged, conflicted) = status::parse_porcelain_z(&raw);
+
+        if !staged.is_empty() {
+            if let Ok(staged_numstat) = runner::read(
+                &self.context.root,
+                &["diff", "--cached", "--numstat", "-M", "-z"],
+            ) {
+                let numstat_map = status::parse_numstat_z(&staged_numstat);
+                for f in &mut staged {
+                    if let Some(stat) = numstat_map
+                        .get(&f.path)
+                        .or_else(|| f.old_path.as_ref().and_then(|op| numstat_map.get(op)))
+                    {
+                        f.insertions = stat.insertions;
+                        f.deletions = stat.deletions;
+                        f.is_binary = stat.is_binary;
+                    }
+                }
+            }
+        }
+
+        if !unstaged.is_empty() {
+            if let Ok(unstaged_numstat) = runner::read(
+                &self.context.root,
+                &["diff", "--numstat", "-M", "-z"],
+            ) {
+                let numstat_map = status::parse_numstat_z(&unstaged_numstat);
+                for f in &mut unstaged {
+                    if let Some(stat) = numstat_map
+                        .get(&f.path)
+                        .or_else(|| f.old_path.as_ref().and_then(|op| numstat_map.get(op)))
+                    {
+                        f.insertions = stat.insertions;
+                        f.deletions = stat.deletions;
+                        f.is_binary = stat.is_binary;
+                    } else if f.status == FileStatus::Untracked {
+                        let full_path = self.context.root.join(&f.path);
+                        if let Ok(metadata) = std::fs::metadata(&full_path) {
+                            if metadata.is_file() && metadata.len() <= diff::DEFAULT_MAX_BYTES as u64 {
+                                if let Ok(content) = std::fs::read(&full_path) {
+                                    if !content.contains(&0) {
+                                        let lines = content.iter().filter(|&&b| b == b'\n').count();
+                                        f.insertions = Some(lines + if !content.is_empty() && !content.ends_with(b"\n") { 1 } else { 0 });
+                                        f.deletions = Some(0);
+                                    } else {
+                                        f.is_binary = true;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         let branch = runner::read(
             &self.context.root,
             &["symbolic-ref", "--short", "-q", "HEAD"],
@@ -53,7 +107,27 @@ impl GitRepository {
             ],
         ) {
             Ok(bytes) => String::from_utf8_lossy(&bytes).trim().to_owned(),
-            Err(_) => String::new(), // ausência de upstream é um estado normal
+            Err(_) => String::new(),
+        };
+        let (ahead, behind) = if !upstream.is_empty() {
+            if let Ok(out) = runner::read(
+                &self.context.root,
+                &["rev-list", "--left-right", "--count", "HEAD...@{upstream}"],
+            ) {
+                let text = String::from_utf8_lossy(&out);
+                let parts: Vec<&str> = text.split_whitespace().collect();
+                if parts.len() == 2 {
+                    let a = parts[0].parse::<usize>().ok();
+                    let b = parts[1].parse::<usize>().ok();
+                    (a, b)
+                } else {
+                    (None, None)
+                }
+            } else {
+                (None, None)
+            }
+        } else {
+            (None, None)
         };
         let in_progress = self
             .git_dir()
@@ -63,6 +137,8 @@ impl GitRepository {
         Ok(RepoSnapshot {
             branch: (!branch.is_empty()).then_some(branch),
             upstream: (!upstream.is_empty()).then_some(upstream),
+            ahead,
+            behind,
             staged,
             unstaged,
             conflicted,
@@ -70,6 +146,9 @@ impl GitRepository {
         })
     }
     pub fn history(&self, page_no: usize, page_size: usize) -> GitResult<HistoryPage> {
+        self.history_scoped(page_no, page_size, true)
+    }
+    pub fn history_scoped(&self, page_no: usize, page_size: usize, all_branches: bool) -> GitResult<HistoryPage> {
         let n = page_size.saturating_add(16).to_string();
         let skip = page_no.saturating_mul(page_size).to_string();
         let head_exists =
@@ -92,7 +171,12 @@ impl GitRepository {
             }
         }
 
-        let mut args = vec!["log", "--all"];
+        let mut args = vec!["log"];
+        if all_branches {
+            args.push("--all");
+        } else if head_exists {
+            args.push("HEAD");
+        }
         for sref in &stash_refs {
             args.push(sref.as_str());
         }
@@ -107,7 +191,7 @@ impl GitRepository {
         ]);
         // A detached commit may no longer be pointed to by a ref. Include
         // HEAD explicitly, but avoid naming it in an unborn repository.
-        if head_exists {
+        if all_branches && head_exists {
             args.insert(2, "HEAD");
         }
         Ok(history::page(
@@ -227,7 +311,81 @@ impl GitRepository {
                 oid,
             ],
         )?;
-        Ok(status::parse_commit_names(&raw))
+        let mut files = status::parse_commit_names(&raw);
+
+        if let Ok(numstat_raw) = runner::read(
+            &self.context.root,
+            &[
+                "diff-tree",
+                "--root",
+                "--diff-merges=first-parent",
+                "--no-commit-id",
+                "--numstat",
+                "-M",
+                "-C",
+                "-r",
+                "-z",
+                oid,
+            ],
+        ) {
+            let numstat_map = status::parse_numstat_z(&numstat_raw);
+            for f in &mut files {
+                if let Some(stat) = numstat_map
+                    .get(&f.path)
+                    .or_else(|| f.old_path.as_ref().and_then(|op| numstat_map.get(op)))
+                {
+                    f.insertions = stat.insertions;
+                    f.deletions = stat.deletions;
+                    f.is_binary = stat.is_binary;
+                }
+            }
+        }
+
+        Ok(files)
+    }
+    pub fn files_between_commits(&self, base_oid: &str, target_oid: &str) -> GitResult<Vec<ChangedFile>> {
+        let rev_range = format!("{}..{}", base_oid.trim(), target_oid.trim());
+        let raw = runner::read(
+            &self.context.root,
+            &[
+                "diff-tree",
+                "--no-commit-id",
+                "--name-status",
+                "-M",
+                "-C",
+                "-r",
+                "-z",
+                base_oid.trim(),
+                target_oid.trim(),
+            ],
+        )?;
+        let mut files = status::parse_commit_names(&raw);
+
+        if let Ok(numstat_raw) = runner::read(
+            &self.context.root,
+            &[
+                "diff",
+                "--numstat",
+                "-M",
+                "-C",
+                "-z",
+                &rev_range,
+            ],
+        ) {
+            let numstat_map = status::parse_numstat_z(&numstat_raw);
+            for f in &mut files {
+                if let Some(stat) = numstat_map
+                    .get(&f.path)
+                    .or_else(|| f.old_path.as_ref().and_then(|op| numstat_map.get(op)))
+                {
+                    f.insertions = stat.insertions;
+                    f.deletions = stat.deletions;
+                    f.is_binary = stat.is_binary;
+                }
+            }
+        }
+
+        Ok(files)
     }
     pub fn first_parent(&self, oid: &str) -> GitResult<Option<String>> {
         let raw = runner::read(&self.context.root, &["show", "-s", "--format=%P", oid])?;
@@ -378,6 +536,9 @@ impl GitRepository {
     pub fn pull(&self) -> GitResult<()> {
         operations::pull(&self.context.root)
     }
+    pub fn pull_with_strategy(&self, strategy: Option<&str>) -> GitResult<()> {
+        operations::pull_with_strategy(&self.context.root, strategy)
+    }
     pub fn push(&self) -> GitResult<()> {
         operations::push(&self.context.root)
     }
@@ -397,6 +558,9 @@ impl GitRepository {
     }
     pub fn merge_branch(&self, branch: &str) -> GitResult<String> {
         operations::merge_branch(&self.context.root, branch)
+    }
+    pub fn merge_branch_with_strategy(&self, branch: &str, strategy: Option<&str>) -> GitResult<String> {
+        operations::merge_branch_with_strategy(&self.context.root, branch, strategy)
     }
     pub fn delete_branch(&self, branch: &str, force: bool) -> GitResult<()> {
         operations::delete_branch(&self.context.root, branch, force)
@@ -474,6 +638,83 @@ impl GitRepository {
     pub fn cherry_pick_continue(&self) -> GitResult<String> {
         operations::cherry_pick_continue(&self.context.root)
     }
+    pub fn file_hunks(&self, file: &ChangedFile) -> GitResult<Vec<DiffHunk>> {
+        if file.status == FileStatus::Untracked
+            || file.status == FileStatus::Conflicted
+            || file.is_binary
+        {
+            return Ok(Vec::new());
+        }
+        let mut args: Vec<&std::ffi::OsStr> = if file.area == FileArea::Staged {
+            vec![
+                std::ffi::OsStr::new("diff"),
+                std::ffi::OsStr::new("--cached"),
+                std::ffi::OsStr::new("-U3"),
+                std::ffi::OsStr::new("--no-color"),
+                std::ffi::OsStr::new("--no-ext-diff"),
+                std::ffi::OsStr::new("--"),
+            ]
+        } else {
+            vec![
+                std::ffi::OsStr::new("diff"),
+                std::ffi::OsStr::new("-U3"),
+                std::ffi::OsStr::new("--no-color"),
+                std::ffi::OsStr::new("--no-ext-diff"),
+                std::ffi::OsStr::new("--"),
+            ]
+        };
+        if let Some(old) = &file.old_path {
+            args.push(old.as_os_str());
+        }
+        args.push(file.path.as_os_str());
+        let raw = runner::read_os(&self.context.root, &args)?;
+        Ok(diff::parse_hunks(&raw))
+    }
+    pub fn apply_patch(&self, patch: &str, target: operations::PatchTarget) -> GitResult<()> {
+        operations::apply_patch(&self.context.root, patch, target)
+    }
+    pub fn add_to_gitignore(&self, pattern: &str) -> GitResult<()> {
+        operations::add_to_gitignore(&self.context.root, pattern)
+    }
+    pub fn open_terminal(&self, terminal: Option<&str>) -> GitResult<()> {
+        operations::open_terminal(&self.context.root, terminal)
+    }
+    pub fn open_editor(&self, rel_path: Option<&str>) -> GitResult<()> {
+        operations::open_editor(&self.context.root, rel_path)
+    }
+    pub fn reveal_file(&self, rel_path: &str) -> GitResult<()> {
+        operations::reveal_file(&self.context.root, rel_path)
+    }
+    pub fn commit_details(&self, oid: &str) -> GitResult<CommitDetails> {
+        operations::commit_details(&self.context.root, oid)
+    }
+    pub fn file_blame(&self, rel_path: &str, commit_oid: Option<&str>) -> GitResult<Vec<BlameLine>> {
+        operations::file_blame(&self.context.root, rel_path, commit_oid)
+    }
+    pub fn file_history(&self, rel_path: &str, max_count: usize) -> GitResult<Vec<FileHistoryEntry>> {
+        operations::file_history(&self.context.root, rel_path, max_count)
+    }
+    pub fn reflog(&self, max_count: usize) -> GitResult<Vec<ReflogEntry>> {
+        operations::reflog(&self.context.root, max_count)
+    }
+    pub fn get_remotes(&self) -> GitResult<Vec<RemoteEntry>> {
+        operations::get_remotes(&self.context.root)
+    }
+    pub fn add_remote(&self, name: &str, url: &str) -> GitResult<()> {
+        operations::add_remote(&self.context.root, name, url)
+    }
+    pub fn remove_remote(&self, name: &str) -> GitResult<()> {
+        operations::remove_remote(&self.context.root, name)
+    }
+    pub fn set_remote_url(&self, name: &str, url: &str) -> GitResult<()> {
+        operations::set_remote_url(&self.context.root, name, url)
+    }
+    pub fn fetch_prune(&self, remote: Option<&str>) -> GitResult<String> {
+        operations::fetch_prune(&self.context.root, remote)
+    }
+    pub fn resolve_conflict(&self, rel_path: &str, choice: &str) -> GitResult<()> {
+        operations::resolve_conflict(&self.context.root, rel_path, choice)
+    }
 }
 
 fn index_spec(path: &Path) -> OsString {
@@ -491,6 +732,7 @@ fn is_missing_path_error(details: &str) -> bool {
         // first commit. For a staged file that is the expected empty side.
         || details.contains("invalid object name 'head'")
         || details.contains("unknown revision or path not in the working tree")
+        || details.contains("not at stage")
 }
 impl GitService for GitRepository {
     fn context(&self) -> &RepoContext {

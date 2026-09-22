@@ -37,6 +37,9 @@ function state(overrides: Partial<AppState> = {}): AppState {
     setTabColor: vi.fn(),
     groupNames: {},
     setGroupName: vi.fn(),
+    preferredTerminal: 'default',
+    setPreferredTerminal: vi.fn(),
+    openTerminal: vi.fn(async () => {}),
     openHome: vi.fn(),
     removeRecentRepo: vi.fn(),
     clearRecentRepos: vi.fn(),
@@ -46,12 +49,34 @@ function state(overrides: Partial<AppState> = {}): AppState {
     history: null,
     context: { kind: 'local' },
     commitFiles: [],
+    commitStats: null,
+    commitDetails: null,
     selectedFile: null,
     preview: null,
     diffMode: 'unified',
     compactDiff: false,
     fileViewMode: 'flat',
     commitMessage: '',
+    fileHistoryPath: null,
+    reflogOpen: false,
+    openFileHistory: vi.fn(),
+    closeFileHistory: vi.fn(),
+    openReflog: vi.fn(),
+    closeReflog: vi.fn(),
+    remotesModalOpen: false,
+    historyScope: 'all',
+    compareOids: null,
+    openRemotesModal: vi.fn(),
+    closeRemotesModal: vi.fn(),
+    setHistoryScope: vi.fn(async () => {}),
+    compareCommits: vi.fn(async () => {}),
+    resolveConflict: vi.fn(async () => {}),
+    blameOpen: false,
+    setBlameOpen: vi.fn(),
+    pullStrategy: 'ff-only',
+    setPullStrategy: vi.fn(),
+    mergeStrategy: 'default',
+    setMergeStrategy: vi.fn(),
     refreshing: false,
     opening: false,
     operation: null,
@@ -882,6 +907,22 @@ describe('Stash, Cherry-pick e RefPopover no GraphPanel', () => {
     expect(actions.runOperation).toHaveBeenCalledWith('discardAll');
     confirmSpy.mockRestore();
   });
+
+  it('renderiza labels completos e curtos nos cabeçalhos de grupos de arquivos para compressão responsiva', () => {
+    render(<FilesPanel />);
+
+    // Títulos de grupos
+    expect(screen.getByText('Em stage')).toHaveClass('lists-group-title-full');
+    expect(screen.getByText('Stage')).toHaveClass('lists-group-title-short');
+    expect(screen.getByText('Fora do stage')).toHaveClass('lists-group-title-full');
+    expect(screen.getByText('Fora')).toHaveClass('lists-group-title-short');
+
+    // Botões de ação
+    expect(screen.getByText('Descartar tudo')).toHaveClass('lists-action-label-full');
+    expect(screen.getByText('Descartar')).toHaveClass('lists-action-label-short');
+    expect(screen.getByText('Adicionar todos')).toHaveClass('lists-action-label-full');
+    expect(screen.getByText('Adicionar')).toHaveClass('lists-action-label-short');
+  });
 });
 
 describe('Busca no histórico do GraphPanel', () => {
@@ -1084,4 +1125,164 @@ describe('ContextMenu Tag Actions', () => {
     fireEvent.click(remoteDeleteBtn);
     expect(onDeleteRemoteTag).toHaveBeenCalledWith('v1.0.0');
   });
+
+  it('exibe sumário de estatísticas do commit e métricas individuais por arquivo (+X -Y)', () => {
+    const historicalFile1: FileEntry = {
+      id: 'f1',
+      name: 'operations.rs',
+      directory: 'crates/gitma-core/src/git',
+      pathDisplay: 'crates/gitma-core/src/git/operations.rs',
+      oldPathDisplay: null,
+      status: 'modified',
+      area: 'commit',
+      insertions: 36,
+      deletions: 3,
+    };
+    const historicalFile2: FileEntry = {
+      id: 'f2',
+      name: 'backend.rs',
+      directory: 'crates/gitma-core/src',
+      pathDisplay: 'crates/gitma-core/src/backend.rs',
+      oldPathDisplay: null,
+      status: 'modified',
+      area: 'commit',
+      insertions: 38,
+      deletions: 16,
+    };
+
+    useAppStore.setState(
+      state({
+        context: { kind: 'commit', oid: '0fd105b8' },
+        commitFiles: [historicalFile1, historicalFile2],
+        commitStats: {
+          filesChanged: 2,
+          insertions: 74,
+          deletions: 19,
+        },
+        history: {
+          sessionId: 's',
+          requestId: 1,
+          page: 0,
+          rows: [
+            {
+              commit: {
+                oid: '0fd105b8',
+                parents: [],
+                refs: [],
+                author: 'Maicon',
+                timestamp: 1789600000,
+                subject: 'fix: remove tag local bug',
+              },
+              row: 0,
+              lane: 0,
+              parentLanes: [],
+              connections: [],
+              activeLanes: [0],
+            },
+          ],
+          laneCount: 1,
+          hasMore: false,
+          historyKey: 'h',
+        },
+      })
+    );
+
+    render(<FilesPanel />);
+
+    // Verifica o cabeçalho do resumo de estatísticas
+    expect(screen.getByText(/2 arquivos alterados/i)).toBeInTheDocument();
+    expect(screen.getByText('+74')).toBeInTheDocument();
+    expect(screen.getByText('-19')).toBeInTheDocument();
+
+    // Verifica as métricas individuais por arquivo
+    expect(screen.getByText('+36')).toBeInTheDocument();
+    expect(screen.getByText('-3')).toBeInTheDocument();
+    expect(screen.getByText('+38')).toBeInTheDocument();
+    expect(screen.getByText('-16')).toBeInTheDocument();
+  });
+
+  it('permite alternar stage/unstage usando a tecla Espaço no FilesPanel', () => {
+    const unstageFile = file('u1', 'unstaged.txt', 'unstaged');
+    useAppStore.setState(
+      state({
+        context: { kind: 'local' },
+        snapshot: {
+          sessionId: 's',
+          requestId: 1,
+          revision: 1,
+          branch: 'main',
+          upstream: null,
+          conflicted: false,
+          staged: [],
+          unstaged: [unstageFile],
+          historyKey: 'h',
+        },
+        selectedFile: unstageFile,
+        activePane: 'files',
+      })
+    );
+
+    render(<FilesPanel />);
+
+    fireEvent.keyDown(window, { key: ' ' });
+    expect(actions.runOperation).toHaveBeenCalledWith('stage', ['u1']);
+
+    // Agora com arquivo staged
+    const stagedFile = file('s1', 'staged.txt', 'staged');
+    act(() => {
+      useAppStore.setState({
+        selectedFile: stagedFile,
+        snapshot: {
+          sessionId: 's',
+          requestId: 1,
+          revision: 1,
+          branch: 'main',
+          upstream: null,
+          conflicted: false,
+          staged: [stagedFile],
+          unstaged: [],
+          historyKey: 'h',
+        },
+      });
+    });
+
+    fireEvent.keyDown(window, { key: ' ' });
+    expect(actions.runOperation).toHaveBeenCalledWith('unstage', ['s1']);
+  });
+
+  it('abre menu de contexto ao clicar com botão direito em um arquivo e permite ação', () => {
+    const targetFile = { ...file('u1', 'src/styles.css', 'unstaged'), status: 'untracked' as const };
+    useAppStore.setState(
+      state({
+        context: { kind: 'local' },
+        snapshot: {
+          sessionId: 's',
+          requestId: 1,
+          revision: 1,
+          branch: 'main',
+          upstream: null,
+          conflicted: false,
+          staged: [],
+          unstaged: [targetFile],
+          historyKey: 'h',
+        },
+        selectedFile: null,
+        activePane: 'files',
+      })
+    );
+
+    render(<FilesPanel />);
+
+    const row = screen.getByText('styles.css');
+    fireEvent.contextMenu(row);
+
+    // O menu de contexto deve ser renderizado com opções de ignore e stage
+    expect(screen.getByText(/Ignorar "styles\.css"/i)).toBeInTheDocument();
+    expect(screen.getByText(/Preparar arquivo/i)).toBeInTheDocument();
+
+    // Clica em preparar arquivo no menu de contexto
+    fireEvent.click(screen.getByText(/Preparar arquivo/i));
+    expect(actions.runOperation).toHaveBeenCalledWith('stage', ['u1']);
+  });
 });
+

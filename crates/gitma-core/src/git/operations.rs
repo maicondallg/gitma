@@ -1,6 +1,7 @@
 use super::runner::{mutate, mutate_no_literal, mutate_os, mutate_os_no_literal, read};
 use crate::domain::{
-    ChangedFile, FileStatus, GitError, GitErrorCategory, GitResult, InProgressKind, InProgressOp,
+    BlameLine, ChangedFile, CommitDetails, FileHistoryEntry, FileStatus, GitError,
+    GitErrorCategory, GitResult, InProgressKind, InProgressOp, ReflogEntry, RemoteEntry,
 };
 use std::ffi::OsStr;
 use std::path::Path;
@@ -98,7 +99,16 @@ pub fn fetch(root: &Path) -> GitResult<()> {
     mutate(root, &["fetch", "--prune"]).map(|_| ())
 }
 pub fn pull(root: &Path) -> GitResult<()> {
-    mutate(root, &["pull", "--ff-only"]).map(|_| ())
+    pull_with_strategy(root, None)
+}
+
+pub fn pull_with_strategy(root: &Path, strategy: Option<&str>) -> GitResult<()> {
+    match strategy {
+        Some("rebase") => mutate(root, &["pull", "--rebase"]).map(|_| ()),
+        Some("merge") => mutate(root, &["pull", "--no-ff"]).map(|_| ()),
+        Some("default") => mutate(root, &["pull"]).map(|_| ()),
+        _ => mutate(root, &["pull", "--ff-only"]).map(|_| ()),
+    }
 }
 pub fn push(root: &Path) -> GitResult<()> {
     mutate(root, &["push"]).map(|_| ())
@@ -172,7 +182,15 @@ pub fn create_branch(
     }
 }
 pub fn merge_branch(root: &Path, branch: &str) -> GitResult<String> {
-    let out = mutate(root, &["merge", "--no-edit", branch])?;
+    merge_branch_with_strategy(root, branch, None)
+}
+
+pub fn merge_branch_with_strategy(root: &Path, branch: &str, strategy: Option<&str>) -> GitResult<String> {
+    let out = match strategy {
+        Some("no-ff") => mutate(root, &["merge", "--no-ff", "--no-edit", branch])?,
+        Some("ff-only") => mutate(root, &["merge", "--ff-only", branch])?,
+        _ => mutate(root, &["merge", "--no-edit", branch])?,
+    };
     Ok(String::from_utf8_lossy(&out).into_owned())
 }
 pub fn delete_branch(root: &Path, branch: &str, force: bool) -> GitResult<()> {
@@ -624,3 +642,506 @@ pub fn init_repository(path: &Path, default_branch: Option<&str>) -> GitResult<(
     }
     mutate_os_no_literal(path, &args).map(|_| ())
 }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PatchTarget {
+    Stage,
+    Unstage,
+    Discard,
+}
+
+pub fn apply_patch(root: &Path, patch: &str, target: PatchTarget) -> GitResult<()> {
+    let args: &[&str] = match target {
+        PatchTarget::Stage => &[
+            "apply",
+            "--cached",
+            "--whitespace=nowarn",
+            "--unidiff-zero",
+            "--recount",
+            "-",
+        ],
+        PatchTarget::Unstage => &[
+            "apply",
+            "--cached",
+            "--reverse",
+            "--whitespace=nowarn",
+            "--unidiff-zero",
+            "--recount",
+            "-",
+        ],
+        PatchTarget::Discard => &[
+            "apply",
+            "--reverse",
+            "--whitespace=nowarn",
+            "--unidiff-zero",
+            "--recount",
+            "-",
+        ],
+    };
+    super::runner::mutate_with_stdin(root, args, patch.as_bytes()).map(|_| ())
+}
+
+pub fn add_to_gitignore(root: &Path, pattern: &str) -> GitResult<()> {
+    let gitignore_path = root.join(".gitignore");
+    let mut content = if gitignore_path.exists() {
+        std::fs::read_to_string(&gitignore_path).unwrap_or_default()
+    } else {
+        String::new()
+    };
+    let pattern = pattern.trim();
+    for line in content.lines() {
+        if line.trim() == pattern {
+            return Ok(());
+        }
+    }
+    if !content.is_empty() && !content.ends_with('\n') {
+        content.push('\n');
+    }
+    content.push_str(pattern);
+    content.push('\n');
+    std::fs::write(&gitignore_path, content).map_err(|e| GitError {
+        category: GitErrorCategory::Io,
+        message: "Falha ao gravar no arquivo .gitignore".into(),
+        details: Some(e.to_string()),
+    })?;
+    Ok(())
+}
+
+pub fn open_terminal(root: &Path, custom_terminal: Option<&str>) -> GitResult<()> {
+    let custom = custom_terminal.map(str::trim).filter(|s| !s.is_empty() && *s != "default");
+
+    #[cfg(target_os = "windows")]
+    {
+        if let Some(term) = custom {
+            let _ = std::process::Command::new("cmd")
+                .args(["/c", "start", term])
+                .current_dir(root)
+                .spawn();
+            return Ok(());
+        }
+        let _ = std::process::Command::new("cmd")
+            .args(["/c", "start", "wt", "-d", "."])
+            .current_dir(root)
+            .spawn()
+            .or_else(|_| {
+                std::process::Command::new("cmd")
+                    .args(["/c", "start", "powershell"])
+                    .current_dir(root)
+                    .spawn()
+            })
+            .or_else(|_| {
+                std::process::Command::new("cmd")
+                    .args(["/c", "start", "cmd"])
+                    .current_dir(root)
+                    .spawn()
+            });
+    }
+    #[cfg(target_os = "macos")]
+    {
+        if let Some(term) = custom {
+            let _ = std::process::Command::new("open")
+                .args(["-a", term])
+                .arg(root)
+                .spawn();
+            return Ok(());
+        }
+        let _ = std::process::Command::new("open")
+            .args(["-a", "Terminal"])
+            .arg(root)
+            .spawn();
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        if let Some(term) = custom {
+            let parts: Vec<&str> = term.split_whitespace().collect();
+            if !parts.is_empty() {
+                let bin = parts[0];
+                let extra_args = &parts[1..];
+                let mut cmd = std::process::Command::new(bin);
+                cmd.args(extra_args).current_dir(root);
+                if bin == "gnome-terminal" && extra_args.is_empty() {
+                    cmd.arg(format!("--working-directory={}", root.display()));
+                }
+                if cmd.spawn().is_ok() {
+                    return Ok(());
+                }
+            }
+        }
+
+        let terminals = [
+            "ghostty",
+            "x-terminal-emulator",
+            "gnome-terminal",
+            "kitty",
+            "alacritty",
+            "konsole",
+            "xfce4-terminal",
+            "wezterm",
+            "xterm",
+        ];
+        let mut spawned = false;
+        if let Ok(term) = std::env::var("TERMINAL") {
+            if std::process::Command::new(&term)
+                .current_dir(root)
+                .spawn()
+                .is_ok()
+            {
+                spawned = true;
+            }
+        }
+        if !spawned {
+            for term in terminals {
+                let mut cmd = std::process::Command::new(term);
+                cmd.current_dir(root);
+                if term == "gnome-terminal" {
+                    cmd.arg(format!("--working-directory={}", root.display()));
+                }
+                if cmd.spawn().is_ok() {
+                    break;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+pub fn open_editor(root: &Path, rel_path: Option<&str>) -> GitResult<()> {
+    let target = match rel_path {
+        Some(p) => root.join(p),
+        None => root.to_path_buf(),
+    };
+    #[cfg(target_os = "windows")]
+    {
+        let _ = std::process::Command::new("cmd")
+            .args(["/c", "code", target.to_str().unwrap_or(".")])
+            .current_dir(root)
+            .spawn();
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = std::process::Command::new("code")
+            .arg(&target)
+            .current_dir(root)
+            .spawn();
+    }
+    Ok(())
+}
+
+pub fn reveal_file(root: &Path, rel_path: &str) -> GitResult<()> {
+    let target = root.join(rel_path);
+    #[cfg(target_os = "windows")]
+    {
+        let _ = std::process::Command::new("explorer")
+            .arg(format!("/select,{}", target.display()))
+            .spawn();
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let _ = std::process::Command::new("open")
+            .arg("-R")
+            .arg(&target)
+            .spawn();
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        let dir = if target.is_dir() {
+            target
+        } else {
+            target.parent().unwrap_or(root).to_path_buf()
+        };
+        let _ = std::process::Command::new("xdg-open")
+            .arg(&dir)
+            .spawn();
+    }
+    Ok(())
+}
+
+pub fn commit_details(root: &Path, oid: &str) -> GitResult<CommitDetails> {
+    let raw = read(
+        root,
+        &[
+            "show",
+            "-s",
+            "--format=%H%x00%P%x00%an%x00%ae%x00%at%x00%cn%x00%ce%x00%ct%x00%s%x00%b%x00%D",
+            oid,
+        ],
+    )?;
+    let s = String::from_utf8_lossy(&raw);
+    let parts: Vec<&str> = s.split('\0').collect();
+    if parts.len() >= 10 {
+        let full_oid = parts[0].trim().to_string();
+        let parents = parts[1]
+            .split_whitespace()
+            .map(|p| p.trim().to_string())
+            .filter(|p| !p.is_empty())
+            .collect();
+        let author_name = parts[2].trim().to_string();
+        let author_email = parts[3].trim().to_string();
+        let author_timestamp = parts[4].trim().parse::<i64>().unwrap_or(0);
+        let committer_name = parts[5].trim().to_string();
+        let committer_email = parts[6].trim().to_string();
+        let committer_timestamp = parts[7].trim().parse::<i64>().unwrap_or(0);
+        let subject = parts[8].trim().to_string();
+        let body = parts[9].trim_end().to_string();
+        let refs = if parts.len() > 10 {
+            parts[10]
+                .split(',')
+                .map(|r| r.trim().to_string())
+                .filter(|r| !r.is_empty())
+                .collect()
+        } else {
+            Vec::new()
+        };
+        Ok(CommitDetails {
+            oid: full_oid,
+            parents,
+            refs,
+            author_name,
+            author_email,
+            author_timestamp,
+            committer_name,
+            committer_email,
+            committer_timestamp,
+            subject,
+            body,
+        })
+    } else {
+        Err(GitError {
+            category: GitErrorCategory::Parse,
+            message: format!("Não foi possível obter detalhes do commit {}", oid),
+            details: None,
+        })
+    }
+}
+
+pub fn file_blame(
+    root: &Path,
+    rel_path: &str,
+    commit_oid: Option<&str>,
+) -> GitResult<Vec<BlameLine>> {
+    let mut args = vec!["blame", "--line-porcelain"];
+    if let Some(oid) = commit_oid {
+        args.push(oid);
+    }
+    args.push("--");
+    args.push(rel_path);
+
+    let raw = match read(root, &args) {
+        Ok(out) => out,
+        Err(_) => return Ok(Vec::new()),
+    };
+
+    let text = String::from_utf8_lossy(&raw);
+    let mut lines = Vec::new();
+
+    let mut current_hash = String::new();
+    let mut current_line_num: usize = 0;
+    let mut current_author = String::new();
+    let mut current_author_mail = String::new();
+    let mut current_author_time: i64 = 0;
+    let mut current_summary = String::new();
+
+    for line in text.lines() {
+        if line.starts_with('\t') {
+            lines.push(BlameLine {
+                line_number: current_line_num,
+                commit_oid: current_hash.clone(),
+                author: current_author.clone(),
+                author_mail: current_author_mail.clone(),
+                author_timestamp: current_author_time,
+                summary: current_summary.clone(),
+            });
+        } else if let Some(author) = line.strip_prefix("author ") {
+            current_author = author.trim().to_string();
+        } else if let Some(mail) = line.strip_prefix("author-mail ") {
+            current_author_mail = mail.trim().trim_matches(&['<', '>'][..]).to_string();
+        } else if let Some(time_str) = line.strip_prefix("author-time ") {
+            current_author_time = time_str.trim().parse::<i64>().unwrap_or(0);
+        } else if let Some(summary) = line.strip_prefix("summary ") {
+            current_summary = summary.trim().to_string();
+        } else {
+            let tokens: Vec<&str> = line.split_whitespace().collect();
+            if tokens.len() >= 3 && tokens[0].len() == 40 {
+                current_hash = tokens[0].to_string();
+                if let Ok(final_line) = tokens[2].parse::<usize>() {
+                    current_line_num = final_line;
+                }
+            }
+        }
+    }
+
+    Ok(lines)
+}
+
+pub fn file_history(
+    root: &Path,
+    rel_path: &str,
+    max_count: usize,
+) -> GitResult<Vec<FileHistoryEntry>> {
+    let count_str = max_count.to_string();
+    let raw = match read(
+        root,
+        &[
+            "log",
+            "--follow",
+            "--format=%H%x1f%an%x1f%ae%x1f%at%x1f%s",
+            "-n",
+            &count_str,
+            "--",
+            rel_path,
+        ],
+    ) {
+        Ok(out) => out,
+        Err(_) => return Ok(Vec::new()),
+    };
+
+    let text = String::from_utf8_lossy(&raw);
+    let mut entries = Vec::new();
+    for line in text.lines() {
+        let parts: Vec<&str> = line.split('\x1f').collect();
+        if parts.len() >= 5 {
+            entries.push(FileHistoryEntry {
+                oid: parts[0].trim().to_string(),
+                author: parts[1].trim().to_string(),
+                email: parts[2].trim().to_string(),
+                timestamp: parts[3].trim().parse::<i64>().unwrap_or(0),
+                summary: parts[4].trim().to_string(),
+            });
+        }
+    }
+    Ok(entries)
+}
+
+pub fn reflog(root: &Path, max_count: usize) -> GitResult<Vec<ReflogEntry>> {
+    let count_str = max_count.to_string();
+    let raw = match read(
+        root,
+        &[
+            "reflog",
+            "show",
+            "--format=%H%x1f%gD%x1f%gs%x1f%at%x1f%an",
+            "-n",
+            &count_str,
+        ],
+    ) {
+        Ok(out) => out,
+        Err(_) => return Ok(Vec::new()),
+    };
+
+    let text = String::from_utf8_lossy(&raw);
+    let mut entries = Vec::new();
+    for line in text.lines() {
+        let parts: Vec<&str> = line.split('\x1f').collect();
+        if parts.len() >= 5 {
+            entries.push(ReflogEntry {
+                oid: parts[0].trim().to_string(),
+                selector: parts[1].trim().to_string(),
+                action: parts[2].trim().to_string(),
+                timestamp: parts[3].trim().parse::<i64>().unwrap_or(0),
+                author: parts[4].trim().to_string(),
+            });
+        }
+    }
+    Ok(entries)
+}
+
+pub fn get_remotes(root: &Path) -> GitResult<Vec<RemoteEntry>> {
+    let raw = match read(root, &["remote", "-v"]) {
+        Ok(out) => out,
+        Err(_) => return Ok(Vec::new()),
+    };
+    let text = String::from_utf8_lossy(&raw);
+    let mut map: std::collections::BTreeMap<String, (String, String)> = std::collections::BTreeMap::new();
+    for line in text.lines() {
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        if parts.len() >= 3 {
+            let name = parts[0].to_string();
+            let url = parts[1].to_string();
+            let kind = parts[2];
+            let entry = map.entry(name).or_insert_with(|| (String::new(), String::new()));
+            if kind.contains("fetch") {
+                entry.0 = url;
+            } else if kind.contains("push") {
+                entry.1 = url;
+            }
+        }
+    }
+    let mut result = Vec::new();
+    for (name, (fetch_url, push_url)) in map {
+        let f = if fetch_url.is_empty() { push_url.clone() } else { fetch_url };
+        let p = if push_url.is_empty() { f.clone() } else { push_url };
+        result.push(RemoteEntry {
+            name,
+            fetch_url: f,
+            push_url: p,
+        });
+    }
+    Ok(result)
+}
+
+pub fn add_remote(root: &Path, name: &str, url: &str) -> GitResult<()> {
+    mutate(root, &["remote", "add", name.trim(), url.trim()]).map(|_| ())
+}
+
+pub fn remove_remote(root: &Path, name: &str) -> GitResult<()> {
+    mutate(root, &["remote", "remove", name.trim()]).map(|_| ())
+}
+
+pub fn set_remote_url(root: &Path, name: &str, url: &str) -> GitResult<()> {
+    mutate(root, &["remote", "set-url", name.trim(), url.trim()]).map(|_| ())
+}
+
+pub fn fetch_prune(root: &Path, remote: Option<&str>) -> GitResult<String> {
+    let mut args = vec!["fetch", "--prune"];
+    if let Some(r) = remote.filter(|s| !s.trim().is_empty()) {
+        args.push(r.trim());
+    } else {
+        args.push("--all");
+    }
+    let out = mutate(root, &args)?;
+    Ok(String::from_utf8_lossy(&out).into_owned())
+}
+
+pub fn resolve_conflict(root: &Path, rel_path: &str, choice: &str) -> GitResult<()> {
+    let trimmed_choice = choice.trim().to_lowercase();
+    match trimmed_choice.as_str() {
+        "ours" => {
+            mutate(root, &["checkout", "--ours", "--", rel_path])?;
+            mutate(root, &["add", "--", rel_path])?;
+        }
+        "theirs" => {
+            mutate(root, &["checkout", "--theirs", "--", rel_path])?;
+            mutate(root, &["add", "--", rel_path])?;
+        }
+        "both" => {
+            let full_path = root.join(rel_path);
+            if let Ok(content) = std::fs::read_to_string(&full_path) {
+                let mut resolved = Vec::new();
+                for line in content.lines() {
+                    if line.starts_with("<<<<<<<") || line.starts_with("=======") || line.starts_with(">>>>>>>") {
+                        continue;
+                    }
+                    resolved.push(line);
+                }
+                let mut new_text = resolved.join("\n");
+                if content.ends_with('\n') {
+                    new_text.push('\n');
+                }
+                let _ = std::fs::write(&full_path, new_text);
+            }
+            mutate(root, &["add", "--", rel_path])?;
+        }
+        "mark_resolved" | "add" => {
+            mutate(root, &["add", "--", rel_path])?;
+        }
+        _ => {
+            return Err(GitError {
+                category: GitErrorCategory::Process,
+                message: format!("Estratégia de resolução desconhecida: {choice}"),
+                details: None,
+            });
+        }
+    }
+    Ok(())
+}
+

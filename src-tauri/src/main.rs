@@ -54,9 +54,10 @@ async fn get_history(
     session_id: String,
     request_id: u64,
     page: usize,
+    all_branches: Option<bool>,
 ) -> RpcResult<History> {
     let state = state.inner().clone();
-    run(move || state.history(&session_id, request_id, page)).await
+    run(move || state.history(&session_id, request_id, page, all_branches)).await
 }
 
 #[tauri::command]
@@ -145,6 +146,63 @@ fn startup_options() -> serde_json::Value {
     serde_json::json!({"repo":repo,"fixture":fixture})
 }
 
+#[tauri::command]
+async fn get_blame(
+    state: State<'_, BackendState>,
+    session_id: String,
+    request_id: u64,
+    path: String,
+    commit_oid: Option<String>,
+) -> RpcResult<BlameResult> {
+    let state = state.inner().clone();
+    run(move || state.file_blame(&session_id, request_id, &path, commit_oid.as_deref())).await
+}
+
+#[tauri::command]
+async fn get_file_history(
+    state: State<'_, BackendState>,
+    session_id: String,
+    request_id: u64,
+    path: String,
+    max_count: Option<usize>,
+) -> RpcResult<FileHistoryResult> {
+    let state = state.inner().clone();
+    run(move || state.file_history(&session_id, request_id, &path, max_count)).await
+}
+
+#[tauri::command]
+async fn get_reflog(
+    state: State<'_, BackendState>,
+    session_id: String,
+    request_id: u64,
+    limit: Option<usize>,
+) -> RpcResult<ReflogResult> {
+    let state = state.inner().clone();
+    run(move || state.reflog(&session_id, request_id, limit)).await
+}
+
+#[tauri::command]
+async fn compare_commits(
+    state: State<'_, BackendState>,
+    session_id: String,
+    request_id: u64,
+    base_oid: String,
+    target_oid: String,
+) -> RpcResult<CommitFiles> {
+    let state = state.inner().clone();
+    run(move || state.compare_commits(&session_id, request_id, &base_oid, &target_oid)).await
+}
+
+#[tauri::command]
+async fn get_remotes(
+    state: State<'_, BackendState>,
+    session_id: String,
+    request_id: u64,
+) -> RpcResult<RemotesResult> {
+    let state = state.inner().clone();
+    run(move || state.get_remotes(&session_id, request_id)).await
+}
+
 fn main() {
     tauri::Builder::default()
         .manage(Arc::new(Backend::default()))
@@ -164,6 +222,11 @@ fn main() {
             get_commit_files,
             get_file_preview,
             apply_operation,
+            get_blame,
+            get_file_history,
+            get_reflog,
+            compare_commits,
+            get_remotes,
             startup_options
         ])
         .run(tauri::generate_context!())

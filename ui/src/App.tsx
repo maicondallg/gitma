@@ -20,14 +20,18 @@ import {
 import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels';
 import { CommitForm } from './components/CommitForm';
 import { DiffPanel } from './components/DiffPanel';
+import { FileHistoryModal } from './components/FileHistoryModal';
 import { FilesPanel } from './components/FilesPanel';
 import { GraphPanel } from './components/GraphPanel';
 import { HomeTab } from './components/HomeTab';
 import { InProgressBanner } from './components/InProgressBanner';
 import { NewBranchModal } from './components/NewBranchModal';
+import { ReflogModal } from './components/ReflogModal';
+import { RemotesModal } from './components/RemotesModal';
 import { SettingsModal } from './components/SettingsModal';
 import { ShortcutsModal } from './components/ShortcutsModal';
 import { TabBar } from './components/TabBar';
+import { TerminalButton } from './components/TerminalButton';
 import { useI18n } from './i18n';
 import { useAppStore } from './store/app';
 import type { Operation } from './lib/types';
@@ -63,9 +67,16 @@ export default function App() {
   const runOperation = useAppStore((s) => s.runOperation);
   const operation = useAppStore((s) => s.operation);
   const expandedDiff = useAppStore((s) => s.expandedDiff);
+  const setExpandedDiff = useAppStore((s) => s.setExpandedDiff);
   const settingsOpen = useAppStore((s) => s.settingsOpen);
   const closeSettings = useAppStore((s) => s.closeSettings);
   const toggleSettings = useAppStore((s) => s.toggleSettings);
+  const fileHistoryPath = useAppStore((s) => s.fileHistoryPath);
+  const closeFileHistory = useAppStore((s) => s.closeFileHistory);
+  const reflogOpen = useAppStore((s) => s.reflogOpen);
+  const closeReflog = useAppStore((s) => s.closeReflog);
+  const remotesModalOpen = useAppStore((s) => s.remotesModalOpen);
+  const closeRemotesModal = useAppStore((s) => s.closeRemotesModal);
   const { t } = useI18n();
 
   const [showNewBranchModal, setShowNewBranchModal] = useState(false);
@@ -110,6 +121,12 @@ export default function App() {
       if (event.key === 'F1') {
         event.preventDefault();
         setShowShortcutsModal((v) => !v);
+        return;
+      }
+
+      if (event.key === 'Escape' && expandedDiff) {
+        event.preventDefault();
+        setExpandedDiff(false);
         return;
       }
 
@@ -286,7 +303,9 @@ export default function App() {
               </div>
             </div>
 
-            <div className="toolbar-right" />
+            <div className="toolbar-right">
+              <TerminalButton />
+            </div>
 
             {stashMenu &&
               createPortal(
@@ -588,6 +607,21 @@ export default function App() {
       <SettingsModal
         isOpen={settingsOpen}
         onClose={closeSettings}
+      />
+
+      <FileHistoryModal
+        filePath={fileHistoryPath}
+        onClose={closeFileHistory}
+      />
+
+      <ReflogModal
+        isOpen={reflogOpen}
+        onClose={closeReflog}
+      />
+
+      <RemotesModal
+        isOpen={remotesModalOpen}
+        onClose={closeRemotesModal}
       />
     </main>
   );

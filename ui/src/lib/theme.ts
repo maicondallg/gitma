@@ -196,6 +196,7 @@ export function applyTheme(theme: ThemeDefinition): void {
   const root = document.documentElement;
   const colors = theme.colors;
 
+  root.style.setProperty('color-scheme', theme.type);
   root.style.setProperty('--bg', colors.bg);
   root.style.setProperty('--surface', colors.surface);
   root.style.setProperty('--raised', colors.raised);
@@ -230,6 +231,9 @@ export function applyTheme(theme: ThemeDefinition): void {
     theme.type === 'light' ? 'rgba(0, 0, 0, 0.05)' : 'rgba(255, 255, 255, 0.05)'
   );
 
+  root.style.setProperty('--scrollbar-thumb', theme.type === 'light' ? '#8c959f66' : '#3b424a');
+  root.style.setProperty('--scrollbar-hover', theme.type === 'light' ? '#8c959f99' : '#4b5563');
+
   root.setAttribute('data-theme', theme.id);
   root.setAttribute('data-theme-type', theme.type);
 
@@ -257,8 +261,8 @@ export function applyTheme(theme: ThemeDefinition): void {
         'diffEditorOverview.insertedForeground': isLight ? '#2ea04366' : '#2ea04377',
         'diffEditorOverview.removedForeground': isLight ? '#cf222e66' : '#f8514977',
         'diffEditor.diagonalFill': isLight ? '#e1e4e8' : '#1c2024',
-        'scrollbarSlider.background': isLight ? '#8c959f40' : '#3b424a',
-        'scrollbarSlider.hoverBackground': isLight ? '#8c959f60' : '#4b5563',
+        'scrollbarSlider.background': isLight ? '#8c959f66' : '#3b424a',
+        'scrollbarSlider.hoverBackground': isLight ? '#8c959f99' : '#4b5563',
         'scrollbarSlider.activeBackground': colors.accent,
         'scrollbar.shadow': '#00000000',
       },

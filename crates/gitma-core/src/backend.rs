@@ -4,9 +4,10 @@
 //! receives opaque file IDs, so display text can never be used as a path.
 
 use crate::domain::{
-    ChangedFile, FileArea, FileStatus, GitError, GitResult, GitService, RepoSnapshot,
+    BlameLine, ChangedFile, CommitDetails, DiffHunk, FileArea, FileHistoryEntry, FileStatus,
+    GitError, GitResult, GitService, ReflogEntry, RemoteEntry, RepoSnapshot,
 };
-use crate::git::{diff::DEFAULT_MAX_BYTES, GitRepository};
+use crate::git::{diff::DEFAULT_MAX_BYTES, operations::PatchTarget, GitRepository};
 use crate::graph::layout::{layout_page, GraphLayout, LaneState};
 use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use serde::{Deserialize, Serialize};
@@ -42,6 +43,7 @@ impl From<GitError> for AppError {
             crate::domain::GitErrorCategory::Process => "process",
             crate::domain::GitErrorCategory::Parse => "parse",
             crate::domain::GitErrorCategory::Io => "io",
+            crate::domain::GitErrorCategory::RemoteRefNotFound => "remoteRefNotFound",
         };
         Self {
             category: category.into(),
@@ -69,6 +71,14 @@ pub struct Session {
     pub warning: Option<AppError>,
 }
 
+#[derive(Clone, Debug, Serialize, Default, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct DiffStats {
+    pub files_changed: usize,
+    pub insertions: usize,
+    pub deletions: usize,
+}
+
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FileEntry {
@@ -79,6 +89,12 @@ pub struct FileEntry {
     pub old_path_display: Option<String>,
     pub status: String,
     pub area: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub insertions: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub deletions: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub is_binary: Option<bool>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -97,11 +113,19 @@ pub struct Snapshot {
     pub revision: u64,
     pub branch: Option<String>,
     pub upstream: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ahead: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub behind: Option<usize>,
     pub conflicted: bool,
     pub in_progress: Option<InProgressState>,
     pub staged: Vec<FileEntry>,
     pub unstaged: Vec<FileEntry>,
     pub history_key: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub staged_stats: Option<DiffStats>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub unstaged_stats: Option<DiffStats>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -148,6 +172,34 @@ pub struct CommitFiles {
     pub request_id: u64,
     pub oid: String,
     pub files: Vec<FileEntry>,
+    pub stats: DiffStats,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub details: Option<CommitDetails>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BlameResult {
+    pub lines: Vec<BlameLine>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileHistoryResult {
+    pub entries: Vec<FileHistoryEntry>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReflogResult {
+    pub entries: Vec<ReflogEntry>,
+}
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemotesResult {
+    pub session_id: String,
+    pub request_id: u64,
+    pub remotes: Vec<RemoteEntry>,
 }
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -160,6 +212,7 @@ pub struct Preview {
     pub original: String,
     pub modified: String,
     pub message: Option<String>,
+    pub hunks: Vec<DiffHunk>,
 }
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -185,6 +238,18 @@ pub enum Operation {
     UnstageAll,
     Discard,
     DiscardAll,
+    StageHunk,
+    UnstageHunk,
+    DiscardHunk,
+    IgnorePath,
+    OpenTerminal,
+    OpenEditor,
+    RevealFile,
+    ResolveConflict,
+    AddRemote,
+    RemoveRemote,
+    SetRemoteUrl,
+    FetchPrune,
     Commit,
     CommitAmend,
     Fetch,
@@ -232,6 +297,7 @@ struct SessionState {
     revision: AtomicU64,
     snapshot: Mutex<SnapshotFingerprint>,
     history: Mutex<HistoryCache>,
+    commit_cache: Mutex<HashMap<String, CommitFiles>>,
     /// Reads can overlap, mutations get exclusive ownership of Git state.
     coordinator: RwLock<()>,
     watcher: Mutex<Option<RecommendedWatcher>>,
@@ -266,6 +332,7 @@ struct FileKey {
 enum NativeContext {
     Local,
     Commit(String),
+    Compare(String, String),
 }
 #[derive(Clone)]
 struct NativeFile {
@@ -310,6 +377,7 @@ impl Backend {
             revision: AtomicU64::new(0),
             snapshot: Mutex::new(SnapshotFingerprint::default()),
             history: Mutex::new(HistoryCache::default()),
+            commit_cache: Mutex::new(HashMap::new()),
             coordinator: RwLock::new(()),
             watcher: Mutex::new(None),
         });
@@ -362,17 +430,40 @@ impl Backend {
             },
             message: op.message,
         });
+        let calc_stats = |entries: &[FileEntry]| -> DiffStats {
+            let mut insertions = 0;
+            let mut deletions = 0;
+            for e in entries {
+                if let Some(ins) = e.insertions {
+                    insertions += ins;
+                }
+                if let Some(del) = e.deletions {
+                    deletions += del;
+                }
+            }
+            DiffStats {
+                files_changed: entries.len(),
+                insertions,
+                deletions,
+            }
+        };
+        let staged_stats = Some(calc_stats(&staged));
+        let unstaged_stats = Some(calc_stats(&unstaged));
         Ok(Snapshot {
             session_id: state.id.clone(),
             request_id,
             revision,
             branch: raw.branch,
             upstream: raw.upstream,
+            ahead: raw.ahead,
+            behind: raw.behind,
             conflicted: raw.conflicted,
             in_progress,
             staged,
             unstaged,
             history_key,
+            staged_stats,
+            unstaged_stats,
         })
     }
 
@@ -381,11 +472,13 @@ impl Backend {
         session_id: &str,
         request_id: u64,
         page: usize,
+        all_branches: Option<bool>,
     ) -> Result<History, AppError> {
         let state = self.session(session_id)?;
         let _read = state.coordinator.read().expect("coordinator lock poisoned");
         let history_key = state.repo.history_key()?;
-        let layout = cached_history_page(&state, &history_key, page)?;
+        let all = all_branches.unwrap_or(true);
+        let layout = cached_history_page(&state, &history_key, page, all)?;
         let rows = layout
             .rows
             .into_iter()
@@ -434,16 +527,107 @@ impl Backend {
         validate_oid(oid)?;
         let state = self.session(session_id)?;
         let _read = state.coordinator.read().expect("coordinator lock poisoned");
+        {
+            let cache = state.commit_cache.lock().expect("commit_cache lock poisoned");
+            if let Some(cached) = cache.get(oid) {
+                let mut result = cached.clone();
+                result.request_id = request_id;
+                return Ok(result);
+            }
+        }
         let files = register_files(
             &state,
             NativeContext::Commit(oid.into()),
             state.repo.files_for_commit(oid)?,
         );
-        Ok(CommitFiles {
+        let mut total_ins = 0;
+        let mut total_del = 0;
+        for f in &files {
+            if let Some(ins) = f.insertions {
+                total_ins += ins;
+            }
+            if let Some(del) = f.deletions {
+                total_del += del;
+            }
+        }
+        let stats = DiffStats {
+            files_changed: files.len(),
+            insertions: total_ins,
+            deletions: total_del,
+        };
+        let details = state.repo.commit_details(oid).ok();
+        let result = CommitFiles {
             session_id: state.id.clone(),
             request_id,
             oid: oid.into(),
             files,
+            stats,
+            details,
+        };
+        {
+            let mut cache = state.commit_cache.lock().expect("commit_cache lock poisoned");
+            if cache.len() > 500 {
+                cache.clear();
+            }
+            cache.insert(oid.into(), result.clone());
+        }
+        Ok(result)
+    }
+
+    pub fn compare_commits(
+        &self,
+        session_id: &str,
+        request_id: u64,
+        base_oid: &str,
+        target_oid: &str,
+    ) -> Result<CommitFiles, AppError> {
+        validate_oid(base_oid)?;
+        validate_oid(target_oid)?;
+        let state = self.session(session_id)?;
+        let _read = state.coordinator.read().expect("coordinator lock poisoned");
+        let raw_files = state.repo.files_between_commits(base_oid, target_oid)?;
+        let files = register_files(
+            &state,
+            NativeContext::Compare(base_oid.into(), target_oid.into()),
+            raw_files,
+        );
+        let mut total_ins = 0;
+        let mut total_del = 0;
+        for f in &files {
+            if let Some(ins) = f.insertions {
+                total_ins += ins;
+            }
+            if let Some(del) = f.deletions {
+                total_del += del;
+            }
+        }
+        let stats = DiffStats {
+            files_changed: files.len(),
+            insertions: total_ins,
+            deletions: total_del,
+        };
+        Ok(CommitFiles {
+            session_id: state.id.clone(),
+            request_id,
+            oid: format!("{base_oid}..{target_oid}"),
+            files,
+            stats,
+            details: None,
+        })
+    }
+
+    pub fn get_remotes(
+        &self,
+        session_id: &str,
+        request_id: u64,
+    ) -> Result<RemotesResult, AppError> {
+        let state = self.session(session_id)?;
+        let _read = state.coordinator.read().expect("coordinator lock poisoned");
+        let remotes = state.repo.get_remotes()?;
+        Ok(RemotesResult {
+            session_id: state.id.clone(),
+            request_id,
+            remotes,
         })
     }
 
@@ -471,6 +655,11 @@ impl Backend {
         );
         let (kind, original, modified, message) =
             classify_preview(original_bytes, modified_bytes, selected.file.status);
+        let hunks = if matches!(selected.context, NativeContext::Local) && kind == "text" {
+            state.repo.file_hunks(&selected.file).unwrap_or_default()
+        } else {
+            Vec::new()
+        };
         Ok(Preview {
             session_id: state.id.clone(),
             request_id,
@@ -480,7 +669,46 @@ impl Backend {
             original,
             modified,
             message,
+            hunks,
         })
+    }
+
+    pub fn file_blame(
+        &self,
+        session_id: &str,
+        _request_id: u64,
+        path: &str,
+        commit_oid: Option<&str>,
+    ) -> Result<BlameResult, AppError> {
+        let state = self.session(session_id)?;
+        let _read = state.coordinator.read().expect("coordinator lock poisoned");
+        let lines = state.repo.file_blame(path, commit_oid)?;
+        Ok(BlameResult { lines })
+    }
+
+    pub fn file_history(
+        &self,
+        session_id: &str,
+        _request_id: u64,
+        path: &str,
+        max_count: Option<usize>,
+    ) -> Result<FileHistoryResult, AppError> {
+        let state = self.session(session_id)?;
+        let _read = state.coordinator.read().expect("coordinator lock poisoned");
+        let entries = state.repo.file_history(path, max_count.unwrap_or(100))?;
+        Ok(FileHistoryResult { entries })
+    }
+
+    pub fn reflog(
+        &self,
+        session_id: &str,
+        _request_id: u64,
+        limit: Option<usize>,
+    ) -> Result<ReflogResult, AppError> {
+        let state = self.session(session_id)?;
+        let _read = state.coordinator.read().expect("coordinator lock poisoned");
+        let entries = state.repo.reflog(limit.unwrap_or(100))?;
+        Ok(ReflogResult { entries })
     }
 
     pub fn apply_operation(
@@ -542,6 +770,113 @@ impl Backend {
                 reject_files(file_ids)?;
                 state.repo.discard_all_unstaged()?;
             }
+            Operation::StageHunk => {
+                let patch = message.trim();
+                if patch.is_empty() {
+                    return Err(invalid("O conteúdo do patch é obrigatório"));
+                }
+                state.repo.apply_patch(patch, PatchTarget::Stage)?;
+            }
+            Operation::UnstageHunk => {
+                let patch = message.trim();
+                if patch.is_empty() {
+                    return Err(invalid("O conteúdo do patch é obrigatório"));
+                }
+                state.repo.apply_patch(patch, PatchTarget::Unstage)?;
+            }
+            Operation::DiscardHunk => {
+                let patch = message.trim();
+                if patch.is_empty() {
+                    return Err(invalid("O conteúdo do patch é obrigatório"));
+                }
+                state.repo.apply_patch(patch, PatchTarget::Discard)?;
+            }
+            Operation::IgnorePath => {
+                let pattern = message.trim();
+                if pattern.is_empty() {
+                    return Err(invalid("O padrão para ignorar é obrigatório"));
+                }
+                state.repo.add_to_gitignore(pattern)?;
+            }
+            Operation::OpenTerminal => {
+                let term = if !message.trim().is_empty() {
+                    Some(message.trim())
+                } else {
+                    None
+                };
+                state.repo.open_terminal(term)?;
+            }
+            Operation::OpenEditor => {
+                let path = if !message.trim().is_empty() {
+                    Some(message.trim())
+                } else {
+                    None
+                };
+                state.repo.open_editor(path)?;
+            }
+            Operation::RevealFile => {
+                let path = message.trim();
+                state.repo.reveal_file(path)?;
+            }
+            Operation::ResolveConflict => {
+                #[derive(Deserialize)]
+                struct ResolveParams {
+                    path: Option<String>,
+                    choice: String,
+                }
+                let (path, choice) = if let Ok(params) = serde_json::from_str::<ResolveParams>(message) {
+                    let p = params.path.or_else(|| files.first().map(|f| f.file.path.to_string_lossy().into_owned())).unwrap_or_default();
+                    (p, params.choice)
+                } else {
+                    let p = files.first().map(|f| f.file.path.to_string_lossy().into_owned()).unwrap_or_default();
+                    (p, message.trim().to_string())
+                };
+                if path.is_empty() {
+                    return Err(invalid("O caminho do arquivo com conflito é obrigatório"));
+                }
+                state.repo.resolve_conflict(&path, &choice)?;
+            }
+            Operation::AddRemote => {
+                reject_files(file_ids)?;
+                #[derive(Deserialize)]
+                struct AddRemoteParams {
+                    name: String,
+                    url: String,
+                }
+                let params = serde_json::from_str::<AddRemoteParams>(message)
+                    .map_err(|_| invalid("Parâmetros do remote inválidos"))?;
+                if params.name.trim().is_empty() || params.url.trim().is_empty() {
+                    return Err(invalid("Nome e URL do remote são obrigatórios"));
+                }
+                state.repo.add_remote(params.name.trim(), params.url.trim())?;
+            }
+            Operation::RemoveRemote => {
+                reject_files(file_ids)?;
+                let name = message.trim();
+                if name.is_empty() {
+                    return Err(invalid("Nome do remote é obrigatório"));
+                }
+                state.repo.remove_remote(name)?;
+            }
+            Operation::SetRemoteUrl => {
+                reject_files(file_ids)?;
+                #[derive(Deserialize)]
+                struct SetUrlParams {
+                    name: String,
+                    url: String,
+                }
+                let params = serde_json::from_str::<SetUrlParams>(message)
+                    .map_err(|_| invalid("Parâmetros do remote inválidos"))?;
+                if params.name.trim().is_empty() || params.url.trim().is_empty() {
+                    return Err(invalid("Nome e URL do remote são obrigatórios"));
+                }
+                state.repo.set_remote_url(params.name.trim(), params.url.trim())?;
+            }
+            Operation::FetchPrune => {
+                reject_files(file_ids)?;
+                let remote = (!message.trim().is_empty()).then(|| message.trim());
+                state.repo.fetch_prune(remote)?;
+            }
             Operation::Commit => {
                 reject_files(file_ids)?;
                 let message = message.trim();
@@ -560,7 +895,12 @@ impl Backend {
             }
             Operation::Pull => {
                 reject_files(file_ids)?;
-                state.repo.pull()?;
+                let strategy = if message.trim().is_empty() {
+                    None
+                } else {
+                    Some(message.trim())
+                };
+                state.repo.pull_with_strategy(strategy)?;
             }
             Operation::Push => {
                 reject_files(file_ids)?;
@@ -606,11 +946,26 @@ impl Backend {
             }
             Operation::MergeBranch => {
                 reject_files(file_ids)?;
-                let branch = message.trim();
-                if branch.is_empty() {
+                let raw = message.trim();
+                if raw.is_empty() {
                     return Err(invalid("O nome da branch para merge é obrigatório"));
                 }
-                state.repo.merge_branch(branch)?;
+                if raw.starts_with('{') {
+                    #[derive(Deserialize)]
+                    struct MergeParams {
+                        branch: String,
+                        strategy: Option<String>,
+                    }
+                    if let Ok(params) = serde_json::from_str::<MergeParams>(raw) {
+                        state
+                            .repo
+                            .merge_branch_with_strategy(params.branch.trim(), params.strategy.as_deref())?;
+                    } else {
+                        state.repo.merge_branch(raw)?;
+                    }
+                } else {
+                    state.repo.merge_branch(raw)?;
+                }
             }
             Operation::DeleteBranch => {
                 reject_files(file_ids)?;
@@ -867,6 +1222,18 @@ impl Backend {
             Operation::UnstageAll => "Todas as alterações foram removidas do preparo",
             Operation::Discard => "Alterações descartadas",
             Operation::DiscardAll => "Todas as alterações não preparadas foram descartadas",
+            Operation::StageHunk => "Bloco preparado",
+            Operation::UnstageHunk => "Bloco removido do preparo",
+            Operation::DiscardHunk => "Bloco descartado",
+            Operation::IgnorePath => "Regra adicionada ao .gitignore",
+            Operation::OpenTerminal => "Terminal aberto",
+            Operation::OpenEditor => "Editor aberto",
+            Operation::RevealFile => "Local do arquivo aberto",
+            Operation::ResolveConflict => "Conflito resolvido",
+            Operation::AddRemote => "Repositório remoto adicionado",
+            Operation::RemoveRemote => "Repositório remoto removido",
+            Operation::SetRemoteUrl => "URL do repositório remoto atualizada",
+            Operation::FetchPrune => "Fetch com prune concluído",
             Operation::Commit => "Commit realizado com sucesso",
             Operation::CommitAmend => "Commit emendado com sucesso",
             Operation::Fetch => "Fetch concluído",
@@ -1004,6 +1371,9 @@ fn dto_file(id: String, file: ChangedFile) -> FileEntry {
             .map(|p| p.to_string_lossy().into_owned()),
         status: status_name(file.status).into(),
         area: area_name(file.area).into(),
+        insertions: file.insertions,
+        deletions: file.deletions,
+        is_binary: if file.is_binary { Some(true) } else { None },
     }
 }
 fn status_name(status: FileStatus) -> &'static str {
@@ -1052,6 +1422,10 @@ fn preview_bytes(repo: &GitRepository, selected: &NativeFile) -> GitResult<Previ
                 repo.revision_content(oid, &selected.file.path)?,
             ))
         }
+        NativeContext::Compare(base_oid, target_oid) => Ok((
+            repo.revision_content(base_oid, old)?,
+            repo.revision_content(target_oid, &selected.file.path)?,
+        )),
     }
 }
 fn classify_preview(
@@ -1060,10 +1434,16 @@ fn classify_preview(
     status: FileStatus,
 ) -> (&'static str, String, String, Option<String>) {
     if status == FileStatus::Conflicted {
+        let orig_str = original
+            .map(|o| String::from_utf8_lossy(&o).into_owned())
+            .unwrap_or_default();
+        let mod_str = modified
+            .map(|m| String::from_utf8_lossy(&m).into_owned())
+            .unwrap_or_default();
         return (
             "conflict",
-            String::new(),
-            String::new(),
+            orig_str,
+            mod_str,
             Some("O arquivo possui conflitos que precisam ser resolvidos.".into()),
         );
     }
@@ -1143,18 +1523,20 @@ fn cached_history_page(
     state: &SessionState,
     history_key: &str,
     page: usize,
+    all_branches: bool,
 ) -> Result<GraphLayout, AppError> {
+    let composite_key = format!("{history_key}:{}", if all_branches { "all" } else { "head" });
     let mut cache = state.history.lock().expect("history cache lock poisoned");
-    if cache.key != history_key {
+    if cache.key != composite_key {
         *cache = HistoryCache {
-            key: history_key.into(),
+            key: composite_key,
             lanes: vec![LaneState::default()],
             ..HistoryCache::default()
         };
     }
     while cache.layouts.len() <= page && !cache.exhausted {
         let current = cache.layouts.len();
-        let source = state.repo.history(current, HISTORY_PAGE_SIZE)?;
+        let source = state.repo.history_scoped(current, HISTORY_PAGE_SIZE, all_branches)?;
         let incoming = cache.lanes.last().cloned().unwrap_or_default();
         let (layout, next_lanes) = layout_page(&source, &incoming);
         cache.exhausted = !layout.has_more;
@@ -1170,6 +1552,8 @@ fn snapshot_fingerprint(snapshot: &RepoSnapshot, history_key: &str) -> String {
     hash.update(snapshot.branch.as_deref().unwrap_or("").as_bytes());
     hash.update([0]);
     hash.update(snapshot.upstream.as_deref().unwrap_or("").as_bytes());
+    hash.update((snapshot.ahead.unwrap_or(0) as u64).to_le_bytes());
+    hash.update((snapshot.behind.unwrap_or(0) as u64).to_le_bytes());
     hash.update([snapshot.conflicted as u8]);
     for file in snapshot.staged.iter().chain(&snapshot.unstaged) {
         hash.update(area_name(file.area.clone()).as_bytes());
@@ -1405,6 +1789,7 @@ mod tests {
             revision: AtomicU64::new(0),
             snapshot: Mutex::new(SnapshotFingerprint::default()),
             history: Mutex::new(HistoryCache::default()),
+            commit_cache: Mutex::new(HashMap::new()),
             coordinator: RwLock::new(()),
             watcher: Mutex::new(None),
         };

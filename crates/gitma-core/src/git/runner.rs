@@ -60,12 +60,34 @@ pub(crate) fn mutate_os_no_literal(root: &Path, args: &[&OsStr]) -> GitResult<Ve
     run(root, args.iter().copied(), MUTATION_TIMEOUT, false, false)
 }
 
+pub(crate) fn mutate_with_stdin(root: &Path, args: &[&str], input: &[u8]) -> GitResult<Vec<u8>> {
+    run_with_input(
+        root,
+        args.iter().map(OsStr::new),
+        MUTATION_TIMEOUT,
+        false,
+        true,
+        Some(input),
+    )
+}
+
 fn run<'a>(
     root: &Path,
     args: impl IntoIterator<Item = &'a OsStr>,
     timeout: Duration,
     read_only: bool,
     literal_pathspecs: bool,
+) -> GitResult<Vec<u8>> {
+    run_with_input(root, args, timeout, read_only, literal_pathspecs, None)
+}
+
+fn run_with_input<'a>(
+    root: &Path,
+    args: impl IntoIterator<Item = &'a OsStr>,
+    timeout: Duration,
+    read_only: bool,
+    literal_pathspecs: bool,
+    input: Option<&[u8]>,
 ) -> GitResult<Vec<u8>> {
     if CANCELLED.load(Ordering::SeqCst) {
         return Err(cancelled_error());
@@ -84,7 +106,11 @@ fn run<'a>(
         // Git may otherwise refresh the index while serving status/log
         // queries, which is surprising and creates watcher self-events.
         .env("GIT_OPTIONAL_LOCKS", if read_only { "0" } else { "1" })
-        .stdin(Stdio::null())
+        .stdin(if input.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     #[cfg(unix)]
@@ -108,6 +134,17 @@ fn run<'a>(
     let mut child = command
         .spawn()
         .map_err(|error| io_error("Não foi possível iniciar o Git", error))?;
+
+    if let Some(bytes) = input {
+        let bytes = bytes.to_vec();
+        if let Some(mut stdin) = child.stdin.take() {
+            thread::spawn(move || {
+                use std::io::Write;
+                let _ = stdin.write_all(&bytes);
+                let _ = stdin.flush();
+            });
+        }
+    }
 
     let stdout = child.stdout.take().expect("stdout was piped");
     let stderr = child.stderr.take().expect("stderr was piped");
@@ -178,6 +215,10 @@ fn run<'a>(
         || lower.contains("not possible to fast-forward")
     {
         GitErrorCategory::Diverged
+    } else if lower.contains("no such ref was fetched")
+        || lower.contains("your configuration specifies to merge with the ref")
+    {
+        GitErrorCategory::RemoteRefNotFound
     } else {
         GitErrorCategory::Process
     };
@@ -186,6 +227,7 @@ fn run<'a>(
         GitErrorCategory::Authentication => "Falha de autenticação do Git",
         GitErrorCategory::Conflict => "A operação encontrou conflitos",
         GitErrorCategory::Diverged => "O histórico remoto divergiu",
+        GitErrorCategory::RemoteRefNotFound => "A branch remota vinculada não existe mais no servidor (pode ter sido excluída após o merge)",
         _ => "Falha ao executar o Git",
     }
     .into();

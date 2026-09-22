@@ -4,21 +4,67 @@ import { DiffPanel } from './DiffPanel';
 import { useAppStore } from '../store/app';
 import { setLanguage } from '../i18n';
 
-vi.mock('../lib/monaco', () => ({
-  monaco: {
+const { monacoMock } = vi.hoisted(() => {
+  const mock = {
     editor: {
       createDiffEditor: vi.fn(() => ({
         setModel: vi.fn(),
         updateOptions: vi.fn(),
         dispose: vi.fn(),
+        getModifiedEditor: vi.fn(() => ({
+          onDidChangeCursorPosition: vi.fn(() => ({ dispose: vi.fn() })),
+          revealLineInCenter: vi.fn(),
+          setPosition: vi.fn(),
+          focus: vi.fn(),
+          getVisibleRanges: vi.fn(() => [{ startLineNumber: 1, endLineNumber: 2 }]),
+          getTopForLineNumber: vi.fn((line: number) => line * 20),
+          getScrollTop: vi.fn(() => 0),
+          getOption: vi.fn(() => 20),
+          onDidScrollChange: vi.fn(() => ({ dispose: vi.fn() })),
+          onDidLayoutChange: vi.fn(() => ({ dispose: vi.fn() })),
+        })),
       })),
       createModel: vi.fn(() => ({
         dispose: vi.fn(),
       })),
       setTheme: vi.fn(),
+      EditorOption: {
+        lineHeight: 67,
+      },
     },
-  },
+  };
+  return { monacoMock: mock };
+});
+
+vi.mock('../lib/monaco', () => ({
+  default: monacoMock,
+  monaco: monacoMock,
   languageForPath: vi.fn(() => 'python'),
+}));
+
+vi.mock('../lib/bridge', () => ({
+  getBridge: vi.fn(() => ({
+    getBlame: vi.fn().mockResolvedValue({
+      lines: [
+        {
+          lineNumber: 1,
+          commitOid: 'abcdef123456',
+          author: 'Alice',
+          authorMail: 'alice@test.com',
+          authorTimestamp: 1700000000,
+          summary: 'feat: add first line',
+        },
+        {
+          lineNumber: 2,
+          commitOid: 'bcdefa234567',
+          author: 'Bob',
+          authorMail: 'bob@test.com',
+          authorTimestamp: 1700000100,
+          summary: 'feat: add second line',
+        },
+      ],
+    }),
+  })),
 }));
 
 describe('DiffPanel header e botões de ação', () => {
@@ -73,4 +119,90 @@ describe('DiffPanel header e botões de ação', () => {
     fireEvent.click(splitBtn);
     expect(useAppStore.getState().diffMode).toBe('split');
   });
+
+  it('renderiza barra de hunks e permite navegar e preparar trecho', () => {
+    const runOperationMock = vi.fn().mockResolvedValue(undefined);
+    useAppStore.setState({
+      selectedFile: {
+        id: 'f1',
+        name: 'test.rs',
+        directory: 'src',
+        pathDisplay: 'src/test.rs',
+        oldPathDisplay: null,
+        status: 'modified',
+        area: 'unstaged',
+      },
+      preview: {
+        sessionId: 's1',
+        requestId: 1,
+        fileId: 'f1',
+        version: 'v1',
+        kind: 'text',
+        original: 'fn a() {}\n',
+        modified: 'fn a() {}\nfn b() {}\n',
+        message: null,
+        hunks: [
+          {
+            id: 'hunk-0',
+            header: '@@ -1,1 +1,2 @@',
+            oldStart: 1,
+            oldLines: 1,
+            newStart: 1,
+            newLines: 2,
+            patch: 'diff --git a/src/test.rs b/src/test.rs\n--- a/src/test.rs\n+++ b/src/test.rs\n@@ -1,1 +1,2 @@\n fn a() {}\n+fn b() {}\n',
+          },
+        ],
+      },
+      runOperation: runOperationMock,
+    });
+
+    render(<DiffPanel />);
+
+    // Deve exibir o badge 1 de 1
+    expect(screen.getByText(/1 de 1/i)).toBeInTheDocument();
+
+    // Deve renderizar o botão de preparar bloco
+    const stageHunkBtn = screen.getByRole('button', { name: /Preparar bloco/i });
+    expect(stageHunkBtn).toBeInTheDocument();
+
+    fireEvent.click(stageHunkBtn);
+    expect(runOperationMock).toHaveBeenCalledWith('stageHunk', [], expect.stringContaining('fn b()'));
+  });
+
+  it('sincroniza blame lines com coordenadas absolutas de Monaco', async () => {
+    useAppStore.setState({
+      session: { sessionId: 's1', name: 'repo', root: '/test' },
+      blameOpen: true,
+      selectedFile: {
+        id: 'f1',
+        name: 'test.rs',
+        directory: 'src',
+        pathDisplay: 'src/test.rs',
+        oldPathDisplay: null,
+        status: 'modified',
+        area: 'unstaged',
+      },
+      preview: {
+        sessionId: 's1',
+        requestId: 1,
+        fileId: 'f1',
+        version: 'v1',
+        kind: 'text',
+        original: 'line 1\nline 2\n',
+        modified: 'line 1\nline 2\n',
+        message: null,
+      },
+    });
+
+    render(<DiffPanel />);
+
+    const authorAlice = await screen.findByText('Alice');
+    expect(authorAlice).toBeInTheDocument();
+
+    const row = authorAlice.closest('.diff-blame-row') as HTMLElement;
+    expect(row).toBeInTheDocument();
+    expect(row.style.position).toBe('absolute');
+    expect(row.style.top).toBe('20px');
+  });
 });
+

@@ -109,7 +109,7 @@ fn commit_preview_handles_root_and_rename_paths() {
     git(dir.path(), &["commit", "-qm", "rename"]);
     let backend = Backend::new();
     let session = backend.open(dir.path(), |_| {}).unwrap();
-    let history = backend.history(&session.session_id, 1, 0).unwrap();
+    let history = backend.history(&session.session_id, 1, 0, None).unwrap();
     let rename = history.rows.first().unwrap().commit.oid.clone();
     let files = backend
         .commit_files(&session.session_id, 2, &rename)

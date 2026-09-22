@@ -1,9 +1,9 @@
 import { setBridgeAdapter, type BridgeAdapter } from './bridge';
 import type { Commit, FileEntry, GraphRow, History, Preview, RepoChanged, Snapshot } from './types';
 
-const file = (id: string, pathDisplay: string, area: FileEntry['area'], status: FileEntry['status'] = 'modified'): FileEntry => {
+const file = (id: string, pathDisplay: string, area: FileEntry['area'], status: FileEntry['status'] = 'modified', insertions = 12, deletions = 4): FileEntry => {
   const parts = pathDisplay.split('/');
-  return { id, name: parts.pop()!, directory: parts.join('/'), pathDisplay, oldPathDisplay: null, area, status };
+  return { id, name: parts.pop()!, directory: parts.join('/'), pathDisplay, oldPathDisplay: null, area, status, insertions, deletions, isBinary: false };
 };
 const commits: Commit[] = [
   { oid: 'a91cf08032a', parents: ['b8345cd1'], subject: 'Refine repository workspace', refs: ['HEAD -> main', 'origin/main', 'main'], author: 'Maicon', timestamp: 1789600000 },
@@ -48,10 +48,124 @@ export function createFixtureAdapter(name = 'local'): BridgeAdapter {
       return { sessionId: `session-${name}`, name, root };
     },
     closeRepository: async () => { listener = null; },
-    getSnapshot: async (_sessionId, requestId): Promise<Snapshot> => ({ sessionId, requestId, revision, branch: 'main', upstream: 'origin/main', conflicted: name === 'conflict', staged, unstaged, historyKey: 'demo-history' }),
-    getHistory: async (_sessionId, requestId, page): Promise<History> => ({ sessionId, requestId, page, rows: page === 0 ? graphRows : [], laneCount: 2, hasMore: false, historyKey: 'demo-history' }),
-    getCommitFiles: async (_sessionId, requestId, oid) => ({ sessionId, requestId, oid, files: historyFiles }),
-    getFilePreview: async (_sessionId, requestId, fileId): Promise<Preview> => ({ sessionId, requestId, fileId, version: `demo-${fileId}`, kind: name === 'binary' ? 'binary' : name === 'conflict' ? 'conflict' : 'text', original, modified, message: name === 'binary' ? 'Arquivo binário — comparação textual indisponível.' : name === 'conflict' ? 'Resolva o conflito antes de commitar.' : null }),
+    getSnapshot: async (_sessionId, requestId): Promise<Snapshot> => ({
+      sessionId,
+      requestId,
+      revision,
+      branch: 'main',
+      upstream: 'origin/main',
+      ahead: 1,
+      behind: 2,
+      conflicted: name === 'conflict',
+      staged,
+      unstaged,
+      historyKey: 'demo-history',
+      stagedStats: { filesChanged: staged.length, insertions: staged.length * 12, deletions: staged.length * 4 },
+      unstagedStats: { filesChanged: unstaged.length, insertions: unstaged.length * 12, deletions: unstaged.length * 4 },
+    }),
+    getHistory: async (_sessionId, requestId, page, _allBranches): Promise<History> => ({ sessionId, requestId, page, rows: page === 0 ? graphRows : [], laneCount: 2, hasMore: false, historyKey: 'demo-history' }),
+    compareCommits: async (_sessionId, requestId, baseOid, targetOid) => ({
+      sessionId,
+      requestId,
+      oid: `${baseOid}..${targetOid}`,
+      files: historyFiles,
+      stats: { filesChanged: historyFiles.length, insertions: 14, deletions: 4 },
+      details: null,
+    }),
+    getRemotes: async (_sessionId, requestId) => ({
+      sessionId,
+      requestId,
+      remotes: [
+        { name: 'origin', fetchUrl: 'https://github.com/maicondallg/Gitma.git', pushUrl: 'https://github.com/maicondallg/Gitma.git' },
+      ],
+    }),
+    getCommitFiles: async (_sessionId, requestId, oid) => ({
+      sessionId,
+      requestId,
+      oid,
+      files: historyFiles,
+      stats: { filesChanged: historyFiles.length, insertions: 24, deletions: 8 },
+      details: {
+        oid,
+        parents: ['e0c5badd5604b48471db96c73d48a5a5475ec0dd'],
+        refs: ['main', 'origin/main'],
+        authorName: 'Maicon',
+        authorEmail: 'maicon@example.com',
+        authorTimestamp: 1789616075,
+        committerName: 'Maicon',
+        committerEmail: 'maicon@example.com',
+        committerTimestamp: 1789616075,
+        subject: 'Exemplo de commit demonstrativo',
+        body: 'Esta é uma descrição detalhada do commit para testes visuais.\n\nContém múltiplas linhas e referências como #42 e 761202e.',
+      },
+    }),
+    getFilePreview: async (_sessionId, requestId, fileId): Promise<Preview> => ({
+      sessionId,
+      requestId,
+      fileId,
+      version: `demo-${fileId}`,
+      kind: name === 'binary' ? 'binary' : name === 'conflict' ? 'conflict' : 'text',
+      original,
+      modified,
+      message: name === 'binary' ? 'Arquivo binário — comparação textual indisponível.' : name === 'conflict' ? 'Resolva o conflito antes de commitar.' : null,
+      hunks: name !== 'binary' && name !== 'conflict' ? [
+        {
+          id: 'hunk-0',
+          header: '@@ -1,5 +1,6 @@',
+          oldStart: 1,
+          oldLines: 5,
+          newStart: 1,
+          newLines: 6,
+          patch: 'diff --git a/demo.ts b/demo.ts\n--- a/demo.ts\n+++ b/demo.ts\n@@ -1,5 +1,6 @@\n',
+        },
+      ] : [],
+    }),
+    getBlame: async (_sessionId, _requestId, _path) => ({
+      lines: Array.from({ length: 20 }, (_, i) => ({
+        lineNumber: i + 1,
+        commitOid: 'e0c5badd5604b48471db96c73d48a5a5475ec0dd',
+        author: 'Maicon',
+        authorMail: 'maicon@example.com',
+        authorTimestamp: 1789616075,
+        summary: 'First release',
+      })),
+    }),
+    getFileHistory: async (_sessionId, _requestId, _path) => ({
+      entries: [
+        {
+          oid: '761202e26c7aa548792dbda3aee101bbfe18dafc',
+          author: 'Maicon',
+          email: 'maicon@example.com',
+          timestamp: 1789942318,
+          summary: 'fix: windows infinity create window',
+        },
+        {
+          oid: 'e0c5badd5604b48471db96c73d48a5a5475ec0dd',
+          author: 'Maicon',
+          email: 'maicon@example.com',
+          timestamp: 1789616075,
+          summary: 'First release',
+        },
+      ],
+    }),
+    getReflog: async (_sessionId, _requestId) => ({
+      entries: [
+        {
+          oid: '761202e26c7aa548792dbda3aee101bbfe18dafc',
+          selector: 'HEAD@{0}',
+          action: 'commit: fix: windows infinity create window',
+          timestamp: 1789942318,
+          author: 'Maicon',
+        },
+        {
+          oid: 'e0c5badd5604b48471db96c73d48a5a5475ec0dd',
+          selector: 'HEAD@{1}',
+          action: 'commit: First release',
+          timestamp: 1789616075,
+          author: 'Maicon',
+        },
+      ],
+    }),
     applyOperation: async (_sessionId, requestId, operation, ids) => {
       if ((operation === 'push' || operation === 'forcePushWithLease') && name === 'error') throw { category: 'diverged', message: 'O remoto contém commits novos. Faça fetch e revise o histórico.', details: 'Push rejected: non-fast-forward' };
       if (operation === 'stage' || operation === 'stageAll') {

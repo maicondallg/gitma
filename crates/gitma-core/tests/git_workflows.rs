@@ -896,3 +896,204 @@ fn clone_repository_clones_local_repo() {
     assert_eq!(hist.commits.len(), 1);
     assert_eq!(hist.commits[0].subject, "Initial commit");
 }
+
+#[test]
+fn commit_files_and_snapshot_contain_numstat() {
+    let dir = repository();
+    commit_file(
+        dir.path(),
+        "file1.txt",
+        "line 1\nline 2\nline 3\n",
+        "Add file1",
+    );
+    let repo = GitRepository::open(dir.path()).unwrap();
+    let hist = repo.history(0, 1).unwrap();
+    let first_oid = &hist.commits[0].oid;
+    let files = repo.files_for_commit(first_oid).unwrap();
+    assert_eq!(files.len(), 1);
+    assert_eq!(files[0].path, std::path::PathBuf::from("file1.txt"));
+    assert_eq!(files[0].insertions, Some(3));
+    assert_eq!(files[0].deletions, Some(0));
+
+    // Modify file and check snapshot
+    std::fs::write(dir.path().join("file1.txt"), "line 1\nnew line\n").unwrap();
+    let snap = repo.snapshot().unwrap();
+    assert_eq!(snap.unstaged.len(), 1);
+    assert_eq!(snap.unstaged[0].insertions, Some(1));
+    assert_eq!(snap.unstaged[0].deletions, Some(2));
+}
+
+#[test]
+fn hunk_staging_and_discard_workflows() {
+    use gitma_core::git::operations::PatchTarget;
+
+    let dir = repository();
+    let mut initial = String::new();
+    for i in 1..=50 {
+        initial.push_str(&format!("line {}\n", i));
+    }
+    commit_file(dir.path(), "code.txt", &initial, "Initial commit");
+    let repo = GitRepository::open(dir.path()).unwrap();
+
+    // Modify two far-apart lines (line 5 and line 45)
+    let mut modified = initial.replace("line 5\n", "line 5 MODIFIED\n");
+    modified = modified.replace("line 45\n", "line 45 MODIFIED\n");
+    std::fs::write(dir.path().join("code.txt"), &modified).unwrap();
+
+    let snap = repo.snapshot().unwrap();
+    assert_eq!(snap.unstaged.len(), 1);
+    let file = &snap.unstaged[0];
+
+    // Compute hunks
+    let hunks = repo.file_hunks(file).unwrap();
+    assert_eq!(hunks.len(), 2);
+    assert!(hunks[0].header.contains("@@"));
+    assert!(hunks[1].header.contains("@@"));
+
+    // Stage only hunk 1 (the line 45 modification)
+    repo.apply_patch(&hunks[1].patch, PatchTarget::Stage).unwrap();
+
+    let snap_after_stage = repo.snapshot().unwrap();
+    assert_eq!(snap_after_stage.staged.len(), 1);
+    assert_eq!(snap_after_stage.unstaged.len(), 1);
+
+    // Now compute hunks on unstaged (should now only have 1 hunk: line 5)
+    let unstaged_hunks = repo.file_hunks(&snap_after_stage.unstaged[0]).unwrap();
+    assert_eq!(unstaged_hunks.len(), 1);
+
+    // Discard unstaged hunk 0 (line 5)
+    repo.apply_patch(&unstaged_hunks[0].patch, PatchTarget::Discard).unwrap();
+
+    let snap_after_discard = repo.snapshot().unwrap();
+    assert_eq!(snap_after_discard.unstaged.len(), 0);
+    assert_eq!(snap_after_discard.staged.len(), 1);
+
+    // Unstage the staged hunk
+    let staged_hunks = repo.file_hunks(&snap_after_discard.staged[0]).unwrap();
+    assert_eq!(staged_hunks.len(), 1);
+    repo.apply_patch(&staged_hunks[0].patch, PatchTarget::Unstage).unwrap();
+
+    let snap_after_unstage = repo.snapshot().unwrap();
+    assert_eq!(snap_after_unstage.staged.len(), 0);
+    assert_eq!(snap_after_unstage.unstaged.len(), 1);
+}
+
+#[test]
+fn add_to_gitignore_works() {
+    let dir = repository();
+    let repo = GitRepository::open(dir.path()).unwrap();
+
+    repo.add_to_gitignore("*.log").unwrap();
+    repo.add_to_gitignore("target/").unwrap();
+    // Adding duplicate pattern should be a no-op
+    repo.add_to_gitignore("*.log").unwrap();
+
+    let content = std::fs::read_to_string(dir.path().join(".gitignore")).unwrap();
+    assert_eq!(content, "*.log\ntarget/\n");
+}
+
+#[test]
+fn commit_details_and_file_history_and_blame_and_reflog_work() {
+    let dir = repository();
+    let repo = GitRepository::open(dir.path()).unwrap();
+
+    commit_file(
+        dir.path(),
+        "code.rs",
+        "fn main() {\n    println!(\"hello\");\n}\n",
+        "feat: initial commit\n\nDetailed explanation of why we wrote hello world.",
+    );
+    let c1_oid = repo.history(0, 1).unwrap().commits[0].oid.clone();
+
+    // 1. Test commit_details
+    let details = repo.commit_details(&c1_oid).unwrap();
+    assert_eq!(details.oid, c1_oid);
+    assert_eq!(details.subject, "feat: initial commit");
+    assert!(details.body.contains("Detailed explanation"));
+    assert!(!details.author_name.is_empty());
+
+    // 2. Test file_blame
+    let blame = repo.file_blame("code.rs", None).unwrap();
+    assert_eq!(blame.len(), 3);
+    assert_eq!(blame[0].commit_oid, c1_oid);
+    assert_eq!(blame[0].summary, "feat: initial commit");
+
+    // 3. Second commit
+    commit_file(
+        dir.path(),
+        "code.rs",
+        "fn main() {\n    println!(\"hello world\");\n}\n",
+        "fix: change greeting",
+    );
+    let c2_oid = repo.history(0, 1).unwrap().commits[0].oid.clone();
+
+    // Test file_history
+    let history = repo.file_history("code.rs", 10).unwrap();
+    assert_eq!(history.len(), 2);
+    assert_eq!(history[0].oid, c2_oid);
+    assert_eq!(history[1].oid, c1_oid);
+
+    // 4. Test reflog
+    let reflog = repo.reflog(10).unwrap();
+    assert!(!reflog.is_empty());
+    assert_eq!(reflog[0].oid, c2_oid);
+}
+
+#[test]
+fn remote_management_and_arbitrary_compare_work() {
+    let dir = repository();
+    let repo = GitRepository::open(dir.path()).unwrap();
+    commit_file(dir.path(), "f1.txt", "v1\n", "c1");
+    let c1_oid = repo.history(0, 1).unwrap().commits[0].oid.clone();
+
+    commit_file(dir.path(), "f2.txt", "v2\n", "c2");
+    let c2_oid = repo.history(0, 1).unwrap().commits[0].oid.clone();
+
+    // 1. Arbitrary compare between c1 and c2
+    let diff_files = repo.files_between_commits(&c1_oid, &c2_oid).unwrap();
+    assert_eq!(diff_files.len(), 1);
+    assert_eq!(diff_files[0].path, Path::new("f2.txt"));
+    assert_eq!(diff_files[0].status, FileStatus::Added);
+    assert_eq!(diff_files[0].insertions, Some(1));
+
+    // 2. Remote management
+    repo.add_remote("origin", "https://github.com/example/repo.git").unwrap();
+    let remotes = repo.get_remotes().unwrap();
+    assert_eq!(remotes.len(), 1);
+    assert_eq!(remotes[0].name, "origin");
+    assert_eq!(remotes[0].fetch_url, "https://github.com/example/repo.git");
+
+    repo.set_remote_url("origin", "https://github.com/example/updated.git").unwrap();
+    let remotes_updated = repo.get_remotes().unwrap();
+    assert_eq!(remotes_updated[0].fetch_url, "https://github.com/example/updated.git");
+
+    repo.remove_remote("origin").unwrap();
+    let remotes_empty = repo.get_remotes().unwrap();
+    assert!(remotes_empty.is_empty());
+}
+
+#[test]
+fn conflict_resolution_operations_work() {
+    let dir = repository();
+    let repo = GitRepository::open(dir.path()).unwrap();
+    commit_file(dir.path(), "shared.txt", "line 1\n", "base");
+
+    let initial_branch = repo.snapshot().unwrap().branch.unwrap();
+    git(dir.path(), &["checkout", "-b", "feature"]);
+    commit_file(dir.path(), "shared.txt", "line 1 feature\n", "feature edit");
+
+    git(dir.path(), &["checkout", &initial_branch]);
+    commit_file(dir.path(), "shared.txt", "line 1 main\n", "main edit");
+
+    // Merge feature -> triggers conflict
+    let _ = git_output(dir.path(), &["merge", "feature"]);
+    let snapshot = repo.snapshot().unwrap();
+    assert!(snapshot.conflicted);
+
+    // Test resolve with "ours"
+    repo.resolve_conflict("shared.txt", "ours").unwrap();
+    let content = std::fs::read_to_string(dir.path().join("shared.txt")).unwrap();
+    assert_eq!(content, "line 1 main\n");
+}
+
+

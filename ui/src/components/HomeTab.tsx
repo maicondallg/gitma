@@ -20,6 +20,7 @@ import { useAppStore } from '../store/app';
 import logoSvg from '../../logo.svg';
 import { CloneModal } from './CloneModal';
 import { InitModal } from './InitModal';
+import { APP_VERSION } from '../version';
 
 function formatRelativeTime(
   timestamp: number,
@@ -185,7 +186,7 @@ export function HomeTab() {
           </div>
 
           <div className="home-info-badge">
-            <span>Gitma Desktop v0.1.1 • Rust + WebKit</span>
+            <span>Gitma Desktop v{APP_VERSION} • Rust + WebKit</span>
           </div>
         </section>
 

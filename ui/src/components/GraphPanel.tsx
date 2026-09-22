@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { useVirtualizer } from '@tanstack/react-virtual';
+import { memo, useEffect, useMemo, useRef, useState } from 'react';
+import { VirtualHistoryList, type HistoryListHandle } from './VirtualHistoryList';
 import { Archive, GitBranch, Search, Tag, User, X } from 'lucide-react';
 import { useAppStore } from '../store/app';
 import { useI18n } from '../i18n';
@@ -163,7 +163,7 @@ interface RowGeometry {
   passingLanes: number[];
 }
 
-function GraphLanes({
+const GraphLanes = memo(function GraphLanes({
   row,
   geom,
   laneCount,
@@ -296,9 +296,9 @@ function GraphLanes({
       )}
     </svg>
   );
-}
+});
 
-export function GraphPanel() {
+export const GraphPanel = memo(function GraphPanel() {
   const history = useAppStore((state) => state.history);
   const snapshot = useAppStore((state) => state.snapshot);
   const context = useAppStore((state) => state.context);
@@ -313,6 +313,9 @@ export function GraphPanel() {
   const selectFile = useAppStore((state) => state.selectFile);
   const fileViewMode = useAppStore((state) => state.fileViewMode);
   const setCommitMessage = useAppStore((state) => state.setCommitMessage);
+  const historyScope = useAppStore((state) => state.historyScope);
+  const setHistoryScope = useAppStore((state) => state.setHistoryScope);
+  const compareCommits = useAppStore((state) => state.compareCommits);
   const { t } = useI18n();
 
   const [graphWidth, setGraphWidth] = useState<number>(() => {
@@ -462,6 +465,8 @@ export function GraphPanel() {
     commitOid: string;
   }>({ isOpen: false, commitOid: '' });
 
+  const [compareBaseOid, setCompareBaseOid] = useState<string | null>(null);
+
   const [searchFilter, setSearchFilter] = useState('');
   const searchInputRef = useRef<HTMLInputElement>(null);
 
@@ -484,8 +489,8 @@ export function GraphPanel() {
     commitSubject?: string;
   } | null>(null);
 
-  const viewportRef = useRef<HTMLDivElement>(null);
-  const requestedAtLength = useRef(-1);
+  const virtualizerRef = useRef<HistoryListHandle>(null);
+  const sessionId = useAppStore((state) => state.session?.sessionId);
   const rows = history?.rows ?? [];
 
   const filteredRows = useMemo(() => {
@@ -507,15 +512,11 @@ export function GraphPanel() {
     const headLane = filteredRows[0]?.lane ?? 0;
     let currentIncoming = new Set<number>([headLane]);
 
-    // Precalculate lanes needed at or below row i
-    const laneUsages = new Array<Set<number>>(filteredRows.length);
-    const activeLanesRunning = new Set<number>();
-    for (let i = filteredRows.length - 1; i >= 0; i--) {
-      activeLanesRunning.add(filteredRows[i].lane);
-      for (const conn of filteredRows[i].connections) {
-        activeLanesRunning.add(conn.to);
-      }
-      laneUsages[i] = new Set(activeLanesRunning);
+    // Only the final use of each lane is needed; avoid copying a Set per row.
+    const lastLaneUsage = new Map<number, number>();
+    for (let i = 0; i < filteredRows.length; i++) {
+      lastLaneUsage.set(filteredRows[i].lane, i);
+      for (const conn of filteredRows[i].connections) lastLaneUsage.set(conn.to, i);
     }
 
     for (let i = 0; i < filteredRows.length; i++) {
@@ -528,7 +529,7 @@ export function GraphPanel() {
       for (const lane of currentIncoming) {
         upperLanes.push(lane);
         if (lane !== row.lane) {
-          const isNeededBelow = i + 1 < filteredRows.length && Boolean(laneUsages[i + 1]?.has(lane));
+          const isNeededBelow = (lastLaneUsage.get(lane) ?? -1) > i;
           if (isNeededBelow) {
             passingLanes.push(lane);
             nextOutgoing.add(lane);
@@ -548,30 +549,13 @@ export function GraphPanel() {
     return result;
   }, [filteredRows]);
 
-  const virtualizer = useVirtualizer({
-    count: totalCount,
-    getScrollElement: () => viewportRef.current,
-    estimateSize: () => ROW_HEIGHT,
-    overscan: 8,
-  });
-
-  useEffect(() => {
-    virtualizer.measure();
-  }, [totalCount, virtualizer]);
-
-  const virtualItems = virtualizer.getVirtualItems();
-
-  useEffect(() => {
-    if (
-      history?.hasMore &&
-      rows.length > 0 &&
-      rows.length !== requestedAtLength.current &&
-      virtualItems.some((item) => item.index >= rows.length - 8)
-    ) {
-      requestedAtLength.current = rows.length;
-      void loadMore();
-    }
-  }, [history?.hasMore, loadMore, rows.length, virtualItems]);
+  const selectedOid = context.kind === 'commit' ? context.oid : null;
+  const selectedIndex = useMemo(() => {
+    if (context.kind === 'local') return 0;
+    if (!selectedOid) return -1;
+    const index = filteredRows.findIndex((row) => row.commit.oid === selectedOid);
+    return index < 0 ? -1 : index + 1;
+  }, [context.kind, selectedOid, filteredRows]);
 
   const [copiedOid, setCopiedOid] = useState<string | null>(null);
 
@@ -631,12 +615,12 @@ export function GraphPanel() {
           }
           if (nextIndex === 0) {
             void selectLocal();
-            virtualizer.scrollToIndex?.(0, { align: 'auto' });
+            virtualizerRef.current?.scrollToIndex(0, { align: 'auto' });
           } else {
             const nextRow = filteredRows[nextIndex - 1];
             if (nextRow) {
               void selectCommit(nextRow.commit.oid);
-              virtualizer.scrollToIndex?.(nextIndex, { align: 'auto' });
+              virtualizerRef.current?.scrollToIndex(nextIndex, { align: 'auto' });
               if (!searchFilter.trim() && nextIndex >= filteredRows.length - 5 && history?.hasMore) {
                 void loadMore();
               }
@@ -652,12 +636,12 @@ export function GraphPanel() {
           const prevIndex = currentIndex - 1;
           if (prevIndex === 0) {
             void selectLocal();
-            virtualizer.scrollToIndex?.(0, { align: 'auto' });
+            virtualizerRef.current?.scrollToIndex(0, { align: 'auto' });
           } else {
             const prevRow = filteredRows[prevIndex - 1];
             if (prevRow) {
               void selectCommit(prevRow.commit.oid);
-              virtualizer.scrollToIndex?.(prevIndex, { align: 'auto' });
+              virtualizerRef.current?.scrollToIndex(prevIndex, { align: 'auto' });
             }
           }
         }
@@ -690,7 +674,6 @@ export function GraphPanel() {
     selectLocal,
     selectCommit,
     loadMore,
-    virtualizer,
     contextMenu,
     refPopover,
     newBranchModal.isOpen,
@@ -724,6 +707,30 @@ export function GraphPanel() {
             {history?.hasMore ? '+' : ''} {t('history.commitsCount')}
           </span>
         </div>
+        <div className="lists-scope-toggle-group" role="group" aria-label={t('scope.toggleScope')}>
+          <button
+            type="button"
+            className={`lists-scope-btn ${historyScope === 'all' ? 'is-active' : ''}`}
+            onClick={() => void setHistoryScope('all')}
+            title={t('scope.allBranches')}
+            aria-label={t('scope.allBranches')}
+            aria-pressed={historyScope === 'all'}
+          >
+            <span className="lists-scope-label-full">{t('scope.allBranches')}</span>
+            <span className="lists-scope-label-short" aria-hidden="true">{t('scope.allBranchesShort')}</span>
+          </button>
+          <button
+            type="button"
+            className={`lists-scope-btn ${historyScope === 'current' ? 'is-active' : ''}`}
+            onClick={() => void setHistoryScope('current')}
+            title={t('scope.currentBranch')}
+            aria-label={t('scope.currentBranch')}
+            aria-pressed={historyScope === 'current'}
+          >
+            <span className="lists-scope-label-full">{t('scope.currentBranch')}</span>
+            <span className="lists-scope-label-short" aria-hidden="true">{t('scope.currentBranchShort')}</span>
+          </button>
+        </div>
         <div className="lists-history-search">
           <Search size={12} className="lists-search-icon" />
           <input
@@ -755,6 +762,56 @@ export function GraphPanel() {
           )}
         </div>
       </header>
+
+      {compareBaseOid && (
+        <div className="lists-compare-banner" style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          padding: '6px 12px',
+          background: 'var(--raised)',
+          borderBottom: '1px solid var(--border)',
+          fontSize: '12px',
+          color: 'var(--text)'
+        }}>
+          <span>
+            {t('compare.selectToCompare')} (Base: <code>{shortHash(compareBaseOid)}</code>)
+          </span>
+          <button
+            type="button"
+            className="btn btn-secondary"
+            onClick={() => setCompareBaseOid(null)}
+            style={{ padding: '2px 8px', fontSize: '11px' }}
+          >
+            {t('common.cancel') || 'Cancelar'}
+          </button>
+        </div>
+      )}
+
+      {context.kind === 'compare' && (
+        <div className="lists-compare-banner" style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          padding: '6px 12px',
+          background: 'var(--raised)',
+          borderBottom: '1px solid var(--border)',
+          fontSize: '12px',
+          color: 'var(--text)'
+        }}>
+          <span>
+            Comparando <code>{shortHash(context.baseOid)}</code> ↔ <code>{shortHash(context.targetOid)}</code>
+          </span>
+          <button
+            type="button"
+            className="btn btn-secondary"
+            onClick={() => void selectLocal()}
+            style={{ padding: '2px 8px', fontSize: '11px' }}
+          >
+            {t('compare.exitCompare')}
+          </button>
+        </div>
+      )}
 
       {/* Cabeçalho de 5 colunas com separadores verticais contínuos e redimensionadores */}
       <div className="lists-graph-header" role="row">
@@ -803,9 +860,17 @@ export function GraphPanel() {
         </div>
       </div>
 
-      <div ref={viewportRef} className="lists-scroll" tabIndex={0} role="list" aria-label="Commits">
-        <div className="lists-virtual-content" style={{ height: virtualizer.getTotalSize() }}>
-          {virtualItems.map((item) => {
+      <VirtualHistoryList
+        key={`${sessionId}:${historyScope}`}
+        ref={virtualizerRef}
+        count={totalCount}
+        rowHeight={ROW_HEIGHT}
+        selectedIndex={selectedIndex}
+        pageKey={`${history?.historyKey}:${history?.page}:${rows.length}`}
+        hasMore={!!history?.hasMore && !searchFilter.trim()}
+        loadMore={loadMore}
+      >
+          {(item) => {
             // Row 0: Uncommitted changes
             if (item.index === 0) {
               const isLocalActive = context.kind === 'local';
@@ -872,7 +937,10 @@ export function GraphPanel() {
             const geom = geometryList[rowIndex] ?? { upperLanes: [], passingLanes: [] };
             const commit = row.commit;
             const parsedRefs = parseRefs(commit.refs, snapshot?.branch ?? null);
-            const isSelected = context.kind === 'commit' && context.oid === commit.oid;
+            const isSelected =
+              (context.kind === 'commit' && context.oid === commit.oid) ||
+              (context.kind === 'compare' && (context.baseOid === commit.oid || context.targetOid === commit.oid)) ||
+              compareBaseOid === commit.oid;
             const visibleRefs = parsedRefs.slice(0, 2);
             const overflowRefs = parsedRefs.slice(2);
             const laneColor = colourFor(row.lane);
@@ -887,7 +955,19 @@ export function GraphPanel() {
                 style={{ transform: `translateY(${item.start}px)`, height: `${ROW_HEIGHT}px` }}
                 onClick={(e) => {
                   setActivePane('history');
-                  void selectCommit(commit.oid);
+                  if (compareBaseOid && compareBaseOid !== commit.oid) {
+                    void compareCommits(compareBaseOid, commit.oid);
+                    setCompareBaseOid(null);
+                  } else if (e.ctrlKey || e.metaKey) {
+                    if (context.kind === 'commit' && context.oid !== commit.oid) {
+                      void compareCommits(context.oid, commit.oid);
+                    } else {
+                      void selectCommit(commit.oid);
+                    }
+                  } else {
+                    setCompareBaseOid(null);
+                    void selectCommit(commit.oid);
+                  }
                   (e.currentTarget as HTMLElement).blur();
                 }}
                 onContextMenu={(e) => {
@@ -1115,9 +1195,8 @@ export function GraphPanel() {
                 </div>
               </button>
             );
-          })}
-        </div>
-      </div>
+          }}
+      </VirtualHistoryList>
 
       {refPopover && (
         <RefPopover
@@ -1167,6 +1246,14 @@ export function GraphPanel() {
           currentBranchName={snapshot?.branch}
           commitOid={contextMenu.commitOid}
           onClose={() => setContextMenu(null)}
+          onCompareWith={(oid) => {
+            setRefPopover(null);
+            if (context.kind === 'commit' && context.oid !== oid) {
+              void compareCommits(context.oid, oid);
+            } else {
+              setCompareBaseOid(oid);
+            }
+          }}
           onCheckoutBranch={(branch) => {
             setRefPopover(null);
             void runOperation('switchBranch', [], branch);
@@ -1348,4 +1435,4 @@ export function GraphPanel() {
       )}
     </section>
   );
-}
+});

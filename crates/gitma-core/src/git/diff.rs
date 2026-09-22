@@ -1,4 +1,6 @@
-use crate::domain::{DiffLine, DiffLineKind, FileDiff, GitError, GitErrorCategory, GitResult};
+use crate::domain::{
+    DiffHunk, DiffLine, DiffLineKind, FileDiff, GitError, GitErrorCategory, GitResult,
+};
 use std::io::Read;
 use std::path::Path;
 
@@ -126,4 +128,121 @@ fn parse_range(range: &str) -> Option<u32> {
     range
         .split_once(',')
         .map_or_else(|| range.parse().ok(), |(start, _)| start.parse().ok())
+}
+
+pub fn parse_hunks(data: &[u8]) -> Vec<DiffHunk> {
+    if data.windows(12).any(|window| window == b"Binary files")
+        || data.windows(16).any(|window| window == b"GIT binary patch")
+    {
+        return Vec::new();
+    }
+    let text = String::from_utf8_lossy(data);
+    let lines: Vec<&str> = text.lines().collect();
+    let mut header_lines = Vec::new();
+    let mut hunks_lines: Vec<Vec<&str>> = Vec::new();
+    let mut current_hunk: Option<Vec<&str>> = None;
+    let mut in_hunks = false;
+
+    for line in lines {
+        if line.starts_with("@@ ") {
+            in_hunks = true;
+            if let Some(h) = current_hunk.take() {
+                hunks_lines.push(h);
+            }
+            current_hunk = Some(vec![line]);
+        } else if in_hunks {
+            if let Some(ref mut h) = current_hunk {
+                h.push(line);
+            }
+        } else {
+            header_lines.push(line);
+        }
+    }
+    if let Some(h) = current_hunk {
+        hunks_lines.push(h);
+    }
+
+    if hunks_lines.is_empty() {
+        return Vec::new();
+    }
+
+    let mut header = header_lines.join("\n");
+    if !header.is_empty() {
+        header.push('\n');
+    }
+
+    let mut result = Vec::new();
+    for (i, h_lines) in hunks_lines.into_iter().enumerate() {
+        if h_lines.is_empty() {
+            continue;
+        }
+        let first = h_lines[0];
+        let (old_start, old_lines, new_start, new_lines) = match parse_hunk_header_ranges(first) {
+            Some(ranges) => ranges,
+            None => (1, 1, 1, 1),
+        };
+        let mut patch = format!("{}{}\n", header, h_lines.join("\n"));
+        if !patch.ends_with('\n') {
+            patch.push('\n');
+        }
+        result.push(DiffHunk {
+            id: format!("hunk-{}", i),
+            header: first.to_string(),
+            old_start,
+            old_lines,
+            new_start,
+            new_lines,
+            patch,
+        });
+    }
+    result
+}
+
+fn parse_hunk_header_ranges(line: &str) -> Option<(u32, u32, u32, u32)> {
+    let body = line.strip_prefix("@@ ")?;
+    let (ranges, _) = body.split_once(" @@")?;
+    let mut parts = ranges.split_whitespace();
+    let (old_start, old_lines) = parse_hunk_range(parts.next()?.strip_prefix('-')?)?;
+    let (new_start, new_lines) = parse_hunk_range(parts.next()?.strip_prefix('+')?)?;
+    Some((old_start, old_lines, new_start, new_lines))
+}
+
+fn parse_hunk_range(range: &str) -> Option<(u32, u32)> {
+    match range.split_once(',') {
+        Some((s, c)) => Some((s.parse().ok()?, c.parse().ok()?)),
+        None => Some((range.parse().ok()?, 1)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_hunks_multiple() {
+        let diff = b"diff --git a/test.txt b/test.txt\nindex 1234..5678 100644\n--- a/test.txt\n+++ b/test.txt\n@@ -10,5 +10,6 @@ section\n line 1\n+line 2\n line 3\n@@ -50 +51,2 @@\n foo\n+bar\n";
+        let hunks = parse_hunks(diff);
+        assert_eq!(hunks.len(), 2);
+        assert_eq!(hunks[0].id, "hunk-0");
+        assert_eq!(hunks[0].old_start, 10);
+        assert_eq!(hunks[0].old_lines, 5);
+        assert_eq!(hunks[0].new_start, 10);
+        assert_eq!(hunks[0].new_lines, 6);
+        assert!(hunks[0].patch.starts_with("diff --git a/test.txt b/test.txt\n"));
+        assert!(hunks[0].patch.contains("@@ -10,5 +10,6 @@"));
+
+        assert_eq!(hunks[1].id, "hunk-1");
+        assert_eq!(hunks[1].old_start, 50);
+        assert_eq!(hunks[1].old_lines, 1);
+        assert_eq!(hunks[1].new_start, 51);
+        assert_eq!(hunks[1].new_lines, 2);
+        assert!(hunks[1].patch.contains("@@ -50 +51,2 @@"));
+    }
+
+    #[test]
+    fn test_parse_hunks_binary() {
+        let diff = b"diff --git a/logo.png b/logo.png\nBinary files a/logo.png and b/logo.png differ\n";
+        let hunks = parse_hunks(diff);
+        assert!(hunks.is_empty());
+    }
 }

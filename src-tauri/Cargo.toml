@@ -1,11 +1,11 @@
 [package]
 name = "gitma-desktop"
-version = "0.1.2"
-edition = "2021"
+version.workspace = true
+edition.workspace = true
 description = "Gitma Desktop native application powered by Tauri v2 and Rust"
-license = "MIT"
-authors = ["Maicon Dall'Agnol <maicon.dallagnol@unesp.br>"]
-repository = "https://github.com/maicondallg/Gitma"
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
 default-run = "gitma-desktop"
 
 [build-dependencies]

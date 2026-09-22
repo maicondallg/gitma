@@ -25,7 +25,7 @@ If applicable, add screenshots to help explain your problem.
 **Environment Information:**
  - OS: [e.g. Ubuntu 24.04, Fedora 40, Arch Linux, macOS, Windows]
  - Git Version: [e.g. git version 2.43.0]
- - Gitma Version: [e.g. 0.1.2]
+ - Gitma Version: [e.g. 0.1.3]
 
 **Additional context**
 Add any other context about the problem here.

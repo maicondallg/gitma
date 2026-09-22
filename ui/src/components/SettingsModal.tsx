@@ -11,11 +11,15 @@ import {
   Info,
   Palette,
   Plus,
+  Terminal,
   Trash2,
   X,
 } from 'lucide-react';
 import { useI18n } from '../i18n';
+import { useAppStore } from '../store/app';
+import { TERMINAL_PRESETS } from './TerminalButton';
 import logoSvg from '../../logo.svg';
+import { APP_VERSION } from '../version';
 import type { SupportedLocale, ThemeColors, ThemeDefinition } from '../lib/types';
 import {
   deleteCustomTheme,
@@ -33,7 +37,7 @@ export interface SettingsModalProps {
   onClose: () => void;
 }
 
-type SettingsSection = 'appearance' | 'language' | 'git' | 'about';
+type SettingsSection = 'appearance' | 'language' | 'git' | 'terminal' | 'about';
 
 export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
   const { t, language, setLanguage, supportedLocales } = useI18n();
@@ -54,8 +58,16 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
   const [importJsonText, setImportJsonText] = useState('');
   const [importError, setImportError] = useState<string | null>(null);
 
-  // Git Settings
   const [defaultBranch, setDefaultBranch] = useState('main');
+  const preferredTerminal = useAppStore((s) => s.preferredTerminal);
+  const setPreferredTerminal = useAppStore((s) => s.setPreferredTerminal);
+  const openTerminal = useAppStore((s) => s.openTerminal);
+  const session = useAppStore((s) => s.session);
+  const pullStrategy = useAppStore((s) => s.pullStrategy);
+  const setPullStrategy = useAppStore((s) => s.setPullStrategy);
+  const mergeStrategy = useAppStore((s) => s.mergeStrategy);
+  const setMergeStrategy = useAppStore((s) => s.setMergeStrategy);
+  const [customTerminalInput, setCustomTerminalInput] = useState('');
 
   const refreshThemes = () => {
     setThemes(getAllThemes());
@@ -71,11 +83,13 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
       } catch {
         setDefaultBranch('main');
       }
+      const isPreset = TERMINAL_PRESETS.some((p) => p.id === preferredTerminal && p.id !== 'custom');
+      setCustomTerminalInput(isPreset ? '' : (preferredTerminal === 'custom' ? '' : preferredTerminal));
       setFeedbackNotice(null);
       setEditingTheme(null);
       setShowImportDialog(false);
     }
-  }, [isOpen]);
+  }, [isOpen, preferredTerminal]);
 
   useEffect(() => {
     const handleKey = (e: KeyboardEvent) => {
@@ -245,6 +259,14 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
             >
               <GitBranch size={16} />
               <span>{t('settings.git')}</span>
+            </button>
+            <button
+              type="button"
+              className={`settings-nav-item ${activeSection === 'terminal' ? 'active' : ''}`}
+              onClick={() => setActiveSection('terminal')}
+            >
+              <Terminal size={16} />
+              <span>{t('terminal.title')}</span>
             </button>
             <button
               type="button"
@@ -446,6 +468,157 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
                     {t('settings.defaultBranchHelp')}
                   </small>
                 </div>
+
+                <div className="form-group settings-form-group">
+                  <label htmlFor="settings-pull-strategy">
+                    {t('settings.pullStrategy')}
+                  </label>
+                  <select
+                    id="settings-pull-strategy"
+                    className="modal-input modal-select"
+                    value={pullStrategy}
+                    onChange={(e) => setPullStrategy(e.target.value)}
+                  >
+                    <option value="ff-only">{t('settings.pullFfOnly')}</option>
+                    <option value="rebase">{t('settings.pullRebase')}</option>
+                    <option value="merge">{t('settings.pullMerge')}</option>
+                    <option value="default">{t('settings.pullDefault')}</option>
+                  </select>
+                  <small className="form-help-text">
+                    {t('settings.pullStrategyHelp')}
+                  </small>
+                </div>
+
+                <div className="form-group settings-form-group">
+                  <label htmlFor="settings-merge-strategy">
+                    {t('settings.mergeStrategy')}
+                  </label>
+                  <select
+                    id="settings-merge-strategy"
+                    className="modal-input modal-select"
+                    value={mergeStrategy}
+                    onChange={(e) => setMergeStrategy(e.target.value)}
+                  >
+                    <option value="default">{t('settings.mergeDefault')}</option>
+                    <option value="no-ff">{t('settings.mergeNoFf')}</option>
+                    <option value="ff-only">{t('settings.mergeFfOnly')}</option>
+                  </select>
+                  <small className="form-help-text">
+                    {t('settings.mergeStrategyHelp')}
+                  </small>
+                </div>
+              </div>
+            )}
+
+            {/* SEÇÃO: TERMINAL */}
+            {activeSection === 'terminal' && (
+              <div className="settings-section">
+                <div className="section-title-row">
+                  <div className="section-title-info">
+                    <h4 className="settings-section-title">{t('terminal.settingsTitle')}</h4>
+                    <p className="settings-section-desc">{t('terminal.settingsDesc')}</p>
+                  </div>
+                  {session && (
+                    <div className="section-actions-row">
+                      <button
+                        type="button"
+                        className="btn btn-secondary btn-sm"
+                        onClick={() => void openTerminal()}
+                        title={t('terminal.testTerminal')}
+                      >
+                        <Terminal size={13} />
+                        <span>{t('terminal.testTerminal')}</span>
+                      </button>
+                    </div>
+                  )}
+                </div>
+
+                <div className="terminal-settings-grid">
+                  {TERMINAL_PRESETS.map((preset) => {
+                    const isSelected =
+                      preset.id === 'custom'
+                        ? preferredTerminal === 'custom' || !TERMINAL_PRESETS.some((p) => p.id !== 'custom' && p.id === preferredTerminal)
+                        : preferredTerminal === preset.id;
+                    const label =
+                      preset.id === 'default'
+                        ? t('terminal.defaultSystem')
+                        : preset.id === 'custom'
+                        ? t('terminal.custom')
+                        : preset.name;
+
+                    const handleSelect = () => {
+                      if (preset.id === 'custom') {
+                        const val = customTerminalInput.trim() || 'custom';
+                        setPreferredTerminal(val);
+                        document.getElementById('settings-custom-terminal')?.focus();
+                        showToast(t('terminal.terminalChanged', { name: label }));
+                      } else {
+                        setPreferredTerminal(preset.id);
+                        showToast(t('terminal.terminalChanged', { name: label }));
+                      }
+                    };
+
+                    return (
+                      <div
+                        key={preset.id}
+                        className={`terminal-preset-card ${isSelected ? 'is-selected' : ''}`}
+                        onClick={handleSelect}
+                        role="button"
+                        tabIndex={0}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' || e.key === ' ') {
+                            handleSelect();
+                          }
+                        }}
+                      >
+                        <div className="terminal-card-info">
+                          <Terminal size={15} className="terminal-card-icon" />
+                          <strong className="terminal-card-name">{label}</strong>
+                        </div>
+                        {isSelected && <Check size={16} className="terminal-check-icon" />}
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {/* Opção / Comando personalizado */}
+                <div className="form-group settings-form-group" style={{ marginTop: '20px' }}>
+                  <label htmlFor="settings-custom-terminal">
+                    {t('terminal.customCommand')}
+                  </label>
+                  <div style={{ display: 'flex', gap: '8px' }}>
+                    <input
+                      id="settings-custom-terminal"
+                      type="text"
+                      className="modal-input"
+                      value={customTerminalInput}
+                      onChange={(e) => setCustomTerminalInput(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' && customTerminalInput.trim()) {
+                          setPreferredTerminal(customTerminalInput.trim());
+                          showToast(t('terminal.terminalChanged', { name: customTerminalInput.trim() }));
+                        }
+                      }}
+                      placeholder={t('terminal.customPlaceholder')}
+                    />
+                    <button
+                      type="button"
+                      className="btn btn-primary btn-sm"
+                      disabled={!customTerminalInput.trim() || customTerminalInput.trim() === preferredTerminal}
+                      onClick={() => {
+                        if (customTerminalInput.trim()) {
+                          setPreferredTerminal(customTerminalInput.trim());
+                          showToast(t('terminal.terminalChanged', { name: customTerminalInput.trim() }));
+                        }
+                      }}
+                    >
+                      {t('terminal.save')}
+                    </button>
+                  </div>
+                  <small className="form-help-text">
+                    {t('terminal.customPrompt')}
+                  </small>
+                </div>
               </div>
             )}
 
@@ -455,7 +628,7 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
                 <div className="about-hero">
                   <img src={logoSvg} alt="Gitma" className="about-hero-logo" />
                   <h3>Gitma Desktop</h3>
-                  <span className="about-version">v0.1.1 • Tauri v2 + Rust</span>
+                  <span className="about-version">v{APP_VERSION} • Tauri v2 + Rust</span>
                 </div>
 
                 <p className="about-desc">{t('settings.aboutText')}</p>

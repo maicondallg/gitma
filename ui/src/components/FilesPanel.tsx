@@ -24,6 +24,7 @@ import {
 import { useAppStore } from '../store/app';
 import { useI18n } from '../i18n';
 import type { Area, FileEntry } from '../lib/types';
+import { FileContextMenu } from './FileContextMenu';
 import './Lists.css';
 
 export function formatFullDate(timestamp: number): string {
@@ -184,6 +185,7 @@ function FileRow({
   onStage,
   onSelect,
   onDiscard,
+  onContextMenu,
 }: {
   file: FileEntry;
   selected?: boolean;
@@ -195,6 +197,7 @@ function FileRow({
   onStage: () => void;
   onSelect: () => void;
   onDiscard?: () => void;
+  onContextMenu?: (e: React.MouseEvent) => void;
 }) {
   const { t } = useI18n();
   const Icon = statusGlyph[file.status];
@@ -204,6 +207,7 @@ function FileRow({
     <div
       className={`lists-file-row ${isTree ? 'is-tree-file-row' : ''}`}
       style={{ paddingLeft: `${indent}px` }}
+      onContextMenu={onContextMenu}
       onDoubleClick={() => {
         if (canStage && !disabled) {
           onStage();
@@ -244,6 +248,25 @@ function FileRow({
           {file.name}
           {showDir && <small>{file.directory || 'raiz'}</small>}
         </span>
+        <div className={`lists-file-metrics ${isTree ? 'is-tree-metrics' : ''}`}>
+          {file.isBinary ? (
+            <span className="file-stat-binary">{t('files.binaryBadge')}</span>
+          ) : (
+            (file.insertions != null || file.deletions != null) && (
+              <span
+                className="file-stat-diff"
+                title={`+${file.insertions ?? 0} / -${file.deletions ?? 0}`}
+              >
+                {(file.insertions ?? 0) > 0 && (
+                  <span className="file-stat-ins">+{file.insertions}</span>
+                )}
+                {(file.deletions ?? 0) > 0 && (
+                  <span className="file-stat-del">-{file.deletions}</span>
+                )}
+              </span>
+            )
+          )}
+        </div>
       </button>
       {file.area === 'unstaged' && onDiscard && (
         <button
@@ -266,6 +289,7 @@ function FileRow({
 
 function FileGroup({
   title,
+  shortTitle,
   files,
   selectedId,
   area,
@@ -278,8 +302,10 @@ function FileGroup({
   onAll,
   onDiscard,
   onDiscardAll,
+  onContextMenu,
 }: {
   title: string;
+  shortTitle?: string;
   files: FileEntry[];
   selectedId?: string;
   area: Area;
@@ -292,6 +318,7 @@ function FileGroup({
   onAll: () => void;
   onDiscard?: (file: FileEntry) => void;
   onDiscardAll?: () => void;
+  onContextMenu?: (e: React.MouseEvent, file: FileEntry) => void;
 }) {
   const treeNodes = useMemo(() => buildTree(files), [files]);
   const visibleItems = useMemo(
@@ -325,11 +352,29 @@ function FileGroup({
 
   const { t } = useI18n();
 
+  const groupStats = useMemo(() => {
+    let ins = 0;
+    let del = 0;
+    for (const f of files) {
+      if (f.insertions) ins += f.insertions;
+      if (f.deletions) del += f.deletions;
+    }
+    return { ins, del };
+  }, [files]);
+
   return (
     <div className="lists-file-group">
       <div className="lists-group-header">
-        <span>
-          {title} <b>{files.length}</b>
+        <span className="lists-group-title" title={`${title} (${files.length})`}>
+          <span className="lists-group-title-full">{title}</span>
+          <span className="lists-group-title-short" aria-hidden="true">{shortTitle ?? title}</span>
+          <b className="lists-group-count">{files.length}</b>
+          {(groupStats.ins > 0 || groupStats.del > 0) && (
+            <span className="lists-group-diff-badges" title={`+${groupStats.ins} / -${groupStats.del}`}>
+              {groupStats.ins > 0 && <span className="stat-badge stat-badge-ins">+{groupStats.ins}</span>}
+              {groupStats.del > 0 && <span className="stat-badge stat-badge-del">-{groupStats.del}</span>}
+            </span>
+          )}
         </span>
         {files.length > 0 && (
           <div className="lists-group-header-actions">
@@ -340,12 +385,22 @@ function FileGroup({
                 className="lists-text-action lists-text-action-danger"
                 onClick={onDiscardAll}
                 title={t('files.discardTitle')}
+                aria-label={t('files.discardAll')}
               >
-                {t('files.discardAll')}
+                <span className="lists-action-label-full">{t('files.discardAll')}</span>
+                <span className="lists-action-label-short" aria-hidden="true">{t('files.discardAllShort')}</span>
               </button>
             )}
-            <button type="button" disabled={disabled} className="lists-text-action" onClick={onAll}>
-              {area === 'staged' ? t('files.unstageAll') : t('files.stageAll')}
+            <button
+              type="button"
+              disabled={disabled}
+              className="lists-text-action"
+              onClick={onAll}
+              title={area === 'staged' ? t('files.unstageAll') : t('files.stageAll')}
+              aria-label={area === 'staged' ? t('files.unstageAll') : t('files.stageAll')}
+            >
+              <span className="lists-action-label-full">{area === 'staged' ? t('files.unstageAll') : t('files.stageAll')}</span>
+              <span className="lists-action-label-short" aria-hidden="true">{area === 'staged' ? t('files.unstageAllShort') : t('files.stageAllShort')}</span>
             </button>
           </div>
         )}
@@ -395,6 +450,7 @@ function FileGroup({
                     onStage={() => onStage(file)}
                     onSelect={() => onSelect(file)}
                     onDiscard={onDiscard ? () => onDiscard(file) : undefined}
+                    onContextMenu={(e) => onContextMenu?.(e, file)}
                   />
                 </div>
               );
@@ -419,6 +475,7 @@ function FileGroup({
                   onStage={() => onStage(file)}
                   onSelect={() => onSelect(file)}
                   onDiscard={onDiscard ? () => onDiscard(file) : undefined}
+                  onContextMenu={(e) => onContextMenu?.(e, file)}
                 />
               </div>
             );
@@ -436,6 +493,7 @@ function VirtualHistoryFiles({
   collapsed,
   onToggleDir,
   onSelect,
+  onContextMenu,
 }: {
   files: FileEntry[];
   selectedId?: string;
@@ -443,6 +501,7 @@ function VirtualHistoryFiles({
   collapsed: Set<string>;
   onToggleDir: (dirPath: string) => void;
   onSelect: (file: FileEntry) => void;
+  onContextMenu?: (e: React.MouseEvent, file: FileEntry) => void;
 }) {
   const treeNodes = useMemo(() => buildTree(files), [files]);
   const visibleItems = useMemo(
@@ -518,6 +577,7 @@ function VirtualHistoryFiles({
                   isTree={true}
                   onStage={() => undefined}
                   onSelect={() => onSelect(file)}
+                  onContextMenu={(e) => onContextMenu?.(e, file)}
                 />
               </div>
             );
@@ -540,6 +600,7 @@ function VirtualHistoryFiles({
                 isTree={false}
                 onStage={() => undefined}
                 onSelect={() => onSelect(file)}
+                onContextMenu={(e) => onContextMenu?.(e, file)}
               />
             </div>
           );
@@ -550,10 +611,15 @@ function VirtualHistoryFiles({
 }
 
 export function FilesPanel() {
+  const session = useAppStore((state) => state.session);
   const context = useAppStore((state) => state.context);
   const snapshot = useAppStore((state) => state.snapshot);
   const history = useAppStore((state) => state.history);
   const commitFiles = useAppStore((state) => state.commitFiles);
+  const commitStats = useAppStore((state) => state.commitStats);
+  const commitDetails = useAppStore((state) => state.commitDetails);
+  const selectCommit = useAppStore((state) => state.selectCommit);
+  const openFileHistory = useAppStore((state) => state.openFileHistory);
   const selectFile = useAppStore((state) => state.selectFile);
   const runOperation = useAppStore((state) => state.runOperation);
   const operation = useAppStore((state) => state.operation);
@@ -564,12 +630,34 @@ export function FilesPanel() {
   const setActivePane = useAppStore((state) => state.setActivePane);
   const { t } = useI18n();
 
+  const [fileContextMenu, setFileContextMenu] = useState<{
+    x: number;
+    y: number;
+    file: FileEntry;
+  } | null>(null);
+
   const local = context?.kind === 'local';
   const staged = local ? snapshot?.staged ?? [] : [];
   const unstaged = local ? snapshot?.unstaged ?? [] : [];
   const historical = local ? [] : commitFiles ?? [];
   const totalCount = local ? staged.length + unstaged.length : historical.length;
   const isTree = fileViewMode === 'tree';
+
+  const computedCommitStats = useMemo(() => {
+    if (commitStats) return commitStats;
+    if (local || historical.length === 0) return null;
+    let ins = 0;
+    let del = 0;
+    for (const f of historical) {
+      if (f.insertions) ins += f.insertions;
+      if (f.deletions) del += f.deletions;
+    }
+    return {
+      filesChanged: historical.length,
+      insertions: ins,
+      deletions: del,
+    };
+  }, [commitStats, local, historical]);
 
   const [collapsedDirs, setCollapsedDirs] = useState<Set<string>>(new Set());
 
@@ -643,12 +731,31 @@ export function FilesPanel() {
         if (visibleFiles[prevIdx]) {
           void selectFile(visibleFiles[prevIdx]);
         }
+      } else if (e.key === ' ' || e.code === 'Space') {
+        if (!local || !selectedFile) return;
+        e.preventDefault();
+        if (selectedFile.area === 'unstaged') {
+          void runOperation('stage', [selectedFile.id]);
+        } else if (selectedFile.area === 'staged') {
+          void runOperation('unstage', [selectedFile.id]);
+        }
       }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [activePane, visibleFiles, selectedFile, selectFile, setActivePane]);
+  }, [activePane, visibleFiles, selectedFile, selectFile, setActivePane, local, runOperation]);
+
+  const handleFileContextMenu = useCallback((e: React.MouseEvent, file: FileEntry) => {
+    e.preventDefault();
+    e.stopPropagation();
+    void selectFile(file);
+    setFileContextMenu({
+      x: e.clientX,
+      y: e.clientY,
+      file,
+    });
+  }, [selectFile]);
 
   const selectedCommit = useMemo(() => {
     if (context?.kind !== 'commit') return null;
@@ -707,19 +814,32 @@ export function FilesPanel() {
         </div>
       </header>
 
-      {!local && (selectedCommit || context?.oid) && (
+      {context.kind === 'compare' && (
+        <div className="commit-info-card compare-info-card" aria-label="Detalhes da comparação">
+          <div className="commit-info-header">
+            <div className="commit-info-subject" style={{ fontWeight: 600, display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <span>Comparando:</span>
+              <code>{context.baseOid.slice(0, 8)}</code>
+              <span>↔</span>
+              <code>{context.targetOid.slice(0, 8)}</code>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {context.kind === 'commit' && (selectedCommit || context.oid) && (
         <div className="commit-info-card" aria-label="Detalhes do commit selecionado">
           <div className="commit-info-header">
-            <div className="commit-info-subject" title={selectedCommit?.subject ?? context?.oid ?? ''}>
-              {selectedCommit?.subject ?? `Commit ${context?.oid}`}
+            <div className="commit-info-subject" title={selectedCommit?.subject ?? context.oid}>
+              {selectedCommit?.subject ?? `Commit ${context.oid}`}
             </div>
             <button
               type="button"
-              className={`commit-info-hash-btn ${copiedHash === (selectedCommit?.oid ?? context?.oid) ? 'is-copied' : ''}`}
-              onClick={() => void handleCopyHash(selectedCommit?.oid ?? context?.oid ?? '')}
-              title={t('files.fullHash', { hash: selectedCommit?.oid ?? context?.oid ?? '' })}
+              className={`commit-info-hash-btn ${copiedHash === (selectedCommit?.oid ?? context.oid) ? 'is-copied' : ''}`}
+              onClick={() => void handleCopyHash(selectedCommit?.oid ?? context.oid)}
+              title={t('files.fullHash', { hash: selectedCommit?.oid ?? context.oid })}
             >
-              {copiedHash === (selectedCommit?.oid ?? context?.oid) ? (
+              {copiedHash === (selectedCommit?.oid ?? context.oid) ? (
                 <>
                   <Check size={12} className="copy-icon-check" />
                   <span>{t('files.copied')}</span>
@@ -727,7 +847,7 @@ export function FilesPanel() {
               ) : (
                 <>
                   <Copy size={12} />
-                  <code>{(selectedCommit?.oid ?? context?.oid ?? '').slice(0, 8)}</code>
+                  <code>{(selectedCommit?.oid ?? context.oid).slice(0, 8)}</code>
                 </>
               )}
             </button>
@@ -750,6 +870,58 @@ export function FilesPanel() {
               </time>
             </div>
           )}
+
+          {commitDetails && (commitDetails.committerName !== commitDetails.authorName || commitDetails.committerTimestamp !== commitDetails.authorTimestamp) && (
+            <div className="commit-info-committer" title={`${commitDetails.committerName} <${commitDetails.committerEmail}>`}>
+              <span className="commit-info-committer-label">{t('files.committer')}:</span>
+              <strong>{commitDetails.committerName}</strong>
+            </div>
+          )}
+
+          {commitDetails?.parents && commitDetails.parents.length > 0 && (
+            <div className="commit-info-parents">
+              <span className="commit-info-parents-label">{t('files.parents')}:</span>
+              <div className="commit-info-parents-list">
+                {commitDetails.parents.map((parent) => (
+                  <button
+                    key={parent}
+                    type="button"
+                    className="commit-parent-badge"
+                    onClick={() => void selectCommit(parent)}
+                    title={`${t('diff.clickToSelectCommit')}: ${parent}`}
+                  >
+                    <code>{parent.slice(0, 8)}</code>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {commitDetails?.body && commitDetails.body.trim().length > 0 && (
+            <div className="commit-info-body">
+              <pre>{commitDetails.body.trim()}</pre>
+            </div>
+          )}
+
+          {computedCommitStats && (
+            <div className="commit-info-stats">
+              <span className="commit-stats-summary">
+                {t('files.statsSummary', { count: computedCommitStats.filesChanged })}
+              </span>
+              <div className="commit-stats-badges">
+                {computedCommitStats.insertions > 0 && (
+                  <span className="stat-badge stat-badge-ins">
+                    +{computedCommitStats.insertions}
+                  </span>
+                )}
+                {computedCommitStats.deletions > 0 && (
+                  <span className="stat-badge stat-badge-del">
+                    -{computedCommitStats.deletions}
+                  </span>
+                )}
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -757,6 +929,7 @@ export function FilesPanel() {
         <>
           <FileGroup
             title={t('files.staged')}
+            shortTitle={t('files.stagedShort')}
             files={staged}
             selectedId={selectedFile?.id}
             area="staged"
@@ -767,9 +940,11 @@ export function FilesPanel() {
             onSelect={selectFile}
             onStage={(file) => runOperation('unstage', [file.id])}
             onAll={() => runOperation('unstageAll')}
+            onContextMenu={handleFileContextMenu}
           />
           <FileGroup
             title={t('files.unstaged')}
+            shortTitle={t('files.unstagedShort')}
             files={unstaged}
             selectedId={selectedFile?.id}
             area="unstaged"
@@ -780,6 +955,7 @@ export function FilesPanel() {
             onSelect={selectFile}
             onStage={(file) => runOperation('stage', [file.id])}
             onAll={() => runOperation('stageAll')}
+            onContextMenu={handleFileContextMenu}
             onDiscard={(file) => {
               if (
                 window.confirm(
@@ -808,6 +984,24 @@ export function FilesPanel() {
           collapsed={collapsedDirs}
           onToggleDir={toggleDir}
           onSelect={selectFile}
+          onContextMenu={handleFileContextMenu}
+        />
+      )}
+
+      {fileContextMenu && (
+        <FileContextMenu
+          x={fileContextMenu.x}
+          y={fileContextMenu.y}
+          file={fileContextMenu.file}
+          repoPath={session?.root}
+          onClose={() => setFileContextMenu(null)}
+          onStage={(id) => void runOperation('stage', [id])}
+          onUnstage={(id) => void runOperation('unstage', [id])}
+          onDiscard={(id) => void runOperation('discard', [id])}
+          onIgnore={(pattern) => void runOperation('ignorePath', [], pattern)}
+          onOpenEditor={(p) => void runOperation('openEditor', [], p)}
+          onRevealFile={(p) => void runOperation('revealFile', [], p)}
+          onViewHistory={(p) => openFileHistory(p)}
         />
       )}
     </section>

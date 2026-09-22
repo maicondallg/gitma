@@ -26,32 +26,39 @@ Engineered with a **Rust** backend engine and a **Tauri v2** native shell, Gitma
 ### 🌳 Interactive Topological Commit Graph
 - **Real-Time DAG Visualization**: Smooth bezier lanes allocated with an optimized topological algorithm.
 - **Rich Ref Indicators**: Clear visual pills for local branches, tracking remotes, HEAD indicators, tags, and stashes.
+- **Graph History Scope**: Switch between "All branches" (`--all`) and "Current branch only" (`HEAD`) with one click.
+- **Arbitrary Two-Commit Comparison**: Select and compare any two commits across history with <kbd>Ctrl</kbd>+Click or right-click to view combined diff metrics and file changes.
 - **Fast Interactive Checkout**: Double-click or right-click any branch or tag ref badge to checkout immediately.
-- **Commit Details & Hash Copying**: Single-click commit SHA copying, parent hashes, author timestamps, and detailed commit card.
+- **Rich Commit Details & Metadata**: Subject, full multiline body, committer distinction, and clickable parent commit hash badges jumping directly to parents in the graph.
 
 ### 📑 Multi-Repository Workspace & Color Groups
 - **Multi-Tab Interface**: Open and switch between multiple repositories effortlessly.
+- **Ahead / Behind Indicators**: Real-time toolbar badges displaying commits ahead (`↑`) or behind (`↓`) remote tracking branches, with one-click Push and Pull.
+- **Remotes Manager**: Dedicated modal to inspect fetch/push URLs, add remotes, edit URLs, delete remotes, and perform "Fetch & Prune" (`git fetch --prune`).
 - **Color-Coded Groups**: Organize related repositories into custom color groups with user-defined names.
 - **Drag-and-Drop Reordering**: Rearrange tabs and tab groups seamlessly with mouse drag.
 - **Collapsible Groups**: Collapse inactive project groups to keep your workspace tidy.
 
-### 🔍 Monaco-Powered Diff Viewer
+### 🔍 Monaco-Powered Diff Viewer & Conflict Solver
+- **Interactive Hunk Staging (`git add -p` equivalent)**: Stage, unstage, or discard individual diff hunks with previous/next hunk navigation and keyboard shortcuts.
+- **Visual Merge Conflict Solver**: Direct conflict marker visualization in Monaco with 1-click action banner to "Accept Current (HEAD)", "Accept Incoming", "Accept Both", or "Mark as Resolved".
 - **Side-by-Side & Inline Views**: Switch between split-view and unified diff views at the click of a button.
+- **Inline Git Blame Visualizer**: Toggleable blame gutter showing line-by-line commit hashes, authors, dates, and jump-to-commit actions.
 - **"Only Changes" Folding**: Hide large unmodified blocks to focus exclusively on changed lines.
-- **Rich Syntax Highlighting**: Full syntax highlighting across 80+ programming languages powered by the Monaco Editor.
-- **File Hierarchy Navigation**: Explore changes in either flat list mode or collapsible folder tree mode.
+- **File Hierarchy Navigation**: Explore changes in either flat list mode or collapsible folder tree mode with numstat badges (`+` insertions / `-` deletions).
 
 ### ⚡ Complete Everyday Git Operations
+- **File Context Menu**: Right-click any file to stage, unstage, discard, add to `.gitignore` (by file, extension, or directory), copy paths, or launch external editors.
+- **File History Modal**: Inspect the full revision history for any file via `git log --follow` with search filtering.
+- **Reflog Inspector Modal**: Browse local reference updates (`git reflog`) with one-click hash copying, branch creation, or soft/mixed/hard reset.
 - **Branch Management**: Create local branches, checkout tracking remotes, switch branches, and delete local/remote branches with safety confirmations.
 - **Merge & Squash**: Fast-forward and 3-way branch merges, plus squash-merge support.
 - **Interactive Rebase Detection**: In-progress rebase, merge, cherry-pick, and revert banner with one-click **Continue** and **Abort** actions.
 - **Stash Management**: Save uncommitted changes to stash, inspect stashes on commit nodes, and apply, pop, or drop stashes (including multiple stashes on the same commit).
 - **Reset Modes**: Reset HEAD to any historical commit with **Soft**, **Mixed**, or **Hard** modes protected by a confirmation modal.
-- **Git Revert**: Revert any historic commit safely without rewriting historical records.
-- **Cherry-Pick**: Apply specific commits from other branches with a single click.
-- **Discard Local Modifications**: Discard uncommitted changes for individual files or bulk discard all unstaged changes.
-- **Tagging**: Create lightweight and annotated tags (with custom messages), as well as deleting local and remote tags.
+- **Git Revert & Cherry-Pick**: Revert historic commits safely or cherry-pick individual commits with a single click.
 - **Safe Push (`--force-with-lease`)**: Right-click the Push action to perform safe lease-checked force pushes.
+- **External Tool Integrations**: Open terminal, external editor (VS Code), or system file manager directly from tabs and files.
 - **Instant History Search (`Ctrl+F`)**: Filter through thousands of commits by message, author, or hash in real time.
 
 ### 🔒 100% Offline & Private
@@ -66,11 +73,15 @@ Engineered with a **Rust** backend engine and a **Tauri v2** native shell, Gitma
 | Shortcut | Action | Scope |
 | :--- | :--- | :--- |
 | <kbd>Ctrl</kbd> + <kbd>Enter</kbd> | Commit staged changes | Commit form |
+| <kbd>Space</kbd> | Stage or unstage selected file | Files panel |
+| <kbd>Ctrl</kbd> + <kbd>Alt</kbd> + <kbd>S</kbd> | Stage current diff hunk | Diff viewer |
+| <kbd>Ctrl</kbd> + <kbd>Alt</kbd> + <kbd>U</kbd> | Unstage current diff hunk | Diff viewer |
+| <kbd>Ctrl</kbd> + Click | Select commit for comparison | History graph |
 | <kbd>Ctrl</kbd> + <kbd>F</kbd> | Focus commit search filter | Commit history |
 | <kbd>Esc</kbd> | Clear search / Close modals & context menus | Global |
 | <kbd>↑</kbd> / <kbd>↓</kbd> | Navigate up/down through commits or files | Active list |
 | <kbd>→</kbd> / <kbd>←</kbd> | Switch focus between History and Files panels | Workspace |
-| <kbd>Enter</kbd> / <kbd>Space</kbd> | Select commit or file | Active row |
+| <kbd>Enter</kbd> | Select commit or file | Active row |
 | Double-click (Tab) | Rename tab or group | Tab bar |
 
 ---

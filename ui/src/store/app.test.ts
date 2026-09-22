@@ -376,3 +376,69 @@ describe('repository state coordination', () => {
   });
 });
 
+
+describe('history pagination coordination', () => {
+  it('keeps a pending page when commit selection changes and deduplicates requests', async () => {
+    const { store, adapter } = await setup();
+    const history = { ...store.getState().history!, hasMore: true };
+    store.setState({ history });
+    const pending = deferred<typeof history>();
+    const getHistory = vi.spyOn(adapter, 'getHistory').mockImplementation((_session, requestId, page) =>
+      pending.promise.then(() => ({ ...history, requestId, page, hasMore: false })));
+    const loading = store.getState().loadMore();
+    await store.getState().selectCommit(history.rows[0].commit.oid);
+    await store.getState().loadMore();
+    expect(getHistory).toHaveBeenCalledTimes(1);
+    pending.resolve(history);
+    await loading;
+    expect(store.getState().history?.page).toBe(1);
+    expect(store.getState().history?.rows).toHaveLength(history.rows.length * 2);
+  });
+
+  it('ignores out-of-order scope responses, including a rapid round trip', async () => {
+    const { store, adapter } = await setup();
+    const history = store.getState().history!;
+    const requests: Array<{ resolve: (value: typeof history) => void; promise: Promise<typeof history> }> = [];
+    vi.spyOn(adapter, 'getHistory').mockImplementation((_session, requestId) => {
+      const request = deferred<typeof history>();
+      requests.push(request);
+      return request.promise.then((value) => ({ ...value, requestId }));
+    });
+    const first = store.getState().setHistoryScope('current');
+    const second = store.getState().setHistoryScope('all');
+    const third = store.getState().setHistoryScope('current');
+    requests[2].resolve({ ...history, rows: history.rows.slice(0, 1) });
+    await third;
+    requests[0].resolve(history);
+    requests[1].resolve(history);
+    await Promise.all([first, second]);
+    expect(store.getState().historyScope).toBe('current');
+    expect(store.getState().history?.rows).toHaveLength(1);
+  });
+
+  it('invalidates cached histories in other tabs when the global scope changes', async () => {
+    const { store, adapter } = await setup();
+    await store.getState().openRepository('/other');
+    await store.getState().setHistoryScope('current');
+    const inactive = store.getState().tabs.find((tab) => tab.id !== store.getState().activeTabId)!;
+    expect(inactive.history).toBeNull();
+    const getHistory = vi.spyOn(adapter, 'getHistory');
+    await store.getState().switchTab(inactive.id);
+    await vi.waitFor(() => expect(getHistory).toHaveBeenCalledWith(inactive.session.sessionId, expect.any(Number), 0, false));
+  });
+
+  it('discards a pending page after replacing the first page', async () => {
+    const { store, adapter } = await setup();
+    const history = { ...store.getState().history!, hasMore: true };
+    store.setState({ history });
+    const pending = deferred<typeof history>();
+    vi.spyOn(adapter, 'getHistory').mockImplementation((_session, requestId, page) =>
+      pending.promise.then(() => ({ ...history, requestId, page })));
+    const loading = store.getState().loadMore();
+    const replacement = { ...history, rows: history.rows.slice(0, 1) };
+    store.setState({ history: replacement });
+    pending.resolve(history);
+    await loading;
+    expect(store.getState().history).toBe(replacement);
+  });
+});

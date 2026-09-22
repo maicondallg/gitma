@@ -1,6 +1,6 @@
 {
   "name": "gitma-desktop",
-  "version": "0.1.2",
+  "version": "0.1.4",
   "description": "Blazing-fast, lightweight native Git desktop client powered by Rust and Tauri v2",
   "license": "MIT",
   "author": "Maicon Dall'Agnol",
@@ -29,7 +29,8 @@
     "check": "tsc --noEmit",
     "test": "vitest run",
     "test:e2e": "playwright test",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "bump": "node scripts/bump-version.mjs"
   },
   "dependencies": {
     "@radix-ui/react-dropdown-menu": "^2",

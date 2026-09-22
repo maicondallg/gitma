@@ -1,11 +1,11 @@
 [package]
 name = "gitma-core"
-version = "0.1.2"
-edition = "2021"
+version.workspace = true
+edition.workspace = true
 description = "Core domain logic, Git process runner, graph layout engine, and diff service for Gitma"
-license = "MIT"
-authors = ["Maicon Dall'Agnol <maicon.dallagnol@unesp.br>"]
-repository = "https://github.com/maicondallg/Gitma"
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
