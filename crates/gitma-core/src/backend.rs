@@ -1086,21 +1086,23 @@ impl Backend {
                     message: Option<String>,
                     #[serde(default)]
                     push: bool,
+                    #[serde(default)]
+                    force: bool,
                 }
-                let (name, oid, msg, push) =
+                let (name, oid, msg, push, force) =
                     if let Ok(params) = serde_json::from_str::<CreateTagParams>(message) {
-                        (params.name, params.oid, params.message, params.push)
+                        (params.name, params.oid, params.message, params.push, params.force)
                     } else {
-                        (message.trim().to_string(), None, None, false)
+                        (message.trim().to_string(), None, None, false, false)
                     };
                 if name.trim().is_empty() {
                     return Err(invalid("O nome da tag é obrigatório"));
                 }
                 state
                     .repo
-                    .create_tag(name.trim(), oid.as_deref(), msg.as_deref())?;
+                    .create_tag(name.trim(), oid.as_deref(), msg.as_deref(), force)?;
                 if push {
-                    state.repo.push_tag(name.trim(), None)?;
+                    state.repo.push_tag(name.trim(), None, force)?;
                 }
             }
             Operation::DeleteTag => {
@@ -1139,7 +1141,7 @@ impl Backend {
             }
             Operation::PushTag => {
                 reject_files(file_ids)?;
-                let (name, remote) =
+                let (name, remote, force) =
                     if let Ok(val) = serde_json::from_str::<serde_json::Value>(message) {
                         if let Some(obj) = val.as_object() {
                             let name = obj
@@ -1151,21 +1153,25 @@ impl Backend {
                                 .get("remote")
                                 .and_then(|v| v.as_str())
                                 .map(|s| s.to_string());
-                            (name, remote)
+                            let force = obj
+                                .get("force")
+                                .and_then(|v| v.as_bool())
+                                .unwrap_or(false);
+                            (name, remote, force)
                         } else if let Some(s) = val.as_str() {
-                            (s.to_string(), None)
+                            (s.to_string(), None, false)
                         } else {
-                            (message.trim().to_string(), None)
+                            (message.trim().to_string(), None, false)
                         }
                     } else {
-                        (message.trim().to_string(), None)
+                        (message.trim().to_string(), None, false)
                     };
                 if name.trim().is_empty() {
                     return Err(invalid("O nome da tag é obrigatório"));
                 }
                 state
                     .repo
-                    .push_tag(name.trim(), remote.as_deref())?;
+                    .push_tag(name.trim(), remote.as_deref(), force)?;
             }
             Operation::Rebase => {
                 reject_files(file_ids)?;

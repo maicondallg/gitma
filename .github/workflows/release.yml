@@ -18,7 +18,7 @@ jobs:
       - name: Ensure tag matches the application version
         shell: bash
         run: |
-          app_version="$(node -p "require('./src-tauri/tauri.conf.json').version")"
+          app_version="$(node -p "const v = require('./src-tauri/tauri.conf.json').version; v && v.endsWith('.json') ? require('./src-tauri/' + v).version : v")"
           tag_version="${GITHUB_REF_NAME#v}"
           tag_base="${tag_version%%-*}"
           if [[ "$tag_base" != "$app_version" ]]; then

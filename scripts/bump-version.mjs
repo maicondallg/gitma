@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { execSync } from 'node:child_process';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -52,7 +52,16 @@ try {
   writeFileSync(cargoPath, updatedCargoToml, 'utf8');
   console.log(`✔ Cargo.toml atualizado para ${newVersion}`);
 
-  // 3. Atualiza Cargo.lock
+  // 3. Atualiza src-tauri/tauri.conf.json
+  const tauriConfPath = resolve(rootDir, 'src-tauri/tauri.conf.json');
+  if (existsSync(tauriConfPath)) {
+    const tauriConf = JSON.parse(readFileSync(tauriConfPath, 'utf8'));
+    tauriConf.version = newVersion;
+    writeFileSync(tauriConfPath, JSON.stringify(tauriConf, null, 2) + '\n', 'utf8');
+    console.log(`✔ src-tauri/tauri.conf.json atualizado para ${newVersion}`);
+  }
+
+  // 4. Atualiza Cargo.lock
   console.log('🔄 Atualizando Cargo.lock...');
   execSync('cargo check --workspace', {
     cwd: rootDir,
@@ -63,8 +72,8 @@ try {
   console.log(`\n✨ Versão sincronizada com sucesso para v${newVersion}!`);
   console.log('Arquivos sincronizados automaticamente:');
   console.log('  • package.json & package-lock.json');
+  console.log('  • src-tauri/tauri.conf.json');
   console.log('  • Cargo.toml & Cargo.lock');
-  console.log('  • src-tauri/tauri.conf.json (lê package.json diretamente)');
   console.log('  • crates/gitma-core & src-tauri (herdam via workspace.package)');
   console.log('  • UI HomeTab & SettingsModal (importam de ui/src/version.ts)\n');
 } catch (err) {

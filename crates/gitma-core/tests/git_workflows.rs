@@ -742,12 +742,12 @@ fn tag_operations_create_and_delete() {
     let head_oid = repo.history(0, 1).unwrap().commits[0].oid.clone();
 
     // 1. Create lightweight tag
-    repo.create_tag("v1.0.0", Some(&head_oid), None).unwrap();
+    repo.create_tag("v1.0.0", Some(&head_oid), None, false).unwrap();
     let hist = repo.history(0, 1).unwrap();
     assert!(hist.commits[0].refs.iter().any(|r| r.contains("v1.0.0")));
 
     // 2. Create annotated tag
-    repo.create_tag("v1.1.0", Some(&head_oid), Some("Release 1.1.0"))
+    repo.create_tag("v1.1.0", Some(&head_oid), Some("Release 1.1.0"), false)
         .unwrap();
     let hist2 = repo.history(0, 1).unwrap();
     assert!(hist2.commits[0].refs.iter().any(|r| r.contains("v1.1.0")));
@@ -764,10 +764,21 @@ fn tag_operations_create_and_delete() {
     assert!(!hist4.commits[0].refs.iter().any(|r| r.contains("v1.1.0")));
 
     // 5. Delete tag via JSON string (fallback handling)
-    repo.create_tag("v1.2.0", Some(&head_oid), None).unwrap();
+    repo.create_tag("v1.2.0", Some(&head_oid), None, false).unwrap();
     repo.delete_tag(r#"{"name":"v1.2.0","deleteRemote":{}}"#, false, None).unwrap();
     let hist5 = repo.history(0, 1).unwrap();
     assert!(!hist5.commits[0].refs.iter().any(|r| r.contains("v1.2.0")));
+
+    // 6. Test tag force move
+    commit_file(dir.path(), "file2.txt", "second\n", "second commit");
+    let second_oid = repo.history(0, 1).unwrap().commits[0].oid.clone();
+    repo.create_tag("v1.3.0", Some(&head_oid), None, false).unwrap();
+    // Overwriting without force should fail
+    assert!(repo.create_tag("v1.3.0", Some(&second_oid), None, false).is_err());
+    // Overwriting with force should succeed
+    assert!(repo.create_tag("v1.3.0", Some(&second_oid), None, true).is_ok());
+    let hist6 = repo.history(0, 1).unwrap();
+    assert!(hist6.commits[0].refs.iter().any(|r| r.contains("v1.3.0")));
 }
 
 #[test]
@@ -801,7 +812,7 @@ fn tag_operations_checkout_and_push() {
     let head_oid = repo.history(0, 1).unwrap().commits[0].oid.clone();
 
     // Create tag
-    repo.create_tag("v2.0.0", Some(&head_oid), None).unwrap();
+    repo.create_tag("v2.0.0", Some(&head_oid), None, false).unwrap();
 
     // Checkout tag with 'tag: ' prefix (detached HEAD)
     repo.checkout_branch("tag: v2.0.0").unwrap();
@@ -809,7 +820,7 @@ fn tag_operations_checkout_and_push() {
     assert!(snap.branch.is_none());
 
     // Push tag to remote
-    repo.push_tag("v2.0.0", None).unwrap();
+    repo.push_tag("v2.0.0", None, false).unwrap();
 
     // Verify remote has the tag
     let remote_refs = Command::new("git")

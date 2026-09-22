@@ -324,6 +324,7 @@
     "messageLabel": "Mensagem (opcional para tag anotada)",
     "messagePlaceholder": "Descrição ou notas da versão...",
     "pushLabel": "Enviar tag para o repositório remoto (push)",
+    "forceLabel": "Sobrescrever / mover se a tag já existir (--force)",
     "submit": "Criar Tag",
     "cancel": "Cancelar",
     "errorRequired": "O nome da tag é obrigatório.",

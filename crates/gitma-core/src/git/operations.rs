@@ -345,6 +345,7 @@ pub fn create_tag(
     name: &str,
     oid: Option<&str>,
     message: Option<&str>,
+    force: bool,
 ) -> GitResult<String> {
     let mut trimmed_name = name.trim();
     if let Some(stripped) = trimmed_name.strip_prefix("tag: ") {
@@ -361,6 +362,9 @@ pub fn create_tag(
         });
     }
     let mut args = vec!["tag"];
+    if force {
+        args.push("-f");
+    }
     let msg_str;
     if let Some(msg) = message {
         let trimmed_msg = msg.trim();
@@ -466,7 +470,12 @@ pub fn delete_tag(
     }
 }
 
-pub fn push_tag(root: &Path, tag: &str, remote: Option<&str>) -> GitResult<String> {
+pub fn push_tag(
+    root: &Path,
+    tag: &str,
+    remote: Option<&str>,
+    force: bool,
+) -> GitResult<String> {
     let mut trimmed = tag.trim();
     if let Some(stripped) = trimmed.strip_prefix("tag: ") {
         trimmed = stripped.trim();
@@ -499,12 +508,18 @@ pub fn push_tag(root: &Path, tag: &str, remote: Option<&str>) -> GitResult<Strin
         "origin".to_string()
     };
 
-    let out = if trimmed == "--tags" || trimmed == "all" {
-        mutate(root, &["push", &remote_name, "--tags"])?
+    let mut args = vec!["push", &remote_name];
+    let ref_spec;
+    if trimmed == "--tags" || trimmed == "all" {
+        args.push("--tags");
     } else {
-        let ref_spec = format!("refs/tags/{trimmed}");
-        mutate(root, &["push", &remote_name, &ref_spec])?
-    };
+        ref_spec = format!("refs/tags/{trimmed}");
+        args.push(&ref_spec);
+    }
+    if force {
+        args.push("--force");
+    }
+    let out = mutate(root, &args)?;
     Ok(String::from_utf8_lossy(&out).into_owned())
 }
 

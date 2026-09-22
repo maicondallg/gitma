@@ -6,7 +6,7 @@ export interface CreateTagModalProps {
   isOpen: boolean;
   commitOid: string;
   onClose: () => void;
-  onSubmit: (params: { name: string; message?: string; oid: string; push?: boolean }) => void;
+  onSubmit: (params: { name: string; message?: string; oid: string; push?: boolean; force?: boolean }) => void;
 }
 
 export function CreateTagModal({
@@ -19,6 +19,7 @@ export function CreateTagModal({
   const [name, setName] = useState('');
   const [message, setMessage] = useState('');
   const [pushToRemote, setPushToRemote] = useState(false);
+  const [force, setForce] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -27,6 +28,7 @@ export function CreateTagModal({
       setName('');
       setMessage('');
       setPushToRemote(false);
+      setForce(false);
       setError(null);
       setTimeout(() => inputRef.current?.focus(), 50);
     }
@@ -59,6 +61,7 @@ export function CreateTagModal({
       message: message.trim() ? message.trim() : undefined,
       oid: commitOid,
       ...(pushToRemote ? { push: true } : {}),
+      ...(force ? { force: true } : {}),
     });
     setName('');
     setMessage('');
@@ -122,6 +125,15 @@ export function CreateTagModal({
               onChange={(e) => setPushToRemote(e.target.checked)}
             />
             <span>{t('createTag.pushLabel') || 'Enviar tag para o repositório remoto (push)'}</span>
+          </label>
+
+          <label className="checkbox-label">
+            <input
+              type="checkbox"
+              checked={force}
+              onChange={(e) => setForce(e.target.checked)}
+            />
+            <span>{t('createTag.forceLabel') || 'Sobrescrever / mover se a tag já existir (--force)'}</span>
           </label>
 
           <footer className="modal-actions">
