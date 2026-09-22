@@ -1,5 +1,6 @@
-import { memo, useEffect, useImperativeHandle, useRef, type ReactNode, type Ref } from 'react';
+import { memo, useEffect, useImperativeHandle, useMemo, useRef, type ReactNode, type Ref } from 'react';
 import { useVirtualizer, type VirtualItem } from '@tanstack/react-virtual';
+import { createHistoryRangeExtractor } from './historyRange';
 
 export interface HistoryListHandle {
   scrollToIndex(index: number, options: { align: 'auto' }): void;
@@ -36,11 +37,12 @@ export function VirtualHistoryList({
 }) {
   const viewportRef = useRef<HTMLDivElement>(null);
   const requestedPage = useRef<string | null>(null);
+  const rangeExtractor = useMemo(createHistoryRangeExtractor, []);
   const virtualizer = useVirtualizer({
     count,
     getScrollElement: () => viewportRef.current,
     estimateSize: () => rowHeight,
-    overscan: 12,
+    rangeExtractor,
   });
   useImperativeHandle(ref, () => ({
     scrollToIndex: (index, options) => virtualizer.scrollToIndex(index, options),

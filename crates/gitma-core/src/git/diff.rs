@@ -177,10 +177,8 @@ pub fn parse_hunks(data: &[u8]) -> Vec<DiffHunk> {
             continue;
         }
         let first = h_lines[0];
-        let (old_start, old_lines, new_start, new_lines) = match parse_hunk_header_ranges(first) {
-            Some(ranges) => ranges,
-            None => (1, 1, 1, 1),
-        };
+        let (old_start, old_lines, new_start, new_lines) =
+            parse_hunk_header_ranges(first).unwrap_or((1, 1, 1, 1));
         let mut patch = format!("{}{}\n", header, h_lines.join("\n"));
         if !patch.ends_with('\n') {
             patch.push('\n');
@@ -228,7 +226,9 @@ mod tests {
         assert_eq!(hunks[0].old_lines, 5);
         assert_eq!(hunks[0].new_start, 10);
         assert_eq!(hunks[0].new_lines, 6);
-        assert!(hunks[0].patch.starts_with("diff --git a/test.txt b/test.txt\n"));
+        assert!(hunks[0]
+            .patch
+            .starts_with("diff --git a/test.txt b/test.txt\n"));
         assert!(hunks[0].patch.contains("@@ -10,5 +10,6 @@"));
 
         assert_eq!(hunks[1].id, "hunk-1");
@@ -241,7 +241,8 @@ mod tests {
 
     #[test]
     fn test_parse_hunks_binary() {
-        let diff = b"diff --git a/logo.png b/logo.png\nBinary files a/logo.png and b/logo.png differ\n";
+        let diff =
+            b"diff --git a/logo.png b/logo.png\nBinary files a/logo.png and b/logo.png differ\n";
         let hunks = parse_hunks(diff);
         assert!(hunks.is_empty());
     }

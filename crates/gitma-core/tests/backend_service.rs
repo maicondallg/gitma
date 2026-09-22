@@ -228,3 +228,72 @@ fn reads_do_not_touch_index_and_ignored_bursts_do_not_emit() {
         .is_empty());
     backend.close(&session.session_id).unwrap();
 }
+
+#[test]
+fn hunk_operations_via_backend_service() {
+    let dir = repo();
+    let initial: String = (1..=30).map(|i| format!("line {i}\n")).collect();
+    commit(dir.path(), "code.txt", &initial, "initial");
+    let modified = initial
+        .replace("line 5\n", "line 5 MODIFIED\n")
+        .replace("line 25\n", "line 25 MODIFIED\n");
+    std::fs::write(dir.path().join("code.txt"), &modified).unwrap();
+
+    let backend = Backend::new();
+    let session = backend.open(dir.path(), |_| {}).unwrap();
+    let snap = backend.snapshot(&session.session_id, 1).unwrap();
+    assert_eq!(snap.unstaged.len(), 1);
+
+    let preview = backend
+        .file_preview(&session.session_id, 2, &snap.unstaged[0].id)
+        .unwrap();
+    assert_eq!(preview.hunks.len(), 2);
+
+    // Test staging hunk 1 (even if patch string has no trailing newline)
+    let patch_trimmed = preview.hunks[1].patch.trim().to_string();
+    let res = backend.apply_operation(
+        &session.session_id,
+        3,
+        Operation::StageHunk,
+        &[],
+        &patch_trimmed,
+    );
+    assert!(res.is_ok(), "StageHunk with trimmed patch failed: {res:?}");
+
+    let snap_after_stage = backend.snapshot(&session.session_id, 4).unwrap();
+    assert_eq!(snap_after_stage.staged.len(), 1);
+    assert_eq!(snap_after_stage.unstaged.len(), 1);
+
+    // Unstage the staged hunk
+    let staged_preview = backend
+        .file_preview(&session.session_id, 5, &snap_after_stage.staged[0].id)
+        .unwrap();
+    assert_eq!(staged_preview.hunks.len(), 1);
+    let res_unstage = backend.apply_operation(
+        &session.session_id,
+        6,
+        Operation::UnstageHunk,
+        &[],
+        &staged_preview.hunks[0].patch,
+    );
+    assert!(res_unstage.is_ok(), "UnstageHunk failed: {res_unstage:?}");
+
+    let snap_after_unstage = backend.snapshot(&session.session_id, 7).unwrap();
+    assert_eq!(snap_after_unstage.staged.len(), 0);
+    assert_eq!(snap_after_unstage.unstaged.len(), 1);
+
+    // Discard hunk 0
+    let unstaged_preview = backend
+        .file_preview(&session.session_id, 8, &snap_after_unstage.unstaged[0].id)
+        .unwrap();
+    let res_discard = backend.apply_operation(
+        &session.session_id,
+        9,
+        Operation::DiscardHunk,
+        &[],
+        &unstaged_preview.hunks[0].patch,
+    );
+    assert!(res_discard.is_ok(), "DiscardHunk failed: {res_discard:?}");
+
+    backend.close(&session.session_id).unwrap();
+}

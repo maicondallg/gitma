@@ -919,7 +919,7 @@ export const GraphPanel = memo(function GraphPanel() {
                     <span className="lists-meta-dash">—</span>
                   </div>
                   <div className="lists-col-divider" />
-                  <div className="lists-col-author" style={{ width: `${authorWidth}px` }}>
+                  <div className="lists-col-author" style={{ width: `${authorWidth}px` }} title={t('history.uncommittedWorkingTree')}>
                     <span className="lists-meta-dash">{t('history.uncommittedWorkingTree')}</span>
                   </div>
                   <div className="lists-col-divider" />

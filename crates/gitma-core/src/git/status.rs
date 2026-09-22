@@ -131,12 +131,7 @@ pub fn parse_commit_names(data: &[u8]) -> Vec<ChangedFile> {
             }
             _ => (FileStatus::Modified, first, None, 2),
         };
-        result.push(ChangedFile::new(
-            path,
-            old_path,
-            status,
-            FileArea::Commit,
-        ));
+        result.push(ChangedFile::new(path, old_path, status, FileArea::Commit));
         i += consumed;
     }
     result
@@ -161,8 +156,16 @@ pub fn parse_numstat_z(data: &[u8]) -> std::collections::HashMap<PathBuf, FileNu
             let del_str = parts[1];
             let path_part = parts[2];
             let is_binary = ins_str == "-" || del_str == "-";
-            let insertions = if is_binary { None } else { ins_str.parse().ok() };
-            let deletions = if is_binary { None } else { del_str.parse().ok() };
+            let insertions = if is_binary {
+                None
+            } else {
+                ins_str.parse().ok()
+            };
+            let deletions = if is_binary {
+                None
+            } else {
+                del_str.parse().ok()
+            };
             let stat = FileNumstat {
                 insertions,
                 deletions,

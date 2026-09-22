@@ -528,7 +528,10 @@ impl Backend {
         let state = self.session(session_id)?;
         let _read = state.coordinator.read().expect("coordinator lock poisoned");
         {
-            let cache = state.commit_cache.lock().expect("commit_cache lock poisoned");
+            let cache = state
+                .commit_cache
+                .lock()
+                .expect("commit_cache lock poisoned");
             if let Some(cached) = cache.get(oid) {
                 let mut result = cached.clone();
                 result.request_id = request_id;
@@ -565,7 +568,10 @@ impl Backend {
             details,
         };
         {
-            let mut cache = state.commit_cache.lock().expect("commit_cache lock poisoned");
+            let mut cache = state
+                .commit_cache
+                .lock()
+                .expect("commit_cache lock poisoned");
             if cache.len() > 500 {
                 cache.clear();
             }
@@ -771,22 +777,22 @@ impl Backend {
                 state.repo.discard_all_unstaged()?;
             }
             Operation::StageHunk => {
-                let patch = message.trim();
-                if patch.is_empty() {
+                let patch = message;
+                if patch.trim().is_empty() {
                     return Err(invalid("O conteúdo do patch é obrigatório"));
                 }
                 state.repo.apply_patch(patch, PatchTarget::Stage)?;
             }
             Operation::UnstageHunk => {
-                let patch = message.trim();
-                if patch.is_empty() {
+                let patch = message;
+                if patch.trim().is_empty() {
                     return Err(invalid("O conteúdo do patch é obrigatório"));
                 }
                 state.repo.apply_patch(patch, PatchTarget::Unstage)?;
             }
             Operation::DiscardHunk => {
-                let patch = message.trim();
-                if patch.is_empty() {
+                let patch = message;
+                if patch.trim().is_empty() {
                     return Err(invalid("O conteúdo do patch é obrigatório"));
                 }
                 state.repo.apply_patch(patch, PatchTarget::Discard)?;
@@ -824,13 +830,24 @@ impl Backend {
                     path: Option<String>,
                     choice: String,
                 }
-                let (path, choice) = if let Ok(params) = serde_json::from_str::<ResolveParams>(message) {
-                    let p = params.path.or_else(|| files.first().map(|f| f.file.path.to_string_lossy().into_owned())).unwrap_or_default();
-                    (p, params.choice)
-                } else {
-                    let p = files.first().map(|f| f.file.path.to_string_lossy().into_owned()).unwrap_or_default();
-                    (p, message.trim().to_string())
-                };
+                let (path, choice) =
+                    if let Ok(params) = serde_json::from_str::<ResolveParams>(message) {
+                        let p = params
+                            .path
+                            .or_else(|| {
+                                files
+                                    .first()
+                                    .map(|f| f.file.path.to_string_lossy().into_owned())
+                            })
+                            .unwrap_or_default();
+                        (p, params.choice)
+                    } else {
+                        let p = files
+                            .first()
+                            .map(|f| f.file.path.to_string_lossy().into_owned())
+                            .unwrap_or_default();
+                        (p, message.trim().to_string())
+                    };
                 if path.is_empty() {
                     return Err(invalid("O caminho do arquivo com conflito é obrigatório"));
                 }
@@ -848,7 +865,9 @@ impl Backend {
                 if params.name.trim().is_empty() || params.url.trim().is_empty() {
                     return Err(invalid("Nome e URL do remote são obrigatórios"));
                 }
-                state.repo.add_remote(params.name.trim(), params.url.trim())?;
+                state
+                    .repo
+                    .add_remote(params.name.trim(), params.url.trim())?;
             }
             Operation::RemoveRemote => {
                 reject_files(file_ids)?;
@@ -870,7 +889,9 @@ impl Backend {
                 if params.name.trim().is_empty() || params.url.trim().is_empty() {
                     return Err(invalid("Nome e URL do remote são obrigatórios"));
                 }
-                state.repo.set_remote_url(params.name.trim(), params.url.trim())?;
+                state
+                    .repo
+                    .set_remote_url(params.name.trim(), params.url.trim())?;
             }
             Operation::FetchPrune => {
                 reject_files(file_ids)?;
@@ -957,9 +978,10 @@ impl Backend {
                         strategy: Option<String>,
                     }
                     if let Ok(params) = serde_json::from_str::<MergeParams>(raw) {
-                        state
-                            .repo
-                            .merge_branch_with_strategy(params.branch.trim(), params.strategy.as_deref())?;
+                        state.repo.merge_branch_with_strategy(
+                            params.branch.trim(),
+                            params.strategy.as_deref(),
+                        )?;
                     } else {
                         state.repo.merge_branch(raw)?;
                     }
@@ -1091,7 +1113,13 @@ impl Backend {
                 }
                 let (name, oid, msg, push, force) =
                     if let Ok(params) = serde_json::from_str::<CreateTagParams>(message) {
-                        (params.name, params.oid, params.message, params.push, params.force)
+                        (
+                            params.name,
+                            params.oid,
+                            params.message,
+                            params.push,
+                            params.force,
+                        )
                     } else {
                         (message.trim().to_string(), None, None, false, false)
                     };
@@ -1153,10 +1181,7 @@ impl Backend {
                                 .get("remote")
                                 .and_then(|v| v.as_str())
                                 .map(|s| s.to_string());
-                            let force = obj
-                                .get("force")
-                                .and_then(|v| v.as_bool())
-                                .unwrap_or(false);
+                            let force = obj.get("force").and_then(|v| v.as_bool()).unwrap_or(false);
                             (name, remote, force)
                         } else if let Some(s) = val.as_str() {
                             (s.to_string(), None, false)
@@ -1169,9 +1194,7 @@ impl Backend {
                 if name.trim().is_empty() {
                     return Err(invalid("O nome da tag é obrigatório"));
                 }
-                state
-                    .repo
-                    .push_tag(name.trim(), remote.as_deref(), force)?;
+                state.repo.push_tag(name.trim(), remote.as_deref(), force)?;
             }
             Operation::Rebase => {
                 reject_files(file_ids)?;
@@ -1329,7 +1352,7 @@ fn register_files(
         .map(|file| {
             let key = FileKey {
                 context: context.clone(),
-                area: file.area.clone(),
+                area: file.area,
                 path: file.path.clone(),
                 old_path: file.old_path.clone(),
             };
@@ -1531,7 +1554,10 @@ fn cached_history_page(
     page: usize,
     all_branches: bool,
 ) -> Result<GraphLayout, AppError> {
-    let composite_key = format!("{history_key}:{}", if all_branches { "all" } else { "head" });
+    let composite_key = format!(
+        "{history_key}:{}",
+        if all_branches { "all" } else { "head" }
+    );
     let mut cache = state.history.lock().expect("history cache lock poisoned");
     if cache.key != composite_key {
         *cache = HistoryCache {
@@ -1542,7 +1568,9 @@ fn cached_history_page(
     }
     while cache.layouts.len() <= page && !cache.exhausted {
         let current = cache.layouts.len();
-        let source = state.repo.history_scoped(current, HISTORY_PAGE_SIZE, all_branches)?;
+        let source = state
+            .repo
+            .history_scoped(current, HISTORY_PAGE_SIZE, all_branches)?;
         let incoming = cache.lanes.last().cloned().unwrap_or_default();
         let (layout, next_lanes) = layout_page(&source, &incoming);
         cache.exhausted = !layout.has_more;
@@ -1562,9 +1590,9 @@ fn snapshot_fingerprint(snapshot: &RepoSnapshot, history_key: &str) -> String {
     hash.update((snapshot.behind.unwrap_or(0) as u64).to_le_bytes());
     hash.update([snapshot.conflicted as u8]);
     for file in snapshot.staged.iter().chain(&snapshot.unstaged) {
-        hash.update(area_name(file.area.clone()).as_bytes());
+        hash.update(area_name(file.area).as_bytes());
         hash.update([0]);
-        hash.update(status_name(file.status.clone()).as_bytes());
+        hash.update(status_name(file.status).as_bytes());
         hash.update([0]);
         hash_native_path(&mut hash, &file.path);
         hash_native_path(

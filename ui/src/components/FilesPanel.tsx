@@ -789,29 +789,7 @@ export function FilesPanel() {
     >
       <header className="lists-panel-header">
         <h2>{local ? t('files.localChanges') : t('files.commitFiles')}</h2>
-        <div className="panel-header-actions">
-          <div className="view-mode-switch" role="group" aria-label="Modo de visualização dos arquivos">
-            <button
-              type="button"
-              className={!isTree ? 'active' : ''}
-              onClick={() => setFileViewMode('flat')}
-              title={t('files.flatList')}
-              aria-label={t('files.flatList')}
-            >
-              <List size={13} />
-            </button>
-            <button
-              type="button"
-              className={isTree ? 'active' : ''}
-              onClick={() => setFileViewMode('tree')}
-              title={t('files.treeList')}
-              aria-label={t('files.treeList')}
-            >
-              <FolderTree size={13} />
-            </button>
-          </div>
-          <span>{totalCount}</span>
-        </div>
+        {local && <span className="lists-header-count">{totalCount}</span>}
       </header>
 
       {context.kind === 'compare' && (
@@ -859,7 +837,6 @@ export function FilesPanel() {
                 <User size={12} className="commit-meta-icon" />
                 <strong>{selectedCommit.author}</strong>
               </span>
-              <span className="commit-info-meta-sep">•</span>
               <time
                 className="commit-info-date"
                 dateTime={new Date(selectedCommit.timestamp * 1000).toISOString()}
@@ -873,14 +850,14 @@ export function FilesPanel() {
 
           {commitDetails && (commitDetails.committerName !== commitDetails.authorName || commitDetails.committerTimestamp !== commitDetails.authorTimestamp) && (
             <div className="commit-info-committer" title={`${commitDetails.committerName} <${commitDetails.committerEmail}>`}>
-              <span className="commit-info-committer-label">{t('files.committer')}:</span>
+              <span className="commit-info-committer-label">{t('files.committer')}</span>
               <strong>{commitDetails.committerName}</strong>
             </div>
           )}
 
           {commitDetails?.parents && commitDetails.parents.length > 0 && (
             <div className="commit-info-parents">
-              <span className="commit-info-parents-label">{t('files.parents')}:</span>
+              <span className="commit-info-parents-label">{t('files.parents')}</span>
               <div className="commit-info-parents-list">
                 {commitDetails.parents.map((parent) => (
                   <button
@@ -903,27 +880,28 @@ export function FilesPanel() {
             </div>
           )}
 
-          {computedCommitStats && (
-            <div className="commit-info-stats">
-              <span className="commit-stats-summary">
-                {t('files.statsSummary', { count: computedCommitStats.filesChanged })}
-              </span>
-              <div className="commit-stats-badges">
-                {computedCommitStats.insertions > 0 && (
-                  <span className="stat-badge stat-badge-ins">
-                    +{computedCommitStats.insertions}
-                  </span>
-                )}
-                {computedCommitStats.deletions > 0 && (
-                  <span className="stat-badge stat-badge-del">
-                    -{computedCommitStats.deletions}
-                  </span>
-                )}
-              </div>
-            </div>
-          )}
         </div>
       )}
+
+      <div className="commit-files-toolbar">
+        <span className="commit-files-count">{t('files.statsSummary', { count: totalCount })}</span>
+        <div className="commit-files-toolbar-actions">
+          {!local && computedCommitStats && (
+            <div className="commit-stats-badges">
+              {computedCommitStats.insertions > 0 && <span className="stat-badge stat-badge-ins">+{computedCommitStats.insertions}</span>}
+              {computedCommitStats.deletions > 0 && <span className="stat-badge stat-badge-del">-{computedCommitStats.deletions}</span>}
+            </div>
+          )}
+          <div className="view-mode-switch" role="group" aria-label="Modo de visualização dos arquivos">
+            <button type="button" className={!isTree ? 'active' : ''} onClick={() => setFileViewMode('flat')} title={t('files.flatList')} aria-label={t('files.flatList')}>
+              <List size={13} />
+            </button>
+            <button type="button" className={isTree ? 'active' : ''} onClick={() => setFileViewMode('tree')} title={t('files.treeList')} aria-label={t('files.treeList')}>
+              <FolderTree size={13} />
+            </button>
+          </div>
+        </div>
+      </div>
 
       {local ? (
         <>
@@ -1007,4 +985,3 @@ export function FilesPanel() {
     </section>
   );
 }
-

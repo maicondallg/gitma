@@ -19,7 +19,7 @@ import { languageForPath, monaco } from '../lib/monaco';
 import { useI18n } from '../i18n';
 import { applyTheme, getThemeById, getActiveThemeId } from '../lib/theme';
 import { getBridge } from '../lib/bridge';
-import type { BlameLine } from '../lib/types';
+import type { BlameLine, DiffHunk } from '../lib/types';
 import { formatFullDate } from './FilesPanel';
 
 function formatDateShort(timestamp: number): string {
@@ -27,6 +27,25 @@ function formatDateShort(timestamp: number): string {
   const d = new Date(timestamp * 1000);
   const pad = (n: number) => n.toString().padStart(2, '0');
   return `${pad(d.getDate())}/${pad(d.getMonth() + 1)}`;
+}
+
+function parseHunkDisplayInfo(hunk?: DiffHunk) {
+  if (!hunk) return { rangeText: '', scopeText: '', isSingle: false };
+
+  const rawHeader = hunk.header || '';
+  const start = hunk.newLines > 0 ? hunk.newStart : hunk.oldStart;
+  const count = hunk.newLines > 0 ? hunk.newLines : hunk.oldLines;
+  const end = start + Math.max(1, count) - 1;
+  const isSingle = count <= 1;
+  const rangeText = isSingle ? `${start}` : `${start}–${end}`;
+
+  let scopeText = '';
+  const secondAt = rawHeader.indexOf('@@', 2);
+  if (secondAt !== -1) {
+    scopeText = rawHeader.substring(secondAt + 2).trim();
+  }
+
+  return { rangeText, scopeText, isSingle };
 }
 
 export function DiffPanel() {
@@ -152,6 +171,7 @@ export function DiffPanel() {
       ignoreTrimWhitespace: false,
       renderMarginRevertIcon: false,
       lineNumbers: 'on',
+      lineDecorationsWidth: 18,
       lineHeight: 20,
       fontSize: 13,
       wordWrap: 'off',
@@ -179,7 +199,7 @@ export function DiffPanel() {
       if (!hunks || hunks.length === 0) return;
       const line = e.position.lineNumber;
       const idx = hunks.findIndex(
-        (h) => line >= h.newStart && line <= h.newStart + Math.max(1, h.newLines)
+        (h) => line >= h.newStart && line <= h.newStart + Math.max(1, h.newLines) - 1
       );
       if (idx !== -1) {
         setCurrentHunkIndex(idx);
@@ -212,6 +232,61 @@ export function DiffPanel() {
       },
     });
   }, [compactDiff]);
+
+  useEffect(() => {
+    const hunk = preview?.hunks?.[currentHunkIndex];
+    const diffEditor = editor.current;
+    const panel = host.current;
+    const modified = diffEditor?.getModifiedEditor();
+    if (!hunk || !panel || !diffEditor || !modified) return;
+
+    const highlight = document.createElement('div');
+    highlight.className = 'diff-hunk-highlight';
+    highlight.setAttribute('aria-hidden', 'true');
+    panel.appendChild(highlight);
+
+    const update = () => {
+      const editorNode = modified.getDomNode?.();
+      if (!editorNode || !modified.getModel?.()) {
+        highlight.style.display = 'none';
+        return;
+      }
+      const panelRect = panel.getBoundingClientRect();
+      const editorRect = editorNode.getBoundingClientRect();
+      const startLine = Math.max(1, hunk.newStart);
+      const endLine = Math.max(startLine, hunk.newStart + Math.max(1, hunk.newLines) - 1);
+      const editorTop = editorRect.top - panelRect.top - modified.getScrollTop();
+      const top = editorTop + modified.getTopForLineNumber(startLine);
+      const bottom = editorTop + modified.getBottomForLineNumber(endLine);
+      const visibleTop = Math.max(0, top);
+      const visibleBottom = Math.min(panelRect.height, bottom);
+      const isVisible = visibleBottom > visibleTop;
+      highlight.style.display = isVisible ? '' : 'none';
+      highlight.style.left = `${diffMode === 'split' ? editorRect.left - panelRect.left : 0}px`;
+      highlight.style.top = `${visibleTop}px`;
+      highlight.style.height = `${Math.max(0, visibleBottom - visibleTop)}px`;
+      highlight.classList.toggle('has-start', top >= 0);
+      highlight.classList.toggle('has-end', bottom <= panelRect.height);
+    };
+
+    const subscriptions = [
+      modified.onDidScrollChange(update),
+      modified.onDidLayoutChange(update),
+      modified.onDidChangeHiddenAreas(update),
+      modified.onDidChangeModel(update),
+      diffEditor.onDidUpdateDiff(update),
+    ];
+    const resizeObserver = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(update) : null;
+    resizeObserver?.observe(panel);
+    update();
+    const frame = requestAnimationFrame(update);
+    return () => {
+      cancelAnimationFrame(frame);
+      subscriptions.forEach((subscription) => subscription.dispose());
+      resizeObserver?.disconnect();
+      highlight.remove();
+    };
+  }, [preview?.hunks, preview?.version, currentHunkIndex, diffMode]);
 
   useEffect(() => {
     if (!blameOpen || !selectedFile || !session) {
@@ -444,14 +519,37 @@ export function DiffPanel() {
         <div className="diff-hunk-bar" role="toolbar" aria-label="Navegação de blocos">
           <div className="diff-hunk-info">
             <span className="hunk-badge">
-              {t('diff.hunkCount', {
+              {t('diff.hunkBadge', {
                 current: Math.min(currentHunkIndex + 1, preview.hunks.length),
                 total: preview.hunks.length,
+                defaultValue: t('diff.hunkCount', {
+                  current: Math.min(currentHunkIndex + 1, preview.hunks.length),
+                  total: preview.hunks.length,
+                }),
               })}
             </span>
-            <span className="hunk-lines" title={preview.hunks[currentHunkIndex]?.header}>
-              {preview.hunks[currentHunkIndex]?.header}
-            </span>
+            {(() => {
+              const currentHunk = preview.hunks[currentHunkIndex];
+              const info = parseHunkDisplayInfo(currentHunk);
+              const tooltip = info.scopeText
+                ? `${t('diff.hunkLocationTooltip', { range: info.isSingle ? t('diff.hunkSingleLine', { line: info.rangeText }) : t('diff.hunkLines', { range: info.rangeText }) })} (${info.scopeText})`
+                : t('diff.hunkLocationTooltip', { range: info.isSingle ? t('diff.hunkSingleLine', { line: info.rangeText }) : t('diff.hunkLines', { range: info.rangeText }) });
+              return (
+                <span className="hunk-lines" title={tooltip}>
+                  <span className="hunk-range-pill">
+                    {info.isSingle
+                      ? t('diff.hunkSingleLine', { line: info.rangeText })
+                      : t('diff.hunkLines', { range: info.rangeText })}
+                  </span>
+                  {info.scopeText && (
+                    <span className="hunk-scope-pill" title={info.scopeText}>
+                      <span className="hunk-scope-prefix">{t('diff.hunkScopePrefix')}:</span>
+                      {info.scopeText}
+                    </span>
+                  )}
+                </span>
+              );
+            })()}
           </div>
           <div className="diff-hunk-nav">
             <button
@@ -670,4 +768,3 @@ export function DiffPanel() {
     </section>
   );
 }
-

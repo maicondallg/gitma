@@ -742,7 +742,8 @@ fn tag_operations_create_and_delete() {
     let head_oid = repo.history(0, 1).unwrap().commits[0].oid.clone();
 
     // 1. Create lightweight tag
-    repo.create_tag("v1.0.0", Some(&head_oid), None, false).unwrap();
+    repo.create_tag("v1.0.0", Some(&head_oid), None, false)
+        .unwrap();
     let hist = repo.history(0, 1).unwrap();
     assert!(hist.commits[0].refs.iter().any(|r| r.contains("v1.0.0")));
 
@@ -764,19 +765,26 @@ fn tag_operations_create_and_delete() {
     assert!(!hist4.commits[0].refs.iter().any(|r| r.contains("v1.1.0")));
 
     // 5. Delete tag via JSON string (fallback handling)
-    repo.create_tag("v1.2.0", Some(&head_oid), None, false).unwrap();
-    repo.delete_tag(r#"{"name":"v1.2.0","deleteRemote":{}}"#, false, None).unwrap();
+    repo.create_tag("v1.2.0", Some(&head_oid), None, false)
+        .unwrap();
+    repo.delete_tag(r#"{"name":"v1.2.0","deleteRemote":{}}"#, false, None)
+        .unwrap();
     let hist5 = repo.history(0, 1).unwrap();
     assert!(!hist5.commits[0].refs.iter().any(|r| r.contains("v1.2.0")));
 
     // 6. Test tag force move
     commit_file(dir.path(), "file2.txt", "second\n", "second commit");
     let second_oid = repo.history(0, 1).unwrap().commits[0].oid.clone();
-    repo.create_tag("v1.3.0", Some(&head_oid), None, false).unwrap();
+    repo.create_tag("v1.3.0", Some(&head_oid), None, false)
+        .unwrap();
     // Overwriting without force should fail
-    assert!(repo.create_tag("v1.3.0", Some(&second_oid), None, false).is_err());
+    assert!(repo
+        .create_tag("v1.3.0", Some(&second_oid), None, false)
+        .is_err());
     // Overwriting with force should succeed
-    assert!(repo.create_tag("v1.3.0", Some(&second_oid), None, true).is_ok());
+    assert!(repo
+        .create_tag("v1.3.0", Some(&second_oid), None, true)
+        .is_ok());
     let hist6 = repo.history(0, 1).unwrap();
     assert!(hist6.commits[0].refs.iter().any(|r| r.contains("v1.3.0")));
 }
@@ -812,7 +820,8 @@ fn tag_operations_checkout_and_push() {
     let head_oid = repo.history(0, 1).unwrap().commits[0].oid.clone();
 
     // Create tag
-    repo.create_tag("v2.0.0", Some(&head_oid), None, false).unwrap();
+    repo.create_tag("v2.0.0", Some(&head_oid), None, false)
+        .unwrap();
 
     // Checkout tag with 'tag: ' prefix (detached HEAD)
     repo.checkout_branch("tag: v2.0.0").unwrap();
@@ -962,7 +971,8 @@ fn hunk_staging_and_discard_workflows() {
     assert!(hunks[1].header.contains("@@"));
 
     // Stage only hunk 1 (the line 45 modification)
-    repo.apply_patch(&hunks[1].patch, PatchTarget::Stage).unwrap();
+    repo.apply_patch(&hunks[1].patch, PatchTarget::Stage)
+        .unwrap();
 
     let snap_after_stage = repo.snapshot().unwrap();
     assert_eq!(snap_after_stage.staged.len(), 1);
@@ -973,7 +983,8 @@ fn hunk_staging_and_discard_workflows() {
     assert_eq!(unstaged_hunks.len(), 1);
 
     // Discard unstaged hunk 0 (line 5)
-    repo.apply_patch(&unstaged_hunks[0].patch, PatchTarget::Discard).unwrap();
+    repo.apply_patch(&unstaged_hunks[0].patch, PatchTarget::Discard)
+        .unwrap();
 
     let snap_after_discard = repo.snapshot().unwrap();
     assert_eq!(snap_after_discard.unstaged.len(), 0);
@@ -982,7 +993,8 @@ fn hunk_staging_and_discard_workflows() {
     // Unstage the staged hunk
     let staged_hunks = repo.file_hunks(&snap_after_discard.staged[0]).unwrap();
     assert_eq!(staged_hunks.len(), 1);
-    repo.apply_patch(&staged_hunks[0].patch, PatchTarget::Unstage).unwrap();
+    repo.apply_patch(&staged_hunks[0].patch, PatchTarget::Unstage)
+        .unwrap();
 
     let snap_after_unstage = repo.snapshot().unwrap();
     assert_eq!(snap_after_unstage.staged.len(), 0);
@@ -1068,15 +1080,20 @@ fn remote_management_and_arbitrary_compare_work() {
     assert_eq!(diff_files[0].insertions, Some(1));
 
     // 2. Remote management
-    repo.add_remote("origin", "https://github.com/example/repo.git").unwrap();
+    repo.add_remote("origin", "https://github.com/example/repo.git")
+        .unwrap();
     let remotes = repo.get_remotes().unwrap();
     assert_eq!(remotes.len(), 1);
     assert_eq!(remotes[0].name, "origin");
     assert_eq!(remotes[0].fetch_url, "https://github.com/example/repo.git");
 
-    repo.set_remote_url("origin", "https://github.com/example/updated.git").unwrap();
+    repo.set_remote_url("origin", "https://github.com/example/updated.git")
+        .unwrap();
     let remotes_updated = repo.get_remotes().unwrap();
-    assert_eq!(remotes_updated[0].fetch_url, "https://github.com/example/updated.git");
+    assert_eq!(
+        remotes_updated[0].fetch_url,
+        "https://github.com/example/updated.git"
+    );
 
     repo.remove_remote("origin").unwrap();
     let remotes_empty = repo.get_remotes().unwrap();
@@ -1106,5 +1123,3 @@ fn conflict_resolution_operations_work() {
     let content = std::fs::read_to_string(dir.path().join("shared.txt")).unwrap();
     assert_eq!(content, "line 1 main\n");
 }
-
-

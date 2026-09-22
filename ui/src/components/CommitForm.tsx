@@ -93,20 +93,29 @@ export function CommitForm() {
       />
 
       <div className="lists-commit-footer">
-        <span className="lists-character-count">{value.length} {t('commit.characters')}</span>
+        <span className="lists-character-count" title={`${value.length} ${t('commit.characters')}`}>
+          <span className="lists-character-count-full">{value.length} {t('commit.characters')}</span>
+          <span className="lists-character-count-short" aria-hidden="true">{value.length} {t('commit.charactersShort')}</span>
+          <span className="lists-character-count-num" aria-hidden="true">{value.length}</span>
+        </span>
         <button
           type="submit"
           disabled={disabled}
           className={isAmend ? 'btn-amend' : ''}
+          aria-label={isAmend ? t('commit.buttonAmend') : t('commit.buttonCommit')}
           title={
             conflicted
               ? t('commit.conflictNotice')
               : stagedCount === 0 && !isAmend
               ? t('commit.noFilesNotice')
-              : undefined
+              : `${isAmend ? t('commit.buttonAmend') : t('commit.buttonCommit')} (Ctrl+Enter)`
           }
         >
-          {isAmend ? t('commit.buttonAmend') : t('commit.buttonCommit')} <kbd>Ctrl</kbd><kbd>↵</kbd>
+          <span className="lists-commit-btn-label-full">{isAmend ? t('commit.buttonAmend') : t('commit.buttonCommit')}</span>
+          <span className="lists-commit-btn-label-short" aria-hidden="true">{isAmend ? t('commit.buttonAmendShort') : t('commit.buttonCommitShort')}</span>
+          <span className="lists-commit-shortcut" aria-hidden="true">
+            <kbd>Ctrl</kbd><kbd>↵</kbd>
+          </span>
         </button>
       </div>
     </form>

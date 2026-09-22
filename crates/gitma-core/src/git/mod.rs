@@ -58,10 +58,9 @@ impl GitRepository {
         }
 
         if !unstaged.is_empty() {
-            if let Ok(unstaged_numstat) = runner::read(
-                &self.context.root,
-                &["diff", "--numstat", "-M", "-z"],
-            ) {
+            if let Ok(unstaged_numstat) =
+                runner::read(&self.context.root, &["diff", "--numstat", "-M", "-z"])
+            {
                 let numstat_map = status::parse_numstat_z(&unstaged_numstat);
                 for f in &mut unstaged {
                     if let Some(stat) = numstat_map
@@ -74,11 +73,22 @@ impl GitRepository {
                     } else if f.status == FileStatus::Untracked {
                         let full_path = self.context.root.join(&f.path);
                         if let Ok(metadata) = std::fs::metadata(&full_path) {
-                            if metadata.is_file() && metadata.len() <= diff::DEFAULT_MAX_BYTES as u64 {
+                            if metadata.is_file()
+                                && metadata.len() <= diff::DEFAULT_MAX_BYTES as u64
+                            {
                                 if let Ok(content) = std::fs::read(&full_path) {
                                     if !content.contains(&0) {
                                         let lines = content.iter().filter(|&&b| b == b'\n').count();
-                                        f.insertions = Some(lines + if !content.is_empty() && !content.ends_with(b"\n") { 1 } else { 0 });
+                                        f.insertions = Some(
+                                            lines
+                                                + if !content.is_empty()
+                                                    && !content.ends_with(b"\n")
+                                                {
+                                                    1
+                                                } else {
+                                                    0
+                                                },
+                                        );
                                         f.deletions = Some(0);
                                     } else {
                                         f.is_binary = true;
@@ -148,7 +158,12 @@ impl GitRepository {
     pub fn history(&self, page_no: usize, page_size: usize) -> GitResult<HistoryPage> {
         self.history_scoped(page_no, page_size, true)
     }
-    pub fn history_scoped(&self, page_no: usize, page_size: usize, all_branches: bool) -> GitResult<HistoryPage> {
+    pub fn history_scoped(
+        &self,
+        page_no: usize,
+        page_size: usize,
+        all_branches: bool,
+    ) -> GitResult<HistoryPage> {
         let n = page_size.saturating_add(16).to_string();
         let skip = page_no.saturating_mul(page_size).to_string();
         let head_exists =
@@ -343,7 +358,11 @@ impl GitRepository {
 
         Ok(files)
     }
-    pub fn files_between_commits(&self, base_oid: &str, target_oid: &str) -> GitResult<Vec<ChangedFile>> {
+    pub fn files_between_commits(
+        &self,
+        base_oid: &str,
+        target_oid: &str,
+    ) -> GitResult<Vec<ChangedFile>> {
         let rev_range = format!("{}..{}", base_oid.trim(), target_oid.trim());
         let raw = runner::read(
             &self.context.root,
@@ -363,14 +382,7 @@ impl GitRepository {
 
         if let Ok(numstat_raw) = runner::read(
             &self.context.root,
-            &[
-                "diff",
-                "--numstat",
-                "-M",
-                "-C",
-                "-z",
-                &rev_range,
-            ],
+            &["diff", "--numstat", "-M", "-C", "-z", &rev_range],
         ) {
             let numstat_map = status::parse_numstat_z(&numstat_raw);
             for f in &mut files {
@@ -559,7 +571,11 @@ impl GitRepository {
     pub fn merge_branch(&self, branch: &str) -> GitResult<String> {
         operations::merge_branch(&self.context.root, branch)
     }
-    pub fn merge_branch_with_strategy(&self, branch: &str, strategy: Option<&str>) -> GitResult<String> {
+    pub fn merge_branch_with_strategy(
+        &self,
+        branch: &str,
+        strategy: Option<&str>,
+    ) -> GitResult<String> {
         operations::merge_branch_with_strategy(&self.context.root, branch, strategy)
     }
     pub fn delete_branch(&self, branch: &str, force: bool) -> GitResult<()> {
@@ -689,10 +705,18 @@ impl GitRepository {
     pub fn commit_details(&self, oid: &str) -> GitResult<CommitDetails> {
         operations::commit_details(&self.context.root, oid)
     }
-    pub fn file_blame(&self, rel_path: &str, commit_oid: Option<&str>) -> GitResult<Vec<BlameLine>> {
+    pub fn file_blame(
+        &self,
+        rel_path: &str,
+        commit_oid: Option<&str>,
+    ) -> GitResult<Vec<BlameLine>> {
         operations::file_blame(&self.context.root, rel_path, commit_oid)
     }
-    pub fn file_history(&self, rel_path: &str, max_count: usize) -> GitResult<Vec<FileHistoryEntry>> {
+    pub fn file_history(
+        &self,
+        rel_path: &str,
+        max_count: usize,
+    ) -> GitResult<Vec<FileHistoryEntry>> {
         operations::file_history(&self.context.root, rel_path, max_count)
     }
     pub fn reflog(&self, max_count: usize) -> GitResult<Vec<ReflogEntry>> {

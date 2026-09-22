@@ -55,7 +55,12 @@ pub struct ChangedFile {
 }
 
 impl ChangedFile {
-    pub fn new(path: PathBuf, old_path: Option<PathBuf>, status: FileStatus, area: FileArea) -> Self {
+    pub fn new(
+        path: PathBuf,
+        old_path: Option<PathBuf>,
+        status: FileStatus,
+        area: FileArea,
+    ) -> Self {
         Self {
             path,
             old_path,

@@ -151,6 +151,16 @@ describe('listas de alterações', () => {
     expect(actions.runOperation).toHaveBeenCalledWith('commit')
   })
 
+  it('renderiza botão de commit e contagem de caracteres com spans responsivos', () => {
+    useAppStore.setState(state({ commitMessage: 'hello' }))
+    render(<CommitForm />)
+
+    expect(screen.getByText('Criar commit')).toHaveClass('lists-commit-btn-label-full')
+    expect(screen.getByText('Commit')).toHaveClass('lists-commit-btn-label-short')
+    expect(screen.getByText('5 caracteres')).toHaveClass('lists-character-count-full')
+    expect(screen.getByText('5 carac.')).toHaveClass('lists-character-count-short')
+  })
+
   it('permite marcar amend, preenche mensagem anterior e submete commitAmend', () => {
     const lastCommit = { oid: 'c111', parents: [], refs: ['main'], author: 'Ana', timestamp: 1000, subject: 'Mensagem do commit anterior' }
     useAppStore.setState(state({

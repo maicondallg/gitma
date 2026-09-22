@@ -185,7 +185,11 @@ pub fn merge_branch(root: &Path, branch: &str) -> GitResult<String> {
     merge_branch_with_strategy(root, branch, None)
 }
 
-pub fn merge_branch_with_strategy(root: &Path, branch: &str, strategy: Option<&str>) -> GitResult<String> {
+pub fn merge_branch_with_strategy(
+    root: &Path,
+    branch: &str,
+    strategy: Option<&str>,
+) -> GitResult<String> {
     let out = match strategy {
         Some("no-ff") => mutate(root, &["merge", "--no-ff", "--no-edit", branch])?,
         Some("ff-only") => mutate(root, &["merge", "--ff-only", branch])?,
@@ -470,12 +474,7 @@ pub fn delete_tag(
     }
 }
 
-pub fn push_tag(
-    root: &Path,
-    tag: &str,
-    remote: Option<&str>,
-    force: bool,
-) -> GitResult<String> {
+pub fn push_tag(root: &Path, tag: &str, remote: Option<&str>, force: bool) -> GitResult<String> {
     let mut trimmed = tag.trim();
     if let Some(stripped) = trimmed.strip_prefix("tag: ") {
         trimmed = stripped.trim();
@@ -670,6 +669,7 @@ pub fn apply_patch(root: &Path, patch: &str, target: PatchTarget) -> GitResult<(
         PatchTarget::Stage => &[
             "apply",
             "--cached",
+            "--ignore-whitespace",
             "--whitespace=nowarn",
             "--unidiff-zero",
             "--recount",
@@ -679,6 +679,7 @@ pub fn apply_patch(root: &Path, patch: &str, target: PatchTarget) -> GitResult<(
             "apply",
             "--cached",
             "--reverse",
+            "--ignore-whitespace",
             "--whitespace=nowarn",
             "--unidiff-zero",
             "--recount",
@@ -687,13 +688,18 @@ pub fn apply_patch(root: &Path, patch: &str, target: PatchTarget) -> GitResult<(
         PatchTarget::Discard => &[
             "apply",
             "--reverse",
+            "--ignore-whitespace",
             "--whitespace=nowarn",
             "--unidiff-zero",
             "--recount",
             "-",
         ],
     };
-    super::runner::mutate_with_stdin(root, args, patch.as_bytes()).map(|_| ())
+    let mut patch_bytes = patch.as_bytes().to_vec();
+    if !patch_bytes.is_empty() && !patch_bytes.ends_with(b"\n") {
+        patch_bytes.push(b'\n');
+    }
+    super::runner::mutate_with_stdin(root, args, &patch_bytes).map(|_| ())
 }
 
 pub fn add_to_gitignore(root: &Path, pattern: &str) -> GitResult<()> {
@@ -723,7 +729,9 @@ pub fn add_to_gitignore(root: &Path, pattern: &str) -> GitResult<()> {
 }
 
 pub fn open_terminal(root: &Path, custom_terminal: Option<&str>) -> GitResult<()> {
-    let custom = custom_terminal.map(str::trim).filter(|s| !s.is_empty() && *s != "default");
+    let custom = custom_terminal
+        .map(str::trim)
+        .filter(|s| !s.is_empty() && *s != "default");
 
     #[cfg(target_os = "windows")]
     {
@@ -864,9 +872,7 @@ pub fn reveal_file(root: &Path, rel_path: &str) -> GitResult<()> {
         } else {
             target.parent().unwrap_or(root).to_path_buf()
         };
-        let _ = std::process::Command::new("xdg-open")
-            .arg(&dir)
-            .spawn();
+        let _ = std::process::Command::new("xdg-open").arg(&dir).spawn();
     }
     Ok(())
 }
@@ -1066,14 +1072,17 @@ pub fn get_remotes(root: &Path) -> GitResult<Vec<RemoteEntry>> {
         Err(_) => return Ok(Vec::new()),
     };
     let text = String::from_utf8_lossy(&raw);
-    let mut map: std::collections::BTreeMap<String, (String, String)> = std::collections::BTreeMap::new();
+    let mut map: std::collections::BTreeMap<String, (String, String)> =
+        std::collections::BTreeMap::new();
     for line in text.lines() {
         let parts: Vec<&str> = line.split_whitespace().collect();
         if parts.len() >= 3 {
             let name = parts[0].to_string();
             let url = parts[1].to_string();
             let kind = parts[2];
-            let entry = map.entry(name).or_insert_with(|| (String::new(), String::new()));
+            let entry = map
+                .entry(name)
+                .or_insert_with(|| (String::new(), String::new()));
             if kind.contains("fetch") {
                 entry.0 = url;
             } else if kind.contains("push") {
@@ -1083,8 +1092,16 @@ pub fn get_remotes(root: &Path) -> GitResult<Vec<RemoteEntry>> {
     }
     let mut result = Vec::new();
     for (name, (fetch_url, push_url)) in map {
-        let f = if fetch_url.is_empty() { push_url.clone() } else { fetch_url };
-        let p = if push_url.is_empty() { f.clone() } else { push_url };
+        let f = if fetch_url.is_empty() {
+            push_url.clone()
+        } else {
+            fetch_url
+        };
+        let p = if push_url.is_empty() {
+            f.clone()
+        } else {
+            push_url
+        };
         result.push(RemoteEntry {
             name,
             fetch_url: f,
@@ -1133,7 +1150,10 @@ pub fn resolve_conflict(root: &Path, rel_path: &str, choice: &str) -> GitResult<
             if let Ok(content) = std::fs::read_to_string(&full_path) {
                 let mut resolved = Vec::new();
                 for line in content.lines() {
-                    if line.starts_with("<<<<<<<") || line.starts_with("=======") || line.starts_with(">>>>>>>") {
+                    if line.starts_with("<<<<<<<")
+                        || line.starts_with("=======")
+                        || line.starts_with(">>>>>>>")
+                    {
                         continue;
                     }
                     resolved.push(line);
@@ -1159,4 +1179,3 @@ pub fn resolve_conflict(root: &Path, rel_path: &str, choice: &str) -> GitResult<
     }
     Ok(())
 }
-

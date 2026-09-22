@@ -11,7 +11,12 @@ const { monacoMock } = vi.hoisted(() => {
         setModel: vi.fn(),
         updateOptions: vi.fn(),
         dispose: vi.fn(),
+        onDidUpdateDiff: vi.fn(() => ({ dispose: vi.fn() })),
         getModifiedEditor: vi.fn(() => ({
+          getDomNode: vi.fn(() => null),
+          getModel: vi.fn(() => null),
+          onDidChangeModel: vi.fn(() => ({ dispose: vi.fn() })),
+          onDidChangeHiddenAreas: vi.fn(() => ({ dispose: vi.fn() })),
           onDidChangeCursorPosition: vi.fn(() => ({ dispose: vi.fn() })),
           revealLineInCenter: vi.fn(),
           setPosition: vi.fn(),
@@ -158,8 +163,11 @@ describe('DiffPanel header e botões de ação', () => {
 
     render(<DiffPanel />);
 
-    // Deve exibir o badge 1 de 1
-    expect(screen.getByText(/1 de 1/i)).toBeInTheDocument();
+    // Deve exibir o badge Bloco 1 de 1
+    expect(screen.getByText(/Bloco 1 de 1/i)).toBeInTheDocument();
+
+    // Deve exibir o intervalo legível de linhas
+    expect(screen.getByText(/Linhas 1–2/i)).toBeInTheDocument();
 
     // Deve renderizar o botão de preparar bloco
     const stageHunkBtn = screen.getByRole('button', { name: /Preparar bloco/i });
@@ -167,6 +175,46 @@ describe('DiffPanel header e botões de ação', () => {
 
     fireEvent.click(stageHunkBtn);
     expect(runOperationMock).toHaveBeenCalledWith('stageHunk', [], expect.stringContaining('fn b()'));
+  });
+
+  it('exibe o escopo/função do bloco quando presente no cabeçalho diff', () => {
+    useAppStore.setState({
+      selectedFile: {
+        id: 'f1',
+        name: 'test.rs',
+        directory: 'src',
+        pathDisplay: 'src/test.rs',
+        oldPathDisplay: null,
+        status: 'modified',
+        area: 'unstaged',
+      },
+      preview: {
+        sessionId: 's1',
+        requestId: 2,
+        fileId: 'f1',
+        version: 'v2',
+        kind: 'text',
+        original: 'fn main() {}\n',
+        modified: 'fn main() {\n  println!("test");\n}\n',
+        message: null,
+        hunks: [
+          {
+            id: 'hunk-0',
+            header: '@@ -10,3 +10,4 @@ fn calculate_metrics()',
+            oldStart: 10,
+            oldLines: 3,
+            newStart: 10,
+            newLines: 4,
+            patch: 'diff --git a/test.rs b/test.rs\n@@ -10,3 +10,4 @@\n',
+          },
+        ],
+      },
+    });
+
+    render(<DiffPanel />);
+
+    expect(screen.getByText(/Linhas 10–13/i)).toBeInTheDocument();
+    expect(screen.getByText(/fn calculate_metrics\(\)/i)).toBeInTheDocument();
   });
 
   it('sincroniza blame lines com coordenadas absolutas de Monaco', async () => {
@@ -205,4 +253,3 @@ describe('DiffPanel header e botões de ação', () => {
     expect(row.style.top).toBe('20px');
   });
 });
-
