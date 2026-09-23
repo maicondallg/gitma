@@ -171,6 +171,18 @@ async fn get_file_history(
 }
 
 #[tauri::command]
+async fn get_file_history_preview(
+    state: State<'_, BackendState>,
+    session_id: String,
+    request_id: u64,
+    oid: String,
+    path: String,
+) -> RpcResult<Preview> {
+    let state = state.inner().clone();
+    run(move || state.file_history_preview(&session_id, request_id, &oid, &path)).await
+}
+
+#[tauri::command]
 async fn get_reflog(
     state: State<'_, BackendState>,
     session_id: String,
@@ -224,6 +236,7 @@ fn main() {
             apply_operation,
             get_blame,
             get_file_history,
+            get_file_history_preview,
             get_reflog,
             compare_commits,
             get_remotes,

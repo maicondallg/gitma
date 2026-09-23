@@ -68,6 +68,7 @@ export interface BlameResult {
 }
 export interface FileHistoryEntry {
   oid: string;
+  path: string;
   author: string;
   email: string;
   timestamp: number;

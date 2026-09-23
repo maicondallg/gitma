@@ -564,9 +564,21 @@
   },
   "fileHistory": {
     "title": "Histórico do Arquivo",
+    "button": "Histórico",
     "subtitle": "Linha do tempo de alterações em {{path}}",
     "noEntries": "Nenhum histórico encontrado para este arquivo.",
-    "selectCommit": "Clique em um commit para visualizar",
+    "selectCommit": "Ver alterações desta versão",
+    "revisions": "Versões do arquivo",
+    "changes": "Alterações",
+    "filter": "Filtrar por mensagem, autor ou hash...",
+    "clearFilter": "Limpar filtro",
+    "loading": "Carregando histórico do arquivo...",
+    "loadingDiff": "Carregando alterações...",
+    "noSelection": "Selecione uma versão para ver as alterações.",
+    "diffLayout": "Layout do diff",
+    "copyHash": "Copiar hash completo",
+    "openInGraph": "Ver commit no grafo",
+    "count": "{{count}} commits encontrados",
     "close": "Fechar"
   },
   "reflog": {

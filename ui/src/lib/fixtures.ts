@@ -134,10 +134,11 @@ export function createFixtureAdapter(name = 'local'): BridgeAdapter {
         summary: 'First release',
       })),
     }),
-    getFileHistory: async (_sessionId, _requestId, _path) => ({
+    getFileHistory: async (_sessionId, _requestId, path) => ({
       entries: [
         {
           oid: '761202e26c7aa548792dbda3aee101bbfe18dafc',
+          path,
           author: 'Maicon',
           email: 'maicon@example.com',
           timestamp: 1789942318,
@@ -145,12 +146,24 @@ export function createFixtureAdapter(name = 'local'): BridgeAdapter {
         },
         {
           oid: 'e0c5badd5604b48471db96c73d48a5a5475ec0dd',
+          path,
           author: 'Maicon',
           email: 'maicon@example.com',
           timestamp: 1789616075,
           summary: 'First release',
         },
       ],
+    }),
+    getFileHistoryPreview: async (_sessionId, requestId, oid, path): Promise<Preview> => ({
+      sessionId,
+      requestId,
+      fileId: `${oid}:${path}`,
+      version: `${oid}:${path}`,
+      kind: 'text',
+      original,
+      modified,
+      message: null,
+      hunks: [],
     }),
     getReflog: async (_sessionId, _requestId) => ({
       entries: [

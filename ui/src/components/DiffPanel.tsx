@@ -70,10 +70,16 @@ export function DiffPanel() {
   const host = useRef<HTMLDivElement>(null);
   const editor = useRef<monaco.editor.IStandaloneDiffEditor | null>(null);
   const models = useRef<{ original: monaco.editor.ITextModel; modified: monaco.editor.ITextModel } | null>(null);
+  const modelSource = useRef<{ sessionId: string | undefined; version: string; kind: string; fileId: string | undefined } | null>(null);
   const [diffPreparing, setDiffPreparing] = useState(false);
   const session = useAppStore((s) => s.session);
-  const preview = useAppStore((s) => s.preview);
-  const selectedFile = useAppStore((s) => s.selectedFile);
+  const requestedPreview = useAppStore((s) => s.preview);
+  const requestedFile = useAppStore((s) => s.selectedFile);
+  const [displayed, setDisplayed] = useState<{ file: typeof requestedFile; preview: typeof requestedPreview; sessionId: string | undefined } | null>(null);
+  const currentDisplay = displayed?.sessionId === session?.sessionId ? displayed : null;
+  const preview = currentDisplay?.preview ?? null;
+  const selectedFile = currentDisplay?.file ?? requestedFile;
+  const openFileHistory = useAppStore((s) => s.openFileHistory);
   const context = useAppStore((s) => s.context);
   const runOperation = useAppStore((s) => s.runOperation);
   const resolveConflict = useAppStore((s) => s.resolveConflict);
@@ -177,6 +183,7 @@ export function DiffPanel() {
     if (!host.current) return;
     const diffEditor = monaco.editor.createDiffEditor(host.current, {
       automaticLayout: true,
+      contextmenu: false,
       renderSideBySide: diffMode === 'split',
       useInlineViewWhenSpaceIsLimited: false,
       minimap: { enabled: false },
@@ -235,6 +242,7 @@ export function DiffPanel() {
       models.current?.original.dispose();
       models.current?.modified.dispose();
       models.current = null;
+      modelSource.current = null;
     };
   }, []);
 
@@ -475,31 +483,67 @@ export function DiffPanel() {
     const target = editor.current;
     let disposed = false;
     let viewModelAttached = false;
+    let modelsAttached = false;
     const compactSubscriptions: monaco.IDisposable[] = [];
-    if (!target || !preview || (preview.kind !== 'text' && preview.kind !== 'conflict')) {
-      target?.setModel(null);
+    if (!target) return;
+    if (!requestedFile) {
+      target.setModel(null);
+      models.current?.original.dispose();
+      models.current?.modified.dispose();
+      models.current = null;
+      modelSource.current = null;
+      setDisplayed(null);
+      if (host.current) host.current.style.visibility = '';
+      setDiffPreparing(false);
+      return;
+    }
+    if (!requestedPreview || requestedPreview.fileId !== requestedFile.id) return;
+    if (requestedPreview.kind !== 'text' && requestedPreview.kind !== 'conflict') {
+      target.setModel(null);
+      models.current?.original.dispose();
+      models.current?.modified.dispose();
+      models.current = null;
+      modelSource.current = null;
+      setDisplayed({ file: requestedFile, preview: requestedPreview, sessionId: session?.sessionId });
       if (host.current) host.current.style.visibility = '';
       setDiffPreparing(false);
       return;
     }
     const shouldCompact = compactDiff;
-    if (host.current) host.current.style.visibility = shouldCompact ? 'hidden' : '';
-    setDiffPreparing(shouldCompact);
-    // Never attach an uncomputed compact model to the visible editor. That is
-    // the state in which Monaco renders the complete file before folding it.
-    target.setModel(null);
-    const language = languageForPath(selectedFile?.pathDisplay ?? selectedFile?.name ?? '');
-    const old = models.current;
-    const original = monaco.editor.createModel(preview.original, language);
-    const modified = monaco.editor.createModel(preview.modified, language);
-    models.current = { original, modified };
+    // Keep the current file visible while the next diff is calculated. The
+    // compact model is attached only after its unchanged regions are ready.
+    setDiffPreparing(shouldCompact && !currentDisplay);
+    if (shouldCompact && !currentDisplay && host.current) host.current.style.visibility = 'hidden';
+    const source = modelSource.current;
+    const reuseModels = !!models.current && !!source && source.sessionId === session?.sessionId &&
+      source.version === requestedPreview.version && source.kind === requestedPreview.kind && source.fileId === requestedFile.id;
+    const language = languageForPath(requestedFile.pathDisplay);
+    const nextModels = reuseModels ? models.current! : {
+      original: monaco.editor.createModel(requestedPreview.original, language),
+      modified: monaco.editor.createModel(requestedPreview.modified, language),
+    };
+    const { original, modified } = nextModels;
+    const attachModels = (model: monaco.editor.IDiffEditorModel | monaco.editor.IDiffEditorViewModel) => {
+      const old = models.current;
+      target.setModel(model);
+      modelsAttached = true;
+      models.current = nextModels;
+      modelSource.current = { sessionId: session?.sessionId, version: requestedPreview.version, kind: requestedPreview.kind, fileId: requestedFile.id };
+      if (old !== nextModels) {
+        old?.original.dispose();
+        old?.modified.dispose();
+      }
+    };
     const viewModel = shouldCompact
       ? target.createViewModel({ original, modified }) as DiffViewModelWithUnchangedRegions
       : null;
-    old?.original.dispose();
-    old?.modified.dispose();
     if (!shouldCompact) {
-      target.setModel({ original, modified });
+      attachModels({ original, modified });
+      target.getOriginalEditor().render(true);
+      target.getModifiedEditor().render(true);
+      if (host.current) host.current.style.visibility = '';
+      setDisplayed({ file: requestedFile, preview: requestedPreview, sessionId: session?.sessionId });
+      setDiffPreparing(false);
     } else {
       void viewModel!.waitForDiff().then(() => {
         if (disposed) return;
@@ -517,18 +561,16 @@ export function DiffPanel() {
           )) return;
 
           const firstChange = changes[0];
-          const firstHunk = preview.hunks?.[0];
+          const firstHunk = requestedPreview.hunks?.[0];
           const line = Math.max(1, Math.min(modified.getLineCount(),
             firstChange?.modifiedStartLineNumber ?? firstHunk?.newStart ?? firstHunk?.oldStart ?? 1));
           if (firstChange || firstHunk) modifiedEditor.revealLineInCenter(line);
           originalEditor.render(true);
           modifiedEditor.render(true);
-          requestAnimationFrame(() => {
-            if (disposed) return;
-            if (host.current) host.current.style.visibility = '';
-            setDiffPreparing(false);
-            compactSubscriptions.splice(0).forEach((subscription) => subscription.dispose());
-          });
+          if (host.current) host.current.style.visibility = '';
+          setDisplayed({ file: requestedFile, preview: requestedPreview, sessionId: session?.sessionId });
+          setDiffPreparing(false);
+          compactSubscriptions.splice(0).forEach((subscription) => subscription.dispose());
         };
 
         compactSubscriptions.push(
@@ -536,7 +578,8 @@ export function DiffPanel() {
           modifiedEditor.onDidChangeHiddenAreas(revealWhenFolded),
           target.onDidUpdateDiff(revealWhenFolded),
         );
-        target.setModel(viewModel!);
+        if (host.current) host.current.style.visibility = 'hidden';
+        attachModels(viewModel!);
         viewModelAttached = true;
         revealWhenFolded();
       }).catch(() => {
@@ -548,9 +591,13 @@ export function DiffPanel() {
     return () => {
       disposed = true;
       compactSubscriptions.splice(0).forEach((subscription) => subscription.dispose());
-      if (viewModel && !viewModelAttached) viewModel.dispose();
+      if (viewModel && !viewModelAttached) viewModel.dispose?.();
+      if (!modelsAttached && !reuseModels) {
+        nextModels.original.dispose();
+        nextModels.modified.dispose();
+      }
     };
-  }, [preview?.version, preview?.kind, selectedFile?.id, compactDiff]);
+  }, [session?.sessionId, requestedPreview?.version, requestedPreview?.kind, requestedFile?.id, compactDiff]);
 
   const label = selectedFile
     ? selectedFile.oldPathDisplay
@@ -559,6 +606,7 @@ export function DiffPanel() {
     : t('diff.selectFile');
   const isConflict = preview?.kind === 'conflict';
   const unavailable = preview && preview.kind !== 'text' && !isConflict;
+  const editorPreview = preview ?? requestedPreview;
   const loadingFile = Boolean(
     selectedFile && (!preview || (diffPreparing && (preview.kind === 'text' || isConflict)))
   );
@@ -569,6 +617,10 @@ export function DiffPanel() {
         <span className="path-label" title={label}>
           <bdo dir="ltr">{label}</bdo>
         </span>
+        {selectedFile && <button type="button" className="diff-file-history-button"
+          onClick={() => openFileHistory(selectedFile.pathDisplay)} title={t('fileHistory.title')}>
+          <History size={14} /><span>{t('fileHistory.button')}</span>
+        </button>}
         <div className="mode-switch" role="group" aria-label="Layout do diff">
           <button
             type="button"
@@ -876,7 +928,7 @@ export function DiffPanel() {
             </div>
           </div>
         )}
-        <div ref={host} className="monaco-host" hidden={!preview || (preview.kind !== 'text' && !isConflict)} />
+        <div ref={host} className="monaco-host" hidden={!editorPreview || (editorPreview.kind !== 'text' && editorPreview.kind !== 'conflict')} />
       </div>
     </section>
   );

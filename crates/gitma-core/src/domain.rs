@@ -122,6 +122,7 @@ pub struct BlameLine {
 #[serde(rename_all = "camelCase")]
 pub struct FileHistoryEntry {
     pub oid: String,
+    pub path: String,
     pub author: String,
     pub email: String,
     pub timestamp: i64,

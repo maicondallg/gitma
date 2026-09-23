@@ -178,7 +178,7 @@ export interface AppState {
   compareCommits(baseOid: string, targetOid: string): Promise<void>;
   resolveConflict(path: string, choice: 'ours' | 'theirs' | 'both' | 'mark_resolved'): Promise<void>;
 
-  openRepository(path?: string): Promise<void>;
+  openRepository(path?: string, options?: { activate?: boolean }): Promise<void>;
   openRepositories(paths?: string[]): Promise<void>;
   cloneRepository(source: string, destination: string): Promise<void>;
   initRepository(path: string, defaultBranch?: string): Promise<void>;
@@ -207,7 +207,8 @@ export interface AppState {
   refresh(reason?: RefreshReason, event?: RepoChanged): Promise<void>;
   selectLocal(): Promise<void>;
   selectCommit(oid: string): Promise<void>;
-  selectFile(file: FileEntry | null): Promise<void>;
+  selectFile(file: FileEntry | null, options?: { deferPreview?: boolean }): Promise<void>;
+  prefetchFile(file: FileEntry): void;
   loadMore(): Promise<void>;
   runOperation(operation: Operation, fileIds?: string[], message?: string): Promise<void>;
   setCommitMessage(value: string): void;
@@ -232,6 +233,28 @@ let writeChain: Promise<void> = Promise.resolve();
 let writeReserved = false;
 let loadingMore: { sessionId: string; historyKey: string; page: number; token: number } | null = null;
 let unlisten: (() => void) | null = null;
+// Commit contents are immutable. Keep a small UI cache so revisiting history
+// does not clear the file list or diff while the backend cache is queried.
+const commitFilesCache = new Map<string, CommitFiles>();
+const commitPreviewCache = new Map<string, Preview>();
+const localPreviewCache = new Map<string, Preview>();
+const previewPrefetches = new Map<string, Promise<Preview>>();
+const localPreviewEpoch = new Map<string, number>();
+const commitKey = (sessionId: string, oid: string) => `${sessionId}\0${oid}`;
+const previewKey = (sessionId: string, oid: string, fileId: string) => `${commitKey(sessionId, oid)}\0${fileId}`;
+const localKey = (sessionId: string, fileId: string) => `${sessionId}\0local\0${localPreviewEpoch.get(sessionId) ?? 0}\0${fileId}`;
+const filePreviewKey = (sessionId: string, context: Context, fileId: string) =>
+  context.kind === 'local' ? localKey(sessionId, fileId)
+    : context.kind === 'commit' ? previewKey(sessionId, context.oid, fileId)
+    : `${sessionId}\0compare\0${context.baseOid}\0${context.targetOid}\0${fileId}`;
+function invalidateLocalPreviews(sessionId: string) {
+  localPreviewEpoch.set(sessionId, (localPreviewEpoch.get(sessionId) ?? 0) + 1);
+}
+function remember<T>(cache: Map<string, T>, key: string, value: T, limit: number) {
+  cache.delete(key);
+  cache.set(key, value);
+  if (cache.size > limit) cache.delete(cache.keys().next().value!);
+}
 
 const asError = (error: unknown): AppError => {
   if (typeof error === 'object' && error && 'message' in error) return error as AppError;
@@ -288,9 +311,18 @@ export const useAppStore = create<AppState>((set, get) => {
       return;
     }
     try {
-      const preview = await getBridge().getFilePreview(state.session.sessionId, requestId, file.id);
+      const key = filePreviewKey(state.session.sessionId, state.context, file.id);
+      const prefetched = previewPrefetches.get(key);
+      const preview = await (prefetched
+        ? prefetched.catch(() => getBridge().getFilePreview(state.session!.sessionId, requestId, file.id))
+        : getBridge().getFilePreview(state.session.sessionId, requestId, file.id));
       const current = get();
-      if (token === selectionToken && context === contextToken && current.session?.sessionId === state.session.sessionId && sameFile(current.selectedFile, file) && preview.requestId === requestId) {
+      if (token === selectionToken && context === contextToken && current.session?.sessionId === state.session.sessionId && sameFile(current.selectedFile, file) && preview.fileId === file.id) {
+        if (state.context.kind === 'commit') {
+          remember(commitPreviewCache, previewKey(state.session.sessionId, state.context.oid, file.id), preview, 16);
+        } else if (state.context.kind === 'local' && key === localKey(state.session.sessionId, file.id)) {
+          remember(localPreviewCache, key, preview, 16);
+        }
         if (current.preview?.version !== preview.version) {
           set((s) => ({
             preview,
@@ -320,6 +352,7 @@ export const useAppStore = create<AppState>((set, get) => {
       const selectedFile = (current.selectedFile && files.find((f) => sameFile(f, current.selectedFile))) || null;
       const selectionLost = current.context.kind === 'local' && !!current.selectedFile && !selectedFile;
       const snapshotChanged = current.snapshot?.revision !== snapshot.revision;
+      if (snapshotChanged) invalidateLocalPreviews(before.session.sessionId);
       if (snapshotChanged || current.snapshot?.historyKey !== snapshot.historyKey || !sameFile(current.selectedFile, selectedFile)) {
         const update = selectionLost ? { snapshot, selectedFile, preview: null } : { snapshot, selectedFile };
         set((s) => ({
@@ -349,7 +382,7 @@ export const useAppStore = create<AppState>((set, get) => {
     }
   }
 
-  async function mountSession(session: Session, selectedPath: string, token: number) {
+  async function mountSession(session: Session, selectedPath: string, token: number, options?: { activate?: boolean }) {
     if (token !== openToken) {
       void getBridge().closeRepository(session.sessionId);
       return;
@@ -413,24 +446,28 @@ export const useAppStore = create<AppState>((set, get) => {
       ...current.recentRepos.filter((r) => r.path !== session.root),
     ].slice(0, 20);
 
-    set({
-      tabs: newTabs,
-      activeTabId: newTab.id,
-      recentRepos: updatedRecents,
-      session,
-      snapshot: null,
-      history: null,
-      context: { kind: 'local' },
-      commitFiles: [],
-      commitStats: null,
-      selectedFile: null,
-      preview: null,
-      commitMessage: '',
-      remotes: [],
-      notice: session.warning ?? null,
-    });
+    if (options?.activate === false) {
+      set({ tabs: newTabs, recentRepos: updatedRecents });
+    } else {
+      set({
+        tabs: newTabs,
+        activeTabId: newTab.id,
+        recentRepos: updatedRecents,
+        session,
+        snapshot: null,
+        history: null,
+        context: { kind: 'local' },
+        commitFiles: [],
+        commitStats: null,
+        selectedFile: null,
+        preview: null,
+        commitMessage: '',
+        remotes: [],
+        notice: session.warning ?? null,
+      });
+    }
 
-    saveOpenTabs(newTabs.map((t) => t.path), newTab.id);
+    saveOpenTabs(newTabs.map((t) => t.path), get().activeTabId);
     saveRecentRepos(updatedRecents);
 
     if (!unlisten) {
@@ -445,7 +482,7 @@ export const useAppStore = create<AppState>((set, get) => {
       });
     }
 
-    await get().refresh('manual');
+    if (options?.activate !== false) await get().refresh('manual');
   }
 
   return {
@@ -652,10 +689,10 @@ export const useAppStore = create<AppState>((set, get) => {
     operation: null,
     notice: null,
 
-    async openRepository(path) {
+    async openRepository(path, options) {
       if (writeReserved || get().operation) return;
       const token = ++openToken;
-      set({ opening: true });
+      if (options?.activate !== false) set({ opening: true });
       try {
         const bridge = getBridge();
         let selectedPath = path;
@@ -678,7 +715,7 @@ export const useAppStore = create<AppState>((set, get) => {
         const current = get();
         const existing = current.tabs.find((t) => t.path === selectedPath || t.session.root === selectedPath);
         if (existing) {
-          await get().switchTab(existing.id);
+          if (options?.activate !== false) await get().switchTab(existing.id);
           const updatedRecents = [
             { path: existing.path, name: existing.name, lastOpened: Date.now() },
             ...current.recentRepos.filter((r) => r.path !== existing.path),
@@ -689,11 +726,11 @@ export const useAppStore = create<AppState>((set, get) => {
         }
 
         const session = await bridge.openRepository(selectedPath);
-        await mountSession(session, selectedPath, token);
+        await mountSession(session, selectedPath, token, options);
       } catch (error) {
         if (token === openToken) set({ notice: asError(error) });
       } finally {
-        if (token === openToken) set({ opening: false });
+        if (token === openToken && options?.activate !== false) set({ opening: false });
       }
     },
 
@@ -1047,21 +1084,14 @@ export const useAppStore = create<AppState>((set, get) => {
         set({ activeTabId: 'home' });
         return;
       }
-      for (const path of savedPaths) {
-        try {
-          await get().openRepository(path);
-        } catch {
-          // Ignora repositórios que não existem mais
-        }
-      }
-      if (savedActive === 'home') {
-        get().openHome();
-      } else if (savedActive) {
-        const tabs = get().tabs;
-        const match = tabs.find((t) => t.id === savedActive || t.path === savedActive);
-        if (match) {
-          await get().switchTab(match.id);
-        }
+      const preferred = savedPaths.includes(savedActive ?? '') ? savedActive : savedPaths[0];
+      const restorePaths = [preferred!, ...savedPaths.filter((path) => path !== preferred)];
+      let activatePending = savedActive !== 'home';
+      for (const path of restorePaths) {
+        await get().openRepository(path, {
+          activate: activatePending,
+        });
+        if (get().activeTabId !== 'home') activatePending = false;
       }
     },
 
@@ -1076,6 +1106,7 @@ export const useAppStore = create<AppState>((set, get) => {
       }
     },
     async selectLocal() {
+      if (get().context.kind === 'local') return;
       selectionToken++; contextToken++;
       const current = get();
       const selected = current.selectedFile;
@@ -1093,22 +1124,28 @@ export const useAppStore = create<AppState>((set, get) => {
       if (file) await previewFile(file, ++nextRequestId); else set({ preview: null });
     },
     async selectCommit(oid) {
-      const session = get().session; if (!session) return;
-      const requestId = ++nextRequestId;
+      const current = get();
+      const session = current.session; if (!session) return;
+      const key = commitKey(session.sessionId, oid);
+      const cached = commitFilesCache.get(key);
+      if (current.context.kind === 'commit' && current.context.oid === oid && cached) return;
       selectionToken++; const token = ++contextToken;
       set((s) => ({
         context: { kind: 'commit', oid },
-        commitFiles: [],
-        commitStats: null,
-        commitDetails: null,
+        commitFiles: cached?.files ?? [],
+        commitStats: cached?.stats ?? null,
+        commitDetails: cached?.details ?? null,
         selectedFile: null,
         preview: null,
-        tabs: s.tabs.map((t) => (t.id === s.activeTabId ? { ...t, context: { kind: 'commit', oid }, commitFiles: [], commitStats: null, commitDetails: null, selectedFile: null, preview: null } : t)),
+        tabs: s.tabs.map((t) => (t.id === s.activeTabId ? { ...t, context: { kind: 'commit', oid }, commitFiles: cached?.files ?? [], commitStats: cached?.stats ?? null, commitDetails: cached?.details ?? null, selectedFile: null, preview: null } : t)),
       }));
+      if (cached) return;
+      const requestId = ++nextRequestId;
       try {
         const result: CommitFiles = await getBridge().getCommitFiles(session.sessionId, requestId, oid);
         const current = get();
         if (token === contextToken && current.session?.sessionId === session.sessionId && current.context.kind === 'commit' && current.context.oid === oid && result.requestId === requestId) {
+          remember(commitFilesCache, key, result, 64);
           set((s) => ({
             commitFiles: result.files,
             commitStats: result.stats ?? null,
@@ -1152,7 +1189,7 @@ export const useAppStore = create<AppState>((set, get) => {
         }
       } catch (error) { if (token === contextToken && get().session?.sessionId === session.sessionId) set({ notice: asError(error) }); }
     },
-    async selectFile(file) {
+    async selectFile(file, options) {
       const current = get();
       if (
         file &&
@@ -1163,13 +1200,40 @@ export const useAppStore = create<AppState>((set, get) => {
       ) {
         return;
       }
+      const cachedPreview = file && current.session
+        ? current.context.kind === 'commit'
+          ? commitPreviewCache.get(previewKey(current.session.sessionId, current.context.oid, file.id)) ?? null
+          : current.context.kind === 'local'
+            ? localPreviewCache.get(localKey(current.session.sessionId, file.id)) ?? null
+            : null
+        : null;
       selectionToken++;
       set((s) => ({
         selectedFile: file,
-        preview: null,
-        tabs: s.tabs.map((t) => (t.id === s.activeTabId ? { ...t, selectedFile: file, preview: null } : t)),
+        preview: options?.deferPreview ? null : cachedPreview,
+        tabs: s.tabs.map((t) => (t.id === s.activeTabId ? { ...t, selectedFile: file, preview: options?.deferPreview ? null : cachedPreview } : t)),
       }));
-      if (file) await previewFile(file, ++nextRequestId);
+      if (file && !options?.deferPreview && (current.context.kind === 'local' || !cachedPreview)) await previewFile(file, ++nextRequestId);
+    },
+    prefetchFile(file) {
+      const state = get();
+      if (!state.session || state.context.kind === 'compare' || sameFile(state.selectedFile, file)) return;
+      const key = filePreviewKey(state.session.sessionId, state.context, file.id);
+      const cached = state.context.kind === 'local' ? localPreviewCache.get(key)
+        : state.context.kind === 'commit' ? commitPreviewCache.get(key) : null;
+      if (cached || previewPrefetches.has(key) || previewPrefetches.size >= 2) return;
+      const request = getBridge().getFilePreview(state.session.sessionId, ++nextRequestId, file.id);
+      previewPrefetches.set(key, request);
+      void request.then((preview) => {
+        if (preview.fileId !== file.id) return;
+        if (state.context.kind === 'local' && key === localKey(state.session!.sessionId, file.id)) {
+          remember(localPreviewCache, key, preview, 16);
+        } else if (state.context.kind === 'commit') {
+          remember(commitPreviewCache, key, preview, 16);
+        }
+      }).catch(() => undefined).finally(() => {
+        if (previewPrefetches.get(key) === request) previewPrefetches.delete(key);
+      });
     },
     async loadMore() {
       const state = get();
@@ -1229,6 +1293,7 @@ export const useAppStore = create<AppState>((set, get) => {
         try {
           const result = await getBridge().applyOperation(state.session.sessionId, requestId, operation, ids, messageToSend);
           if (get().session?.sessionId === state.session.sessionId) {
+            if (!NO_REFRESH_OPERATIONS.has(operation)) invalidateLocalPreviews(state.session.sessionId);
             notify({ category: 'success', message: result.message }, set);
             if ((operation === 'commit' || operation === 'commitAmend') && get().commitMessage === state.commitMessage) {
               set((s) => ({

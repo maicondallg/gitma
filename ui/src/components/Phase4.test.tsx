@@ -334,7 +334,7 @@ describe('Phase 4 Features', () => {
       render(<DiffPanel />);
 
       // Banner deve estar presente
-      expect(screen.getByText(/Conflito de mesclagem detectado/i)).toBeInTheDocument();
+      expect(await screen.findByText(/Conflito de mesclagem detectado/i)).toBeInTheDocument();
 
       // Botões de resolução
       const oursBtn = screen.getByRole('button', { name: /Aceitar Atual/i });

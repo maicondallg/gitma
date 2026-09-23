@@ -45,6 +45,8 @@ export function formatFullDate(timestamp: number): string {
 
 const FLAT_ROW_HEIGHT = 36;
 const TREE_ROW_HEIGHT = 25;
+// Keep the visible-files memo stable while only the selection changes.
+const EMPTY_FILES: FileEntry[] = [];
 const statusLabel: Record<FileEntry['status'], string> = {
   added: 'Adicionado',
   modified: 'Modificado',
@@ -185,6 +187,7 @@ function FileRow({
   isTree = false,
   onStage,
   onSelect,
+  onPrefetch,
   onDiscard,
   onContextMenu,
 }: {
@@ -197,6 +200,7 @@ function FileRow({
   isTree?: boolean;
   onStage: () => void;
   onSelect: () => void;
+  onPrefetch?: () => void;
   onDiscard?: () => void;
   onContextMenu?: (e: React.MouseEvent) => void;
 }) {
@@ -230,6 +234,8 @@ function FileRow({
         type="button"
         aria-current={selected ? 'true' : undefined}
         className={`lists-file-select ${selected ? 'lists-row-selected' : ''} ${isTree ? 'is-tree-select' : ''}`}
+        onPointerEnter={onPrefetch}
+        onFocus={onPrefetch}
         onClick={(e) => {
           onSelect();
           (e.currentTarget as HTMLElement).blur();
@@ -299,6 +305,7 @@ function FileGroup({
   collapsed,
   onToggleDir,
   onSelect,
+  onPrefetch,
   onStage,
   onAll,
   onDiscard,
@@ -315,6 +322,7 @@ function FileGroup({
   collapsed: Set<string>;
   onToggleDir: (dirPath: string) => void;
   onSelect: (file: FileEntry) => void;
+  onPrefetch?: (file: FileEntry) => void;
   onStage: (file: FileEntry) => void;
   onAll: () => void;
   onDiscard?: (file: FileEntry) => void;
@@ -450,6 +458,7 @@ function FileGroup({
                     isTree={true}
                     onStage={() => onStage(file)}
                     onSelect={() => onSelect(file)}
+                    onPrefetch={() => onPrefetch?.(file)}
                     onDiscard={onDiscard ? () => onDiscard(file) : undefined}
                     onContextMenu={(e) => onContextMenu?.(e, file)}
                   />
@@ -475,6 +484,7 @@ function FileGroup({
                   isTree={false}
                   onStage={() => onStage(file)}
                   onSelect={() => onSelect(file)}
+                  onPrefetch={() => onPrefetch?.(file)}
                   onDiscard={onDiscard ? () => onDiscard(file) : undefined}
                   onContextMenu={(e) => onContextMenu?.(e, file)}
                 />
@@ -494,6 +504,7 @@ function VirtualHistoryFiles({
   collapsed,
   onToggleDir,
   onSelect,
+  onPrefetch,
   onContextMenu,
 }: {
   files: FileEntry[];
@@ -502,6 +513,7 @@ function VirtualHistoryFiles({
   collapsed: Set<string>;
   onToggleDir: (dirPath: string) => void;
   onSelect: (file: FileEntry) => void;
+  onPrefetch?: (file: FileEntry) => void;
   onContextMenu?: (e: React.MouseEvent, file: FileEntry) => void;
 }) {
   const treeNodes = useMemo(() => buildTree(files), [files]);
@@ -578,6 +590,7 @@ function VirtualHistoryFiles({
                   isTree={true}
                   onStage={() => undefined}
                   onSelect={() => onSelect(file)}
+                  onPrefetch={() => onPrefetch?.(file)}
                   onContextMenu={(e) => onContextMenu?.(e, file)}
                 />
               </div>
@@ -601,6 +614,7 @@ function VirtualHistoryFiles({
                 isTree={false}
                 onStage={() => undefined}
                 onSelect={() => onSelect(file)}
+                onPrefetch={() => onPrefetch?.(file)}
                 onContextMenu={(e) => onContextMenu?.(e, file)}
               />
             </div>
@@ -622,9 +636,11 @@ export function FilesPanel() {
   const selectCommit = useAppStore((state) => state.selectCommit);
   const openFileHistory = useAppStore((state) => state.openFileHistory);
   const selectFile = useAppStore((state) => state.selectFile);
+  const prefetchFile = useAppStore((state) => state.prefetchFile);
   const runOperation = useAppStore((state) => state.runOperation);
   const operation = useAppStore((state) => state.operation);
   const selectedFile = useAppStore((state) => state.selectedFile);
+  const preview = useAppStore((state) => state.preview);
   const fileViewMode = useAppStore((state) => state.fileViewMode);
   const setFileViewMode = useAppStore((state) => state.setFileViewMode);
   const activePane = useAppStore((state) => state.activePane);
@@ -641,9 +657,9 @@ export function FilesPanel() {
   } | null>(null);
 
   const local = context?.kind === 'local';
-  const staged = local ? snapshot?.staged ?? [] : [];
-  const unstaged = local ? snapshot?.unstaged ?? [] : [];
-  const historical = local ? [] : commitFiles ?? [];
+  const staged = local ? snapshot?.staged ?? EMPTY_FILES : EMPTY_FILES;
+  const unstaged = local ? snapshot?.unstaged ?? EMPTY_FILES : EMPTY_FILES;
+  const historical = local ? EMPTY_FILES : commitFiles ?? EMPTY_FILES;
   const totalCount = local ? staged.length + unstaged.length : historical.length;
   const isTree = fileViewMode === 'tree';
 
@@ -701,6 +717,42 @@ export function FilesPanel() {
   }, [local, isTree, staged, unstaged, historical, collapsedDirs]);
 
   useEffect(() => {
+    if (!selectedFile || preview?.fileId !== selectedFile.id) return;
+    const index = visibleFiles.findIndex((file) => file.id === selectedFile.id && file.area === selectedFile.area);
+    if (index < 0) return;
+    if (visibleFiles[index + 1]) prefetchFile(visibleFiles[index + 1]);
+    if (visibleFiles[index - 1]) prefetchFile(visibleFiles[index - 1]);
+  }, [selectedFile?.id, selectedFile?.area, preview?.fileId, visibleFiles, prefetchFile]);
+
+  useEffect(() => {
+    let previewTimer: ReturnType<typeof setTimeout> | null = null;
+    let previewDeferred = false;
+    let previewInFlight = false;
+    const pressedArrows = new Set<string>();
+    const schedulePreview = () => {
+      if (previewTimer !== null || previewInFlight || !previewDeferred) return;
+      previewTimer = setTimeout(() => {
+        previewTimer = null;
+        if (!previewDeferred) return;
+        previewDeferred = false;
+        const file = useAppStore.getState().selectedFile;
+        if (!file) return;
+        previewInFlight = true;
+        void selectFile(file).finally(() => {
+          previewInFlight = false;
+          if (pressedArrows.size > 0) schedulePreview();
+        });
+      }, 70);
+    };
+    const flushPreview = () => {
+      if (previewTimer !== null) clearTimeout(previewTimer);
+      previewTimer = null;
+      if (!previewDeferred) return;
+      previewDeferred = false;
+      const file = useAppStore.getState().selectedFile;
+      if (file) void selectFile(file);
+    };
+
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.defaultPrevented || e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
       if (activePane !== 'files') return;
@@ -709,6 +761,10 @@ export function FilesPanel() {
       const tagName = activeElement?.tagName?.toLowerCase();
       if (tagName === 'input' || tagName === 'textarea' || tagName === 'select') return;
       if (activeElement?.getAttribute('contenteditable') === 'true') return;
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        if (e.repeat && !pressedArrows.has(e.key)) return;
+        pressedArrows.add(e.key);
+      }
 
       if (e.key === 'ArrowLeft') {
         e.preventDefault();
@@ -719,10 +775,20 @@ export function FilesPanel() {
           document.activeElement.blur();
         }
         if (visibleFiles.length === 0) return;
-        const curIdx = visibleFiles.findIndex((f) => f.id === selectedFile?.id);
+        const currentFile = useAppStore.getState().selectedFile;
+        const curIdx = visibleFiles.findIndex((f) => f.id === currentFile?.id && f.area === currentFile?.area);
         const nextIdx = curIdx === -1 ? 0 : Math.min(visibleFiles.length - 1, curIdx + 1);
-        if (visibleFiles[nextIdx]) {
-          void selectFile(visibleFiles[nextIdx]);
+        if (visibleFiles[nextIdx] && nextIdx !== curIdx) {
+          if (e.repeat) {
+            previewDeferred = true;
+            schedulePreview();
+          } else {
+            previewDeferred = false;
+            if (previewTimer !== null) clearTimeout(previewTimer);
+            previewTimer = null;
+          }
+          if (e.repeat) void selectFile(visibleFiles[nextIdx], { deferPreview: true });
+          else void selectFile(visibleFiles[nextIdx]);
         }
       } else if (e.key === 'ArrowUp') {
         e.preventDefault();
@@ -730,25 +796,55 @@ export function FilesPanel() {
           document.activeElement.blur();
         }
         if (visibleFiles.length === 0) return;
-        const curIdx = visibleFiles.findIndex((f) => f.id === selectedFile?.id);
+        const currentFile = useAppStore.getState().selectedFile;
+        const curIdx = visibleFiles.findIndex((f) => f.id === currentFile?.id && f.area === currentFile?.area);
         const prevIdx = curIdx === -1 ? 0 : Math.max(0, curIdx - 1);
-        if (visibleFiles[prevIdx]) {
-          void selectFile(visibleFiles[prevIdx]);
+        if (visibleFiles[prevIdx] && prevIdx !== curIdx) {
+          if (e.repeat) {
+            previewDeferred = true;
+            schedulePreview();
+          } else {
+            previewDeferred = false;
+            if (previewTimer !== null) clearTimeout(previewTimer);
+            previewTimer = null;
+          }
+          if (e.repeat) void selectFile(visibleFiles[prevIdx], { deferPreview: true });
+          else void selectFile(visibleFiles[prevIdx]);
         }
       } else if (e.key === ' ' || e.code === 'Space') {
-        if (!local || !selectedFile) return;
+        const currentFile = useAppStore.getState().selectedFile;
+        if (!local || !currentFile) return;
         e.preventDefault();
-        if (selectedFile.area === 'unstaged') {
-          void runOperation('stage', [selectedFile.id]);
-        } else if (selectedFile.area === 'staged') {
-          void runOperation('unstage', [selectedFile.id]);
+        if (currentFile.area === 'unstaged') {
+          void runOperation('stage', [currentFile.id]);
+        } else if (currentFile.area === 'staged') {
+          void runOperation('unstage', [currentFile.id]);
         }
       }
     };
 
+    const handleKeyUp = (e: KeyboardEvent) => {
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        pressedArrows.delete(e.key);
+        flushPreview();
+      }
+    };
+    const handleBlur = () => {
+      pressedArrows.clear();
+      flushPreview();
+    };
     window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [activePane, visibleFiles, selectedFile, selectFile, setActivePane, local, runOperation]);
+    window.addEventListener('keyup', handleKeyUp);
+    window.addEventListener('blur', handleBlur);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('keyup', handleKeyUp);
+      window.removeEventListener('blur', handleBlur);
+      pressedArrows.clear();
+      previewDeferred = false;
+      if (previewTimer !== null) clearTimeout(previewTimer);
+    };
+  }, [activePane, visibleFiles, selectFile, setActivePane, local, runOperation]);
 
   const handleFileContextMenu = useCallback((e: React.MouseEvent, file: FileEntry) => {
     e.preventDefault();
@@ -931,6 +1027,7 @@ export function FilesPanel() {
             collapsed={collapsedDirs}
             onToggleDir={toggleDir}
             onSelect={selectFile}
+            onPrefetch={prefetchFile}
             onStage={(file) => runOperation('unstage', [file.id])}
             onAll={() => runOperation('unstageAll')}
             onContextMenu={handleFileContextMenu}
@@ -946,6 +1043,7 @@ export function FilesPanel() {
             collapsed={collapsedDirs}
             onToggleDir={toggleDir}
             onSelect={selectFile}
+            onPrefetch={prefetchFile}
             onStage={(file) => runOperation('stage', [file.id])}
             onAll={() => runOperation('stageAll')}
             onContextMenu={handleFileContextMenu}
@@ -977,6 +1075,7 @@ export function FilesPanel() {
           collapsed={collapsedDirs}
           onToggleDir={toggleDir}
           onSelect={selectFile}
+          onPrefetch={prefetchFile}
           onContextMenu={handleFileContextMenu}
         />
       )}

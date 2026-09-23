@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useState, type ReactNode } from 'react';
+import { lazy, Suspense, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import {
   AlertCircle,
@@ -18,7 +18,7 @@ import {
   Upload,
   X,
 } from 'lucide-react';
-import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels';
+import { Panel, PanelGroup, PanelResizeHandle, type ImperativePanelGroupHandle } from 'react-resizable-panels';
 import { CommitForm } from './components/CommitForm';
 import { FilesPanel } from './components/FilesPanel';
 import { GraphPanel } from './components/GraphPanel';
@@ -93,6 +93,25 @@ export default function App() {
   const [showShortcutsModal, setShowShortcutsModal] = useState(false);
   const [pushMenu, setPushMenu] = useState<{ x: number; y: number } | null>(null);
   const [stashMenu, setStashMenu] = useState<{ x: number; y: number } | null>(null);
+  const workspaceRef = useRef<ImperativePanelGroupHandle>(null);
+  const normalLayoutRef = useRef<number[] | null>(null);
+  const switchingLayoutRef = useRef(false);
+
+  useLayoutEffect(() => {
+    const workspace = workspaceRef.current;
+    if (!workspace || activeTabId === 'home' || !session) return;
+
+    switchingLayoutRef.current = true;
+    if (expandedDiff) {
+      const layout = workspace.getLayout();
+      if (layout.length === 3 && layout[0] > 0) normalLayoutRef.current = layout;
+      workspace.setLayout([0, 20, 80]);
+    } else if (normalLayoutRef.current) {
+      workspace.setLayout(normalLayoutRef.current);
+    }
+    const frame = requestAnimationFrame(() => { switchingLayoutRef.current = false; });
+    return () => cancelAnimationFrame(frame);
+  }, [expandedDiff, activeTabId, session?.sessionId]);
 
   useEffect(() => {
     if (!pushMenu && !stashMenu) return;
@@ -507,26 +526,22 @@ export default function App() {
           <InProgressBanner />
 
           <PanelGroup
-            key={expandedDiff ? 'expanded' : 'normal'}
+            ref={workspaceRef}
             direction="horizontal"
-            autoSaveId={expandedDiff ? undefined : LAYOUT_KEY}
             onLayout={(layout) => {
-              if (!expandedDiff) {
+              if (!expandedDiff && !switchingLayoutRef.current && layout.length === 3) {
+                normalLayoutRef.current = layout;
                 localStorage.setItem(LAYOUT_KEY, JSON.stringify(layout));
               }
             }}
             className="workspace"
           >
-            {!expandedDiff && (
-              <>
-                <Panel defaultSize={savedLayout()?.[0] ?? 45} minSize={20}>
-                  <GraphPanel />
-                </Panel>
-                <PanelResizeHandle className="resize-handle" />
-              </>
-            )}
+            <Panel defaultSize={savedLayout()?.[0] ?? 45} minSize={20} collapsible={expandedDiff}>
+              <GraphPanel />
+            </Panel>
+            <PanelResizeHandle className={`resize-handle ${expandedDiff ? 'is-hidden' : ''}`} />
             <Panel
-              defaultSize={expandedDiff ? 20 : savedLayout()?.[1] ?? 20}
+              defaultSize={savedLayout()?.[1] ?? 20}
               minSize={12}
               maxSize={expandedDiff ? 35 : undefined}
             >
@@ -536,7 +551,7 @@ export default function App() {
               </aside>
             </Panel>
             <PanelResizeHandle className="resize-handle" />
-            <Panel defaultSize={expandedDiff ? 80 : savedLayout()?.[2] ?? 35} minSize={26}>
+            <Panel defaultSize={savedLayout()?.[2] ?? 35} minSize={26}>
               <Suspense fallback={<div className="diff-panel-loading" aria-busy="true" />}>
                 <DiffPanel />
               </Suspense>

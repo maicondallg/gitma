@@ -35,6 +35,66 @@ fn commit(dir: &Path, path: &str, text: &str, message: &str) {
 }
 
 #[test]
+fn file_history_previews_follow_renames_and_show_each_commits_changes() {
+    let dir = repo();
+    commit(dir.path(), "before.txt", "first\n", "create");
+    git(dir.path(), &["mv", "before.txt", "after.txt"]);
+    git(dir.path(), &["commit", "-qm", "rename"]);
+    commit(dir.path(), "after.txt", "second\n", "edit");
+
+    let backend = Backend::new();
+    let session = backend.open(dir.path(), |_| {}).unwrap();
+    let history = backend
+        .file_history(&session.session_id, 1, "after.txt", None)
+        .unwrap();
+    assert_eq!(
+        history
+            .entries
+            .iter()
+            .map(|entry| entry.path.as_str())
+            .collect::<Vec<_>>(),
+        vec!["after.txt", "after.txt", "before.txt"]
+    );
+
+    let edit = backend
+        .file_history_preview(
+            &session.session_id,
+            2,
+            &history.entries[0].oid,
+            &history.entries[0].path,
+        )
+        .unwrap();
+    assert_eq!(
+        (edit.original.as_str(), edit.modified.as_str()),
+        ("first\n", "second\n")
+    );
+    let rename = backend
+        .file_history_preview(
+            &session.session_id,
+            3,
+            &history.entries[1].oid,
+            &history.entries[1].path,
+        )
+        .unwrap();
+    assert_eq!(
+        (rename.original.as_str(), rename.modified.as_str()),
+        ("first\n", "first\n")
+    );
+    let creation = backend
+        .file_history_preview(
+            &session.session_id,
+            4,
+            &history.entries[2].oid,
+            &history.entries[2].path,
+        )
+        .unwrap();
+    assert_eq!(
+        (creation.original.as_str(), creation.modified.as_str()),
+        ("", "first\n")
+    );
+}
+
+#[test]
 fn sessions_keep_file_ids_opaque_and_previews_use_real_sides() {
     let left = repo();
     let right = repo();

@@ -564,9 +564,21 @@
   },
   "fileHistory": {
     "title": "File History",
+    "button": "History",
     "subtitle": "Revision timeline for {{path}}",
     "noEntries": "No history found for this file.",
-    "selectCommit": "Click a commit to view",
+    "selectCommit": "View changes in this revision",
+    "revisions": "File revisions",
+    "changes": "Changes",
+    "filter": "Filter by message, author, or hash...",
+    "clearFilter": "Clear filter",
+    "loading": "Loading file history...",
+    "loadingDiff": "Loading changes...",
+    "noSelection": "Select a revision to view its changes.",
+    "diffLayout": "Diff layout",
+    "copyHash": "Copy full hash",
+    "openInGraph": "View commit in graph",
+    "count": "{{count}} commits found",
     "close": "Close"
   },
   "reflog": {

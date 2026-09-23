@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { CommitFiles, Preview } from '../lib/types';
+import type { CommitFiles, Preview, Session } from '../lib/types';
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -19,6 +19,22 @@ async function setup() {
 }
 
 describe('repository state coordination', () => {
+  it('adianta a seleção sem pedir previews intermediários durante navegação rápida', async () => {
+    const { store, adapter } = await setup();
+    const preview = vi.spyOn(adapter, 'getFilePreview');
+    const files = [...store.getState().snapshot!.staged, ...store.getState().snapshot!.unstaged];
+
+    await store.getState().selectFile(files[0], { deferPreview: true });
+    await store.getState().selectFile(files[1], { deferPreview: true });
+    expect(store.getState().selectedFile).toBe(files[1]);
+    expect(store.getState().preview).toBeNull();
+    expect(preview).not.toHaveBeenCalled();
+
+    await store.getState().selectFile(files[1]);
+    expect(preview).toHaveBeenCalledTimes(1);
+    expect(store.getState().preview?.fileId).toBe(files[1].id);
+  });
+
   it('retains an open diff and draft when preview revalidation fails', async () => {
     const { store, adapter } = await setup();
     await store.getState().selectFile(store.getState().snapshot!.unstaged[0]);
@@ -235,6 +251,66 @@ describe('repository state coordination', () => {
     expect(tabs[3].color).toBeTruthy();
   });
 
+  it('restores the previously active repository without switching pages as other tabs open', async () => {
+    localStorage.setItem('Gitma:open-tabs', JSON.stringify(['/demo/first', '/demo/active', '/demo/last']));
+    localStorage.setItem('Gitma:active-tab', '/demo/active');
+    vi.resetModules();
+    const { useAppStore: store } = await import('./app');
+    const bridge = await import('../lib/bridge');
+    const { createFixtureAdapter } = await import('../lib/fixtures');
+    const adapter = createFixtureAdapter('local');
+    const openRepository = adapter.openRepository;
+    const backgroundStarted = deferred<void>();
+    const backgroundSession = deferred<Session>();
+    adapter.openRepository = async (path) => {
+      if (path === '/demo/first') {
+        backgroundStarted.resolve();
+        return backgroundSession.promise;
+      }
+      return openRepository(path);
+    };
+    bridge.setBridgeAdapter(adapter);
+
+    try {
+      const restoring = store.getState().restoreSavedTabs();
+      await backgroundStarted.promise;
+      expect(store.getState().activeTabId).toBe('/demo/active');
+      expect(store.getState().session?.root).toBe('/demo/active');
+      expect(store.getState().opening).toBe(false);
+
+      backgroundSession.resolve({ sessionId: 'session-first', name: 'first', root: '/demo/first' });
+      await restoring;
+      expect(store.getState().tabs.map((tab) => tab.path)).toEqual(['/demo/active', '/demo/first', '/demo/last']);
+      expect(store.getState().activeTabId).toBe('/demo/active');
+      expect(store.getState().session?.root).toBe('/demo/active');
+      expect(localStorage.getItem('Gitma:active-tab')).toBe('/demo/active');
+    } finally {
+      localStorage.removeItem('Gitma:open-tabs');
+      localStorage.removeItem('Gitma:active-tab');
+    }
+  });
+
+  it('keeps home selected when restoring tabs from a home session', async () => {
+    localStorage.setItem('Gitma:open-tabs', JSON.stringify(['/demo/first', '/demo/second']));
+    localStorage.setItem('Gitma:active-tab', 'home');
+    vi.resetModules();
+    const { useAppStore: store } = await import('./app');
+    const bridge = await import('../lib/bridge');
+    const { createFixtureAdapter } = await import('../lib/fixtures');
+    bridge.setBridgeAdapter(createFixtureAdapter('local'));
+
+    try {
+      await store.getState().restoreSavedTabs();
+      expect(store.getState().tabs.map((tab) => tab.path)).toEqual(['/demo/first', '/demo/second']);
+      expect(store.getState().activeTabId).toBe('home');
+      expect(store.getState().session).toBeNull();
+      expect(localStorage.getItem('Gitma:active-tab')).toBe('home');
+    } finally {
+      localStorage.removeItem('Gitma:open-tabs');
+      localStorage.removeItem('Gitma:active-tab');
+    }
+  });
+
   it('applies commitAmend and clears commitMessage on success', async () => {
     const { store, adapter } = await setup();
     const write = vi.spyOn(adapter, 'applyOperation');
@@ -323,6 +399,100 @@ describe('repository state coordination', () => {
     await store.getState().selectFile(target);
     expect(previewSpy).not.toHaveBeenCalled();
     expect(store.getState().preview).toBe(initialPreview);
+  });
+
+  it('shows a revisited local diff immediately and revalidates changed contents', async () => {
+    const { store, adapter } = await setup();
+    const [first, second] = store.getState().snapshot!.unstaged;
+    await store.getState().selectFile(first);
+    const cached = store.getState().preview;
+    await store.getState().selectFile(second);
+
+    const updated = deferred<Preview>();
+    const originalRead = adapter.getFilePreview;
+    let updatedRequestId = 0;
+    adapter.getFilePreview = (_session, requestId, fileId) => {
+      if (fileId !== first.id) return originalRead(_session, requestId, fileId);
+      updatedRequestId = requestId;
+      return updated.promise;
+    };
+    const selection = store.getState().selectFile(first);
+    expect(store.getState().preview).toBe(cached);
+
+    updated.resolve({ ...cached!, requestId: updatedRequestId, version: 'updated', modified: 'changed again' });
+    await selection;
+    expect(store.getState().preview?.modified).toBe('changed again');
+  });
+
+  it('shares a pending hover preview with selection', async () => {
+    const { store, adapter } = await setup();
+    const file = store.getState().snapshot!.unstaged[0];
+    const pending = deferred<Preview>();
+    const calls: number[] = [];
+    adapter.getFilePreview = async (_session, requestId) => { calls.push(requestId); return pending.promise; };
+
+    store.getState().prefetchFile(file);
+    const selection = store.getState().selectFile(file);
+    expect(calls).toHaveLength(1);
+    pending.resolve({ sessionId: 'demo-session', requestId: calls[0], fileId: file.id,
+      version: 'prefetched', kind: 'text', original: 'before', modified: 'after', message: null });
+    await selection;
+    expect(store.getState().preview?.version).toBe('prefetched');
+    expect(calls).toHaveLength(1);
+  });
+
+  it('drops local preview cache when the worktree revision changes', async () => {
+    const { store, adapter } = await setup();
+    const file = store.getState().snapshot!.unstaged[0];
+    await store.getState().selectFile(file);
+    await store.getState().selectFile(null);
+    const originalSnapshot = adapter.getSnapshot;
+    adapter.getSnapshot = async (sessionId, requestId) => ({
+      ...await originalSnapshot(sessionId, requestId), revision: 99,
+    });
+    await store.getState().refresh('manual');
+
+    const pending = deferred<Preview>();
+    let requestId = 0;
+    adapter.getFilePreview = async (_session, id) => { requestId = id; return pending.promise; };
+    const selection = store.getState().selectFile(file);
+    expect(store.getState().preview).toBeNull();
+    pending.resolve({ sessionId: 'demo-session', requestId, fileId: file.id, version: 'new',
+      kind: 'text', original: 'old', modified: 'new', message: null });
+    await selection;
+    expect(store.getState().preview?.version).toBe('new');
+  });
+
+  it('reuses commit files and previews when revisiting immutable history', async () => {
+    const { store, adapter } = await setup();
+    const filesSpy = vi.spyOn(adapter, 'getCommitFiles');
+    const previewSpy = vi.spyOn(adapter, 'getFilePreview');
+    const [first, second] = store.getState().history!.rows.map((row) => row.commit.oid);
+
+    await store.getState().selectCommit(first);
+    const file = store.getState().commitFiles[0];
+    await store.getState().selectFile(file);
+    const initialPreview = store.getState().preview;
+    await store.getState().selectCommit(second);
+    await store.getState().selectCommit(first);
+
+    expect(filesSpy).toHaveBeenCalledTimes(2);
+    expect(store.getState().commitFiles[0]).toBe(file);
+    await store.getState().selectFile(file);
+    expect(previewSpy).toHaveBeenCalledTimes(1);
+    expect(store.getState().preview).toBe(initialPreview);
+  });
+
+  it('keeps the selected local diff when local history is clicked again', async () => {
+    const { store, adapter } = await setup();
+    await store.getState().selectFile(store.getState().snapshot!.unstaged[0]);
+    const original = store.getState().preview;
+    const previewSpy = vi.spyOn(adapter, 'getFilePreview');
+
+    await store.getState().selectLocal();
+
+    expect(previewSpy).not.toHaveBeenCalled();
+    expect(store.getState().preview).toBe(original);
   });
 
   it('allows renaming tab with setTabName and persists to localStorage', async () => {

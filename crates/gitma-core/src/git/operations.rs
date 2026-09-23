@@ -1040,7 +1040,9 @@ pub fn file_history(
         &[
             "log",
             "--follow",
-            "--format=%H%x1f%an%x1f%ae%x1f%at%x1f%s",
+            "--format=%x1e%H%x1f%an%x1f%ae%x1f%at%x1f%s",
+            "--name-status",
+            "-M",
             "-n",
             &count_str,
             "--",
@@ -1053,16 +1055,26 @@ pub fn file_history(
 
     let text = String::from_utf8_lossy(&raw);
     let mut entries = Vec::new();
-    for line in text.lines() {
-        let parts: Vec<&str> = line.split('\x1f').collect();
+    let mut current_path = rel_path.to_string();
+    for block in text.split('\x1e').filter(|block| !block.trim().is_empty()) {
+        let mut lines = block.lines().filter(|line| !line.trim().is_empty());
+        let parts: Vec<&str> = lines.next().unwrap_or_default().split('\x1f').collect();
         if parts.len() >= 5 {
             entries.push(FileHistoryEntry {
                 oid: parts[0].trim().to_string(),
+                path: current_path.clone(),
                 author: parts[1].trim().to_string(),
                 email: parts[2].trim().to_string(),
                 timestamp: parts[3].trim().parse::<i64>().unwrap_or(0),
                 summary: parts[4].trim().to_string(),
             });
+            for line in lines {
+                let columns: Vec<&str> = line.split('\t').collect();
+                if columns.len() == 3 && columns[0].starts_with('R') && columns[2] == current_path {
+                    current_path = columns[1].to_string();
+                    break;
+                }
+            }
         }
     }
     Ok(entries)

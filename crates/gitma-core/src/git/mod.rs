@@ -371,6 +371,27 @@ impl GitRepository {
 
         Ok(files)
     }
+    pub fn file_change_for_commit(&self, oid: &str, path: &Path) -> GitResult<Option<ChangedFile>> {
+        // History previews only need the path and rename status. Avoid the
+        // numstat scan used by the full commit file list.
+        let raw = runner::read(
+            &self.context.root,
+            &[
+                "diff-tree",
+                "--root",
+                "--diff-merges=first-parent",
+                "--no-commit-id",
+                "--name-status",
+                "-M",
+                "-r",
+                "-z",
+                oid,
+            ],
+        )?;
+        Ok(status::parse_commit_names(&raw)
+            .into_iter()
+            .find(|file| file.path == path))
+    }
     pub fn files_between_commits(
         &self,
         base_oid: &str,

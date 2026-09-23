@@ -1,6 +1,6 @@
 {
   "name": "gitma-desktop",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "description": "Blazing-fast, lightweight native Git desktop client powered by Rust and Tauri v2",
   "license": "MIT",
   "author": "Maicon Dall'Agnol",

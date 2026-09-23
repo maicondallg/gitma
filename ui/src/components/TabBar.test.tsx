@@ -103,6 +103,7 @@ function state(overrides: Partial<AppState> = {}): AppState {
     selectLocal: vi.fn(async () => {}),
     selectCommit: vi.fn(async () => {}),
     selectFile: vi.fn(async () => {}),
+    prefetchFile: vi.fn(),
     loadMore: vi.fn(async () => {}),
     runOperation: vi.fn(async () => {}),
     preferredTerminal: 'default',
@@ -402,4 +403,3 @@ describe('TabBar component', () => {
     expect(setGroupName).toHaveBeenCalledWith('#10b981', 'Novos Serviços');
   });
 });
-

@@ -1,8 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor, cleanup } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, cleanup, act, within } from '@testing-library/react';
 import { useAppStore } from '../store/app';
 import { setBridgeAdapter } from '../lib/bridge';
 import { setLanguage } from '../i18n';
+import { monaco } from '../lib/monaco';
 import { FilesPanel } from './FilesPanel';
 import { DiffPanel } from './DiffPanel';
 import { FileHistoryModal } from './FileHistoryModal';
@@ -16,7 +17,7 @@ vi.mock('../lib/monaco', () => ({
       createDiffEditor: vi.fn(() => ({
         setModel: vi.fn(),
         getLineChanges: vi.fn(() => []),
-        createViewModel: vi.fn((model) => ({ model, waitForDiff: vi.fn().mockResolvedValue(undefined) })),
+        createViewModel: vi.fn((model) => ({ model, waitForDiff: vi.fn().mockResolvedValue(undefined), dispose: vi.fn() })),
         updateOptions: vi.fn(),
         dispose: vi.fn(),
         onDidUpdateDiff: vi.fn(() => ({ dispose: vi.fn() })),
@@ -62,6 +63,7 @@ describe('Phase 3 Features', () => {
       entries: [
         {
           oid: 'abc1234567890abcdef1234567890abcdef123456',
+          path: 'src/search_wells.py',
           author: 'Alice Dev',
           email: 'alice@example.com',
           timestamp: 1700000000,
@@ -69,6 +71,7 @@ describe('Phase 3 Features', () => {
         },
         {
           oid: 'def4567890abcdef1234567890abcdef12345678',
+          path: 'src/search_wells.py',
           author: 'Bob Engineer',
           email: 'bob@example.com',
           timestamp: 1699900000,
@@ -76,6 +79,10 @@ describe('Phase 3 Features', () => {
         },
       ],
     } as FileHistoryResult)),
+    getFileHistoryPreview: vi.fn(async (_sessionId, requestId, oid, path) => ({
+      sessionId: 's1', requestId, fileId: `${oid}:${path}`, version: oid,
+      kind: 'text' as const, original: 'before\n', modified: 'after\n', message: null, hunks: [],
+    })),
     getReflog: vi.fn(async () => ({
       entries: [
         {
@@ -295,10 +302,113 @@ describe('Phase 3 Features', () => {
       expect(screen.getByText('Fix query bug in wells API')).toBeInTheDocument();
       expect(screen.queryByText('Initial wells controller implementation')).not.toBeInTheDocument();
 
-      // Clica na revisão para selecionar
+      // Selecionar uma revisão atualiza o diff sem sair do histórico.
       fireEvent.click(screen.getByText('Fix query bug in wells API'));
-      expect(selectCommitSpy).toHaveBeenCalledWith('abc1234567890abcdef1234567890abcdef123456');
-      expect(onClose).toHaveBeenCalled();
+      await waitFor(() => expect(mockBridge.getFileHistoryPreview).toHaveBeenCalledWith(
+        's1', expect.any(Number), 'abc1234567890abcdef1234567890abcdef123456', 'src/search_wells.py'
+      ));
+      expect(selectCommitSpy).not.toHaveBeenCalled();
+      expect(onClose).not.toHaveBeenCalled();
+    });
+
+    it('recolhe e reexibe regiões sem mudanças no diff do histórico', async () => {
+      render(<FileHistoryModal filePath="src/search_wells.py" onClose={vi.fn()} />);
+      await waitFor(() => expect(screen.getByLabelText('Diff do arquivo')).toBeInTheDocument());
+      const diff = vi.mocked(monaco.editor.createDiffEditor).mock.results.at(-1)?.value;
+      expect(within(screen.getByRole('group', { name: 'Layout do diff' }))
+        .getAllByRole('button').map((button) => button.textContent)).toEqual([
+        'Só alterações', 'Unificado', 'Lado a lado',
+      ]);
+      const onlyChanges = screen.getByRole('button', { name: 'Só alterações' });
+      const modelCount = vi.mocked(monaco.editor.createModel).mock.calls.length;
+
+      fireEvent.click(onlyChanges);
+      expect(onlyChanges).toHaveAttribute('aria-pressed', 'true');
+      expect(diff.updateOptions).toHaveBeenCalledWith(expect.objectContaining({
+        hideUnchangedRegions: { enabled: true, minimumLineCount: 3, contextLineCount: 3 },
+      }));
+
+      fireEvent.click(onlyChanges);
+      expect(onlyChanges).toHaveAttribute('aria-pressed', 'false');
+      expect(diff.updateOptions).toHaveBeenCalledWith(expect.objectContaining({
+        hideUnchangedRegions: { enabled: false, minimumLineCount: 3, contextLineCount: 3 },
+      }));
+      expect(vi.mocked(monaco.editor.createModel).mock.calls.length).toBe(modelCount);
+    });
+
+    it('reutiliza o conteúdo ao voltar a uma revisão já aberta', async () => {
+      vi.mocked(mockBridge.getFileHistoryPreview!).mockClear();
+      render(<FileHistoryModal filePath="src/search_wells.py" onClose={vi.fn()} />);
+      await waitFor(() => expect(vi.mocked(mockBridge.getFileHistoryPreview!).mock.calls.length).toBe(1));
+      fireEvent.click(screen.getByText('Initial wells controller implementation'));
+      await waitFor(() => expect(vi.mocked(mockBridge.getFileHistoryPreview!).mock.calls.length).toBe(2));
+      fireEvent.click(screen.getByText('Fix query bug in wells API'));
+      expect(vi.mocked(mockBridge.getFileHistoryPreview!).mock.calls.length).toBe(2);
+    });
+
+    it('seleciona a revisão ao clicar no espaço vazio do card sem interceptar o hash', async () => {
+      render(<FileHistoryModal filePath="src/search_wells.py" onClose={vi.fn()} />);
+      const secondCard = (await screen.findByText('Initial wells controller implementation'))
+        .closest('.file-history-item') as HTMLElement;
+      fireEvent.click(secondCard.querySelector('.file-history-item-actions')!);
+      await waitFor(() => expect(mockBridge.getFileHistoryPreview).toHaveBeenCalledWith(
+        's1', expect.any(Number), 'def4567890abcdef1234567890abcdef12345678', 'src/search_wells.py'
+      ));
+      expect(within(secondCard).getByTitle('Ver alterações desta versão')).toHaveAttribute('aria-pressed', 'true');
+
+      const firstCard = screen.getByText('Fix query bug in wells API').closest('.file-history-item') as HTMLElement;
+      fireEvent.click(within(firstCard).getByTitle('Copiar hash completo'));
+      expect(within(secondCard).getByTitle('Ver alterações desta versão')).toHaveAttribute('aria-pressed', 'true');
+    });
+
+    it('só revela o arquivo compacto depois de calcular e recolher o diff', async () => {
+      const { container } = render(<FileHistoryModal filePath="src/search_wells.py" onClose={vi.fn()} />);
+      const host = await screen.findByLabelText('Diff do arquivo');
+      const diff = vi.mocked(monaco.editor.createDiffEditor).mock.results.at(-1)?.value;
+      const originalEditor = diff.getOriginalEditor();
+      const modifiedEditor = diff.getModifiedEditor();
+      let finishDiff!: () => void;
+      const diffReady = new Promise<void>((resolve) => { finishDiff = resolve; });
+      let changesPublished = false;
+      let regionsFolded = false;
+      let hiddenListener: () => void = () => undefined;
+      let diffListener: () => void = () => undefined;
+
+      vi.mocked(diff.getOriginalEditor).mockReturnValue(originalEditor);
+      vi.mocked(diff.getModifiedEditor).mockReturnValue(modifiedEditor);
+      vi.mocked(diff.createViewModel).mockImplementationOnce((model: Parameters<monaco.editor.IStandaloneDiffEditor['createViewModel']>[0]) => ({
+        model,
+        waitForDiff: vi.fn(() => diffReady),
+        unchangedRegions: { get: vi.fn(() => [{}]) },
+        dispose: vi.fn(),
+      } as unknown as monaco.editor.IDiffEditorViewModel));
+      vi.mocked(diff.getLineChanges).mockImplementation(() => changesPublished ? [{ modifiedStartLineNumber: 2 }] as never : null);
+      vi.mocked(originalEditor._getViewModel).mockImplementation(() => ({ getHiddenAreas: () => regionsFolded ? [{}] : [] }));
+      vi.mocked(modifiedEditor._getViewModel).mockImplementation(() => ({ getHiddenAreas: () => regionsFolded ? [{}] : [] }));
+      vi.mocked(originalEditor.onDidChangeHiddenAreas).mockImplementation((listener: () => void) => {
+        hiddenListener = listener;
+        return { dispose: vi.fn() };
+      });
+      vi.mocked(diff.onDidUpdateDiff).mockImplementation((listener: () => void) => {
+        diffListener = listener;
+        return { dispose: vi.fn() };
+      });
+
+      fireEvent.click(screen.getByRole('button', { name: 'Só alterações' }));
+      expect(host.style.visibility).toBe('hidden');
+      expect(container.querySelector('.file-history-diff-preparing')).toBeInTheDocument();
+      expect(vi.mocked(diff.setModel).mock.lastCall?.[0]).toBeNull();
+
+      await act(async () => { finishDiff(); await diffReady; });
+      expect(host.style.visibility).toBe('hidden');
+      changesPublished = true;
+      act(() => diffListener());
+      expect(host.style.visibility).toBe('hidden');
+      regionsFolded = true;
+      act(() => hiddenListener());
+      await act(async () => { await new Promise<void>((resolve) => requestAnimationFrame(() => resolve())); });
+      expect(host.style.visibility).toBe('');
+      expect(container.querySelector('.file-history-diff-preparing')).not.toBeInTheDocument();
     });
   });
 

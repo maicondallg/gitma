@@ -1,6 +1,95 @@
 import { expect, test } from '@playwright/test'
 
 test.describe('fluxos do workspace', () => {
+  test('seta segurada atualiza o diff e para ao soltar', async ({ page }) => {
+    await page.goto('/?fixture=local')
+    await page.getByRole('button', { name: /Cargo\.toml/i }).click()
+    await expect(page.locator('.path-label')).toContainText('Cargo.toml')
+
+    const selected = page.locator('.lists-file-select[aria-current="true"]')
+    let previousTitle = await selected.getAttribute('title')
+    for (const repeat of [false, true, true]) {
+      await page.evaluate((isRepeat) => {
+        window.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', repeat: isRepeat, bubbles: true }))
+      }, repeat)
+      await expect.poll(() => selected.getAttribute('title')).not.toBe(previousTitle)
+      previousTitle = await selected.getAttribute('title')
+    }
+    const selectedTitle = (await selected.getAttribute('title'))!
+    const selectedPath = selectedTitle.split('\n')[0]
+    expect(selectedPath).not.toBe('Cargo.toml')
+    await expect(page.locator('.path-label')).toContainText(selectedPath)
+
+    await page.evaluate(() => {
+      window.dispatchEvent(new KeyboardEvent('keyup', { key: 'ArrowDown', bubbles: true }))
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', repeat: true, bubbles: true }))
+    })
+    await expect(selected).toHaveAttribute('title', selectedTitle)
+  })
+
+  for (const onlyChanges of [true, false]) test(`troca arquivos ${onlyChanges ? 'no modo compacto' : 'no modo completo'} sem esvaziar o editor`, async ({ page }) => {
+    await page.goto('/?fixture=local')
+    if (!onlyChanges) await page.getByRole('button', { name: 'Só alterações' }).click()
+    const host = page.locator('.monaco-host')
+    await expect(host.locator('.view-lines').first()).toContainText('refreshRepository')
+    await page.evaluate(async () => {
+      const { getBridge } = await import('/src/lib/bridge.ts')
+      const bridge = getBridge()
+      const original = bridge.getFilePreview.bind(bridge)
+      let release!: () => void
+      const gate = new Promise<void>((resolve) => { release = resolve })
+      bridge.getFilePreview = (...args) => gate.then(() => original(...args))
+      ;(window as Window & { releasePreview?: () => void }).releasePreview = release
+      const windowWithCounter = window as Window & { blankFrames?: number; stopSampling?: () => void }
+      windowWithCounter.blankFrames = 0
+      let sampling = true
+      windowWithCounter.stopSampling = () => { sampling = false }
+      const sample = () => {
+        if (!sampling) return
+        const editorHost = document.querySelector('.monaco-host') as HTMLElement | null
+        if (!editorHost || editorHost.hidden || getComputedStyle(editorHost).visibility !== 'visible' ||
+            !editorHost.querySelector('.view-lines')?.textContent?.trim()) windowWithCounter.blankFrames!++
+        requestAnimationFrame(sample)
+      }
+      requestAnimationFrame(sample)
+    })
+
+    await page.getByRole('button', { name: /README\.md/i }).click()
+    await page.waitForTimeout(120)
+    await expect(page.locator('.path-label')).toContainText('src/app.ts')
+    await page.evaluate(() => (window as Window & { releasePreview: () => void }).releasePreview())
+    await expect(page.locator('.path-label')).toContainText('README.md')
+    await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))))
+    const blankFrames = await page.evaluate(() => {
+      const sampled = window as Window & { blankFrames: number; stopSampling: () => void }
+      sampled.stopSampling()
+      return sampled.blankFrames
+    })
+    expect(blankFrames).toBe(0)
+  })
+
+  test('expandir e restaurar diff preserva editor e layout anterior', async ({ page }) => {
+    await page.goto('/?fixture=local')
+    await page.getByRole('button', { name: /schema\.prisma/i }).click()
+    const host = page.locator('.monaco-host')
+    await expect(host.locator('.monaco-diff-editor')).toBeVisible()
+    await host.evaluate((element) => element.setAttribute('data-editor-identity', 'preserved'))
+
+    const panels = page.locator('.workspace [data-panel-id]')
+    await expect(panels).toHaveCount(3)
+    const originalWidths = await panels.evaluateAll((elements) => elements.map((element) => element.getBoundingClientRect().width))
+
+    await page.getByRole('button', { name: /Expandir diff em tela cheia/i }).click()
+    await expect(host).toHaveAttribute('data-editor-identity', 'preserved')
+    await expect.poll(async () => (await panels.nth(0).boundingBox())?.width ?? -1).toBeLessThan(2)
+    await expect.poll(async () => (await panels.nth(2).boundingBox())?.width ?? 0).toBeGreaterThan(originalWidths[2])
+
+    await page.getByRole('button', { name: /Restaurar painel de histórico/i }).click()
+    await expect(host).toHaveAttribute('data-editor-identity', 'preserved')
+    await expect.poll(async () => (await panels.nth(0).boundingBox())?.width ?? 0).toBeGreaterThan(originalWidths[0] - 2)
+    await expect(page.locator('.diff-panel-loading')).toHaveCount(0)
+  })
+
   test('local: seleciona arquivo, preserva mensagem ao atualizar e alterna stage', async ({ page }) => {
     await page.goto('/?fixture=local')
     await expect(page.getByRole('heading', { name: 'Alterações locais' })).toBeVisible()

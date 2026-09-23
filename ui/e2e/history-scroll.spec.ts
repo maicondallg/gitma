@@ -3,9 +3,13 @@ import { expect, test } from '@playwright/test';
 test('large history stays virtualized and preserves scroll while loading another page', async ({ page }) => {
   await page.goto('/?fixture=local');
   await expect(page.getByRole('heading', { name: 'Histórico' })).toBeVisible();
+  await expect(page.locator('.lists-graph-row').first()).toBeVisible();
   await page.evaluate(async () => {
     // Use the real store and virtualizer with a large deterministic history.
-    const modulePath = '/src/store/app.ts';
+    const modulePath = performance.getEntriesByType('resource')
+      .map((entry) => entry.name)
+      .find((name) => new URL(name).pathname === '/src/store/app.ts');
+    if (!modulePath) throw new Error('Store module was not loaded');
     const { useAppStore: store } = await import(modulePath);
     const history = store.getState().history;
     const template = history.rows[0];
@@ -35,8 +39,12 @@ test('large history stays virtualized and preserves scroll while loading another
 test('fast scroll has text prepared ahead of the viewport in both directions', async ({ page }) => {
   await page.goto('/?fixture=local');
   await expect(page.getByRole('heading', { name: 'Histórico' })).toBeVisible();
+  await expect(page.locator('.lists-graph-row').first()).toBeVisible();
   await page.evaluate(async () => {
-    const modulePath = '/src/store/app.ts';
+    const modulePath = performance.getEntriesByType('resource')
+      .map((entry) => entry.name)
+      .find((name) => new URL(name).pathname === '/src/store/app.ts');
+    if (!modulePath) throw new Error('Store module was not loaded');
     const { useAppStore: store } = await import(modulePath);
     const history = store.getState().history;
     const template = history.rows[0];

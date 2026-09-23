@@ -93,6 +93,7 @@ function state(overrides: Partial<AppState> = {}): AppState {
     selectLocal: vi.fn(async () => {}),
     selectCommit: actions.selectCommit,
     selectFile: actions.selectFile,
+    prefetchFile: vi.fn(),
     loadMore: actions.loadMore,
     runOperation: actions.runOperation,
     setCommitMessage: actions.setCommitMessage,
@@ -117,6 +118,15 @@ beforeEach(() => {
 afterEach(() => cleanup())
 
 describe('listas de alterações', () => {
+  it('antecipa a leitura do diff ao apontar para um arquivo', () => {
+    const prefetchFile = vi.fn();
+    useAppStore.setState(state({ prefetchFile }));
+    render(<FilesPanel />);
+
+    fireEvent.pointerEnter(screen.getByRole('button', { name: /theme\.css/i }));
+    expect(prefetchFile).toHaveBeenCalledWith(unstaged);
+  });
+
   it('mantém seleção independente do checkbox de stage', () => {
     render(<FilesPanel />)
     fireEvent.click(screen.getByRole('button', { name: /theme\.css/i }))
@@ -772,11 +782,49 @@ describe('Stash, Cherry-pick e RefPopover no GraphPanel', () => {
 
     selectFile.mockClear();
     fireEvent.keyDown(window, { key: 'ArrowDown' });
-    expect(selectFile).toHaveBeenCalledWith(rootFile);
+    expect(selectFile).not.toHaveBeenCalled();
 
     // De cargo.toml, ArrowUp deve voltar para b.rs
     fireEvent.keyDown(window, { key: 'ArrowUp' });
     expect(selectFile).toHaveBeenCalledWith(bFile);
+  });
+
+  it('atualiza o diff enquanto a seta é segurada e para ao soltá-la', async () => {
+    const files = Array.from({ length: 12 }, (_, index) => file(`f${index}`, `src/file-${index}.rs`, 'commit'));
+    const selectFile = vi.fn(async (selected: FileEntry) => {
+      useAppStore.setState({ selectedFile: selected });
+    });
+    useAppStore.setState(state({
+      activePane: 'files',
+      selectFile,
+      context: { kind: 'commit', oid: 'c1' },
+      commitFiles: files,
+      selectedFile: files[0],
+      fileViewMode: 'flat',
+    }));
+
+    render(<FilesPanel />);
+    for (const repeat of [false, true, true, true]) {
+      fireEvent.keyDown(window, { key: 'ArrowDown', repeat });
+      await act(async () => { await Promise.resolve(); });
+    }
+    expect(useAppStore.getState().selectedFile).toBe(files[4]);
+    expect(selectFile).toHaveBeenCalledTimes(4);
+    expect(selectFile).toHaveBeenNthCalledWith(4, files[4], { deferPreview: true });
+
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 90)); });
+    expect(selectFile).toHaveBeenCalledTimes(5);
+    expect(selectFile).toHaveBeenLastCalledWith(files[4]);
+    fireEvent.keyDown(window, { key: 'ArrowDown', repeat: true });
+    expect(useAppStore.getState().selectedFile).toBe(files[5]);
+
+    fireEvent.keyUp(window, { key: 'ArrowDown' });
+    expect(selectFile).toHaveBeenCalledTimes(7);
+    expect(selectFile).toHaveBeenLastCalledWith(files[5]);
+    fireEvent.keyDown(window, { key: 'ArrowDown', repeat: true });
+    await new Promise((resolve) => setTimeout(resolve, 110));
+    expect(selectFile).toHaveBeenCalledTimes(7);
+    expect(useAppStore.getState().selectedFile).toBe(files[5]);
   });
 
   it('GraphPanel renderiza 5 colunas com divisores verticais contínuos no cabeçalho e nas linhas', () => {

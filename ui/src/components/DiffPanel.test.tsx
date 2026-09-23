@@ -135,6 +135,23 @@ describe('DiffPanel header e botões de ação', () => {
     expect(useAppStore.getState().diffMode).toBe('split');
   });
 
+  it('reutiliza os modelos de texto ao alternar só alterações', async () => {
+    useAppStore.setState({ preview: {
+      sessionId: 's1', requestId: 1, fileId: 'f1', version: 'v1', kind: 'text',
+      original: 'before\n', modified: 'after\n', message: null,
+    } });
+    const createModel = monacoMock.editor.createModel;
+    const before = createModel.mock.calls.length;
+    render(<DiffPanel />);
+    expect(createModel.mock.calls.length - before).toBe(2);
+
+    fireEvent.click(screen.getByRole('button', { name: /Só alterações/i }));
+    await act(async () => { await Promise.resolve(); });
+    fireEvent.click(screen.getByRole('button', { name: /Só alterações/i }));
+
+    expect(createModel.mock.calls.length - before).toBe(2);
+  });
+
   it('aguarda o diff antes de exibir um arquivo no modo compacto', async () => {
     let finishDiff!: () => void;
     let changesPublished = false;
@@ -204,6 +221,42 @@ describe('DiffPanel header e botões de ação', () => {
     await act(async () => { await new Promise<void>((resolve) => requestAnimationFrame(() => resolve())); });
     expect(host.style.visibility).toBe('');
     expect(screen.queryByRole('status')).not.toBeInTheDocument();
+  });
+
+  it('mantém o diff compacto anterior visível enquanto calcula o próximo', async () => {
+    const firstFile = useAppStore.getState().selectedFile!;
+    const firstPreview = {
+      sessionId: 's1', requestId: 1, fileId: firstFile.id, version: 'v1', kind: 'text' as const,
+      original: 'before\n', modified: 'after\n', message: null,
+    };
+    useAppStore.setState({ compactDiff: true, preview: firstPreview });
+    const { container } = render(<DiffPanel />);
+    await act(async () => { await Promise.resolve(); });
+    const host = container.querySelector('.monaco-host') as HTMLElement;
+    const diff = monacoMock.editor.createDiffEditor.mock.results.at(-1)!.value;
+    const activeModel = diff.setModel.mock.lastCall?.[0];
+    expect(activeModel).toBeTruthy();
+    expect(host.style.visibility).toBe('');
+
+    let finish!: () => void;
+    const pending = new Promise<void>((resolve) => { finish = resolve; });
+    diff.createViewModel.mockImplementationOnce((model: unknown) => ({
+      model, waitForDiff: () => pending, unchangedRegions: { get: () => [] }, dispose: vi.fn(),
+    }));
+    const secondFile = { ...firstFile, id: 'f2', name: 'next.py', pathDisplay: 'src/next.py' };
+    act(() => useAppStore.setState({
+      selectedFile: secondFile,
+      preview: { ...firstPreview, fileId: secondFile.id, version: 'v2', modified: 'next\n' },
+    }));
+
+    expect(diff.setModel.mock.lastCall?.[0]).toBe(activeModel);
+    expect(host.style.visibility).toBe('');
+    expect(container.querySelector('.path-label')).toHaveTextContent(firstFile.pathDisplay);
+
+    await act(async () => { finish(); await pending; });
+    expect(diff.setModel.mock.lastCall?.[0]).not.toBe(activeModel);
+    expect(host.style.visibility).toBe('');
+    expect(container.querySelector('.path-label')).toHaveTextContent(secondFile.pathDisplay);
   });
 
   it('renderiza barra de hunks e permite navegar e preparar trecho', () => {

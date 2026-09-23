@@ -741,6 +741,52 @@ impl Backend {
         Ok(FileHistoryResult { entries })
     }
 
+    pub fn file_history_preview(
+        &self,
+        session_id: &str,
+        request_id: u64,
+        oid: &str,
+        path: &str,
+    ) -> Result<Preview, AppError> {
+        validate_oid(oid)?;
+        let state = self.session(session_id)?;
+        let _read = state.coordinator.read().expect("coordinator lock poisoned");
+        let (file, parent) = thread::scope(|scope| {
+            let parent = scope.spawn(|| state.repo.first_parent(oid));
+            let file = state.repo.file_change_for_commit(oid, Path::new(path));
+            (file, parent.join().expect("parent reader panicked"))
+        });
+        let file = file?.ok_or_else(|| invalid("Arquivo não pertence a este commit"))?;
+        let parent = parent?;
+        let old_path = file.old_path.as_deref().unwrap_or(&file.path);
+        let (original_bytes, modified_bytes) = read_preview_sides(
+            || match parent.as_deref() {
+                Some(parent) => state.repo.revision_content(parent, old_path),
+                None => Ok(None),
+            },
+            || state.repo.revision_content(oid, &file.path),
+        )?;
+        let file_id = format!("{oid}:{path}");
+        let version = preview_version(
+            &file_id,
+            original_bytes.as_deref(),
+            modified_bytes.as_deref(),
+        );
+        let (kind, original, modified, message) =
+            classify_preview(original_bytes, modified_bytes, file.status);
+        Ok(Preview {
+            session_id: state.id.clone(),
+            request_id,
+            file_id,
+            version,
+            kind: kind.into(),
+            original,
+            modified,
+            message,
+            hunks: Vec::new(),
+        })
+    }
+
     pub fn reflog(
         &self,
         session_id: &str,

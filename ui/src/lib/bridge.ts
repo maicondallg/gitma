@@ -22,6 +22,7 @@ export interface BridgeAdapter {
   applyOperation(sessionId: string, requestId: number, operation: Operation, fileIds: string[], message: string): Promise<OperationResult>;
   getBlame(sessionId: string, requestId: number, path: string, commitOid?: string | null): Promise<BlameResult>;
   getFileHistory(sessionId: string, requestId: number, path: string, maxCount?: number): Promise<FileHistoryResult>;
+  getFileHistoryPreview(sessionId: string, requestId: number, oid: string, path: string): Promise<Preview>;
   getReflog(sessionId: string, requestId: number, limit?: number): Promise<ReflogResult>;
   getRemotes?(sessionId: string, requestId: number): Promise<RemotesResult>;
   onRepoChanged(listener: (event: RepoChanged) => void): Promise<() => void>;
@@ -62,6 +63,8 @@ const nativeBridge: BridgeAdapter = {
     invoke('get_blame', { sessionId, requestId, path, commitOid: commitOid ?? null }),
   getFileHistory: (sessionId, requestId, path, maxCount) =>
     invoke('get_file_history', { sessionId, requestId, path, maxCount: maxCount ?? null }),
+  getFileHistoryPreview: (sessionId, requestId, oid, path) =>
+    invoke('get_file_history_preview', { sessionId, requestId, oid, path }),
   getReflog: (sessionId, requestId, limit) =>
     invoke('get_reflog', { sessionId, requestId, limit: limit ?? null }),
   getRemotes: (sessionId, requestId) =>
