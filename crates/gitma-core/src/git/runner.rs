@@ -154,11 +154,19 @@ fn run_with_input<'a>(
     let stderr_reader = thread::spawn(move || read_pipe(stderr, MAX_STDERR_CAPTURE));
 
     let deadline = Instant::now() + timeout;
+    let started = Instant::now();
     let status = loop {
         match child.try_wait() {
             Ok(Some(status)) => break status,
             Ok(None) if Instant::now() < deadline && !CANCELLED.load(Ordering::SeqCst) => {
-                thread::sleep(Duration::from_millis(10))
+                // Most local Git commands finish in a few milliseconds. Poll
+                // them promptly, then back off for slower network operations.
+                let interval = if started.elapsed() < Duration::from_millis(50) {
+                    Duration::from_millis(2)
+                } else {
+                    Duration::from_millis(10)
+                };
+                thread::sleep(interval)
             }
             Ok(None) if CANCELLED.load(Ordering::SeqCst) => {
                 stop_child(&mut child);

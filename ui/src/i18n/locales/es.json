@@ -90,7 +90,9 @@
     "pushAllTagsTitle": "Enviar todos los tags locales al repositorio remoto (--tags)",
     "detachedHead": "HEAD desconectado (detached)",
     "detached": "detached",
-    "currentBranchCheckedOut": "Rama actual activa"
+    "currentBranchCheckedOut": "Rama actual activa",
+    "openInBrowser": "Abrir en el navegador",
+    "openInBrowserTitle": "Abrir repositorio en el navegador ({{branch}})"
   },
   "tabs": {
     "home": "Inicio",
@@ -209,6 +211,7 @@
   },
   "diff": {
     "selectFile": "Seleccione un archivo para ver los cambios",
+    "loadingFile": "Cargando archivo",
     "onlyChanges": "Solo cambios",
     "compactDiffActive": "Compacto: mostrando solo líneas modificadas (clic para ver archivo completo)",
     "compactDiffInactive": "Completo: mostrando todo el archivo (clic para ocultar líneas sin cambios)",
@@ -253,7 +256,12 @@
     "openEditor": "Abrir en VS Code / Editor",
     "revealFile": "Revelar en explorador de archivos",
     "openTerminal": "Abrir en terminal",
-    "fileHistory": "Ver historial del archivo"
+    "fileHistory": "Ver historial del archivo",
+    "restoreFile": "Restaurar al directorio de trabajo",
+    "restoreFileConfirm": "¿Restaurar el archivo \"{{name}}\" a la versión de este commit ({{hash}})? Se reemplazarán los cambios locales.",
+    "viewBlameAtCommit": "Ver Git Blame en este commit",
+    "openInBrowser": "Abrir en el navegador",
+    "copyPatch": "Copiar diff de este archivo"
   },
   "commit": {
     "label": "Mensaje del commit",
@@ -311,7 +319,16 @@
     "revertCommitConfirm": "¿Revertir el commit {{hash}} (\"{{subject}}\")?\nEsto creará un nuevo commit deshaciendo los cambios.",
     "deleteTagConfirm": "¿Está seguro de que desea eliminar la etiqueta local \"{{tag}}\"?",
     "deleteRemoteTagConfirm": "¿Está seguro de que desea eliminar la etiqueta \"{{tag}}\" en el servidor remoto (origin)?",
-    "stashDropConfirm": "¿Está seguro de que desea descartar este stash ({{name}})?"
+    "stashDropConfirm": "¿Está seguro de que desea descartar este stash ({{name}})?",
+    "checkoutCommit": "Hacer checkout de este commit",
+    "cherryPickToBranch": "Cherry-pick en {{branch}}",
+    "openInBrowser": "Abrir commit en el navegador",
+    "openBranchInBrowser": "Abrir repositorio en el navegador ({{branch}})",
+    "copyFullHash": "Copiar hash completo",
+    "copySubject": "Copiar mensaje del commit",
+    "branchHeader": "Rama: {{name}}",
+    "tagHeader": "Tag: {{name}}",
+    "stashHeader": "Stash"
   },
   "newBranch": {
     "title": "Crear nueva rama",

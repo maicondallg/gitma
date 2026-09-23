@@ -283,6 +283,14 @@ fn branch_operations_create_checkout_merge_delete() {
         "history_key deve mudar ao alternar de branch mesmo no mesmo commit"
     );
 
+    git(dir.path(), &["checkout", "--detach", "-q"]);
+    assert_ne!(
+        feature_history_key,
+        repo.history_key().unwrap(),
+        "history_key deve mudar ao soltar HEAD no mesmo commit"
+    );
+    repo.checkout_branch("feature-1").unwrap();
+
     // Comita na nova branch
     commit_file(dir.path(), "feature.txt", "feat\n", "feature commit");
 
@@ -1122,4 +1130,22 @@ fn conflict_resolution_operations_work() {
     repo.resolve_conflict("shared.txt", "ours").unwrap();
     let content = std::fs::read_to_string(dir.path().join("shared.txt")).unwrap();
     assert_eq!(content, "line 1 main\n");
+}
+
+#[test]
+fn restore_file_from_commit_works() {
+    let dir = repository();
+    let repo = GitRepository::open(dir.path()).unwrap();
+    commit_file(dir.path(), "file.txt", "version 1\n", "v1 commit");
+
+    let v1_oid = repo.history(0, 1).unwrap().commits[0].oid.clone();
+
+    commit_file(dir.path(), "file.txt", "version 2\n", "v2 commit");
+    let current_content = std::fs::read_to_string(dir.path().join("file.txt")).unwrap();
+    assert_eq!(current_content, "version 2\n");
+
+    repo.restore_file_from_commit(&v1_oid, std::path::Path::new("file.txt"))
+        .unwrap();
+    let restored_content = std::fs::read_to_string(dir.path().join("file.txt")).unwrap();
+    assert_eq!(restored_content, "version 1\n");
 }

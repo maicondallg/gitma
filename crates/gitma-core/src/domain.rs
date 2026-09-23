@@ -25,7 +25,7 @@ pub enum SelectionContext {
     Commit { oid: String },
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum FileArea {
     Staged,
     Unstaged,

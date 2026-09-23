@@ -279,6 +279,8 @@ pub enum Operation {
     RebaseSkip,
     MergeAbort,
     MergeSquash,
+    OpenBrowser,
+    RestoreCommitFile,
 }
 
 type Emit = Arc<dyn Fn(RepoChanged) + Send + Sync + 'static>;
@@ -306,7 +308,7 @@ struct SessionState {
 #[derive(Default)]
 struct FileRegistry {
     next: u64,
-    ids: Vec<(FileKey, String)>,
+    ids: HashMap<FileKey, String>,
     entries: HashMap<String, NativeFile>,
 }
 #[derive(Default)]
@@ -321,14 +323,14 @@ struct HistoryCache {
     lanes: Vec<LaneState>,
     exhausted: bool,
 }
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 struct FileKey {
     context: NativeContext,
     area: FileArea,
     path: PathBuf,
     old_path: Option<PathBuf>,
 }
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 enum NativeContext {
     Local,
     Commit(String),
@@ -538,11 +540,15 @@ impl Backend {
                 return Ok(result);
             }
         }
-        let files = register_files(
-            &state,
-            NativeContext::Commit(oid.into()),
-            state.repo.files_for_commit(oid)?,
-        );
+        let (raw_files, details) = thread::scope(|scope| {
+            let details = scope.spawn(|| state.repo.commit_details(oid).ok());
+            let files = state.repo.files_for_commit(oid);
+            (
+                files,
+                details.join().expect("commit details reader panicked"),
+            )
+        });
+        let files = register_files(&state, NativeContext::Commit(oid.into()), raw_files?);
         let mut total_ins = 0;
         let mut total_del = 0;
         for f in &files {
@@ -558,7 +564,6 @@ impl Backend {
             insertions: total_ins,
             deletions: total_del,
         };
-        let details = state.repo.commit_details(oid).ok();
         let result = CommitFiles {
             session_id: state.id.clone(),
             request_id,
@@ -653,7 +658,38 @@ impl Backend {
             .get(file_id)
             .cloned()
             .ok_or_else(|| invalid("Arquivo não pertence a esta sessão"))?;
-        let (original_bytes, modified_bytes) = preview_bytes(&state.repo, &selected)?;
+        let cached_parent = if let NativeContext::Commit(oid) = &selected.context {
+            state
+                .commit_cache
+                .lock()
+                .expect("commit_cache lock poisoned")
+                .get(oid)
+                .and_then(|cached| {
+                    cached
+                        .details
+                        .as_ref()
+                        .map(|details| details.parents.first().cloned())
+                })
+        } else {
+            None
+        };
+        let (bytes, pending_hunks) = thread::scope(|scope| {
+            let hunks = if matches!(selected.context, NativeContext::Local)
+                && selected.file.status != FileStatus::Untracked
+                && selected.file.status != FileStatus::Conflicted
+                && !selected.file.is_binary
+            {
+                Some(scope.spawn(|| state.repo.file_hunks(&selected.file)))
+            } else {
+                None
+            };
+            let bytes = preview_bytes(&state.repo, &selected, cached_parent);
+            (
+                bytes,
+                hunks.map(|task| task.join().expect("hunk reader panicked")),
+            )
+        });
+        let (original_bytes, modified_bytes) = bytes?;
         let version = preview_version(
             file_id,
             original_bytes.as_deref(),
@@ -661,8 +697,8 @@ impl Backend {
         );
         let (kind, original, modified, message) =
             classify_preview(original_bytes, modified_bytes, selected.file.status);
-        let hunks = if matches!(selected.context, NativeContext::Local) && kind == "text" {
-            state.repo.file_hunks(&selected.file).unwrap_or_default()
+        let hunks = if kind == "text" {
+            pending_hunks.unwrap_or(Ok(Vec::new())).unwrap_or_default()
         } else {
             Vec::new()
         };
@@ -823,6 +859,37 @@ impl Backend {
             Operation::RevealFile => {
                 let path = message.trim();
                 state.repo.reveal_file(path)?;
+            }
+            Operation::OpenBrowser => {
+                let url = message.trim();
+                if url.is_empty() {
+                    return Err(invalid("A URL do navegador é obrigatória"));
+                }
+                state.repo.open_browser(url)?;
+            }
+            Operation::RestoreCommitFile => {
+                #[derive(Deserialize)]
+                struct RestoreParams {
+                    oid: String,
+                    path: String,
+                }
+                let (oid, path_str) =
+                    if let Ok(params) = serde_json::from_str::<RestoreParams>(message) {
+                        (params.oid, params.path)
+                    } else if let Some(first) = files.first() {
+                        (
+                            message.trim().to_string(),
+                            first.file.path.to_string_lossy().into_owned(),
+                        )
+                    } else {
+                        return Err(invalid("Parâmetros inválidos para restaurar arquivo"));
+                    };
+                if oid.is_empty() || path_str.is_empty() {
+                    return Err(invalid("Commit e caminho do arquivo são obrigatórios"));
+                }
+                state
+                    .repo
+                    .restore_file_from_commit(&oid, Path::new(&path_str))?;
             }
             Operation::ResolveConflict => {
                 #[derive(Deserialize)]
@@ -1290,6 +1357,10 @@ impl Backend {
             Operation::RebaseAbort => "Rebase abortado com sucesso",
             Operation::RebaseSkip => "Commit pulado no rebase",
             Operation::MergeAbort => "Merge abortado com sucesso",
+            Operation::OpenBrowser => "Navegador aberto",
+            Operation::RestoreCommitFile => {
+                "Arquivo restaurado com sucesso para a pasta de trabalho"
+            }
         };
         Ok(OperationResult {
             session_id: state.id.clone(),
@@ -1356,12 +1427,12 @@ fn register_files(
                 path: file.path.clone(),
                 old_path: file.old_path.clone(),
             };
-            let id = if let Some((_, id)) = registry.ids.iter().find(|(stored, _)| *stored == key) {
+            let id = if let Some(id) = registry.ids.get(&key) {
                 id.clone()
             } else {
                 registry.next += 1;
                 let id = format!("file-{}", registry.next);
-                registry.ids.push((key, id.clone()));
+                registry.ids.insert(key, id.clone());
                 id
             };
             registry.entries.insert(
@@ -1426,35 +1497,93 @@ fn area_name(area: FileArea) -> &'static str {
 
 type PreviewBytes = (Option<Vec<u8>>, Option<Vec<u8>>);
 
-fn preview_bytes(repo: &GitRepository, selected: &NativeFile) -> GitResult<PreviewBytes> {
+fn read_preview_sides(
+    original: impl FnOnce() -> GitResult<Option<Vec<u8>>> + Send,
+    modified: impl FnOnce() -> GitResult<Option<Vec<u8>>> + Send,
+) -> GitResult<PreviewBytes> {
+    thread::scope(|scope| {
+        let original = scope.spawn(original);
+        let modified = modified();
+        Ok((
+            original.join().expect("preview reader panicked")?,
+            modified?,
+        ))
+    })
+}
+
+fn preview_bytes(
+    repo: &GitRepository,
+    selected: &NativeFile,
+    cached_parent: Option<Option<String>>,
+) -> GitResult<PreviewBytes> {
     let old = selected
         .file
         .old_path
         .as_deref()
         .unwrap_or(&selected.file.path);
     match &selected.context {
-        NativeContext::Local if selected.file.area == FileArea::Unstaged => Ok((
-            repo.index_content(old)?,
-            repo.worktree_content(&selected.file.path)?,
-        )),
-        NativeContext::Local => Ok((
-            repo.revision_content("HEAD", old)?,
-            repo.index_content(&selected.file.path)?,
-        )),
-        NativeContext::Commit(oid) => {
-            let parent = repo.first_parent(oid)?;
-            Ok((
-                match parent {
-                    Some(parent) => repo.revision_content(&parent, old)?,
-                    None => None,
-                },
-                repo.revision_content(oid, &selected.file.path)?,
-            ))
+        NativeContext::Local if selected.file.area == FileArea::Unstaged => {
+            if selected.file.status == FileStatus::Untracked {
+                Ok((None, repo.worktree_content(&selected.file.path)?))
+            } else {
+                read_preview_sides(
+                    || repo.index_content(old),
+                    || repo.worktree_content(&selected.file.path),
+                )
+            }
         }
-        NativeContext::Compare(base_oid, target_oid) => Ok((
-            repo.revision_content(base_oid, old)?,
-            repo.revision_content(target_oid, &selected.file.path)?,
-        )),
+        NativeContext::Local => {
+            if selected.file.status == FileStatus::Added && selected.file.old_path.is_none() {
+                Ok((None, repo.index_content(&selected.file.path)?))
+            } else {
+                read_preview_sides(
+                    || repo.revision_content("HEAD", old),
+                    || repo.index_content(&selected.file.path),
+                )
+            }
+        }
+        NativeContext::Commit(oid) => {
+            let parent =
+                if selected.file.status == FileStatus::Added && selected.file.old_path.is_none() {
+                    None
+                } else {
+                    match cached_parent {
+                        Some(parent) => parent,
+                        None => repo.first_parent(oid)?,
+                    }
+                };
+            if selected.file.status == FileStatus::Deleted {
+                Ok((
+                    match parent {
+                        Some(parent) => repo.revision_content(&parent, old)?,
+                        None => None,
+                    },
+                    None,
+                ))
+            } else if let Some(parent) = parent {
+                read_preview_sides(
+                    || repo.revision_content(&parent, old),
+                    || repo.revision_content(oid, &selected.file.path),
+                )
+            } else {
+                Ok((None, repo.revision_content(oid, &selected.file.path)?))
+            }
+        }
+        NativeContext::Compare(base_oid, target_oid) => {
+            if selected.file.status == FileStatus::Added && selected.file.old_path.is_none() {
+                Ok((
+                    None,
+                    repo.revision_content(target_oid, &selected.file.path)?,
+                ))
+            } else if selected.file.status == FileStatus::Deleted {
+                Ok((repo.revision_content(base_oid, old)?, None))
+            } else {
+                read_preview_sides(
+                    || repo.revision_content(base_oid, old),
+                    || repo.revision_content(target_oid, &selected.file.path),
+                )
+            }
+        }
     }
 }
 fn classify_preview(

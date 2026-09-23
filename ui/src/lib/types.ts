@@ -159,7 +159,9 @@ export type Operation =
   | 'rebase'
   | 'rebaseContinue'
   | 'rebaseAbort'
-  | 'rebaseSkip';
+  | 'rebaseSkip'
+  | 'openBrowser'
+  | 'restoreCommitFile';
 export interface OperationResult { sessionId: string; requestId: number; message: string }
 export type DiffMode = 'unified' | 'split';
 export type FileViewMode = 'flat' | 'tree';
@@ -179,6 +181,7 @@ export interface TabItem {
   preview: Preview | null;
   commitMessage: string;
   color?: string | null;
+  remotes?: RemoteEntry[];
 }
 
 export interface RecentRepo {

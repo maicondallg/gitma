@@ -15,9 +15,20 @@ vi.mock('../lib/monaco', () => ({
     editor: {
       createDiffEditor: vi.fn(() => ({
         setModel: vi.fn(),
+        getLineChanges: vi.fn(() => []),
+        createViewModel: vi.fn((model) => ({ model, waitForDiff: vi.fn().mockResolvedValue(undefined) })),
         updateOptions: vi.fn(),
         dispose: vi.fn(),
+        onDidUpdateDiff: vi.fn(() => ({ dispose: vi.fn() })),
+        getOriginalEditor: vi.fn(() => ({
+          render: vi.fn(),
+          onDidChangeHiddenAreas: vi.fn(() => ({ dispose: vi.fn() })),
+          _getViewModel: vi.fn(() => ({ getHiddenAreas: vi.fn(() => []) })),
+        })),
         getModifiedEditor: vi.fn(() => ({
+          render: vi.fn(),
+          onDidChangeHiddenAreas: vi.fn(() => ({ dispose: vi.fn() })),
+          _getViewModel: vi.fn(() => ({ getHiddenAreas: vi.fn(() => []) })),
           onDidChangeCursorPosition: vi.fn(() => ({ dispose: vi.fn() })),
           onDidScrollChange: vi.fn(() => ({ dispose: vi.fn() })),
           revealLineInCenter: vi.fn(),
@@ -28,6 +39,7 @@ vi.mock('../lib/monaco', () => ({
         })),
       })),
       createModel: vi.fn(() => ({
+        getLineCount: vi.fn(() => 2),
         dispose: vi.fn(),
       })),
       setTheme: vi.fn(),

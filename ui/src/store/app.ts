@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { getBridge } from '../lib/bridge';
-import type { AppError, CommitDetails, CommitFiles, Context, DiffMode, DiffStat, FileEntry, FileViewMode, History, Operation, Preview, RecentRepo, RepoChanged, Session, Snapshot, TabItem } from '../lib/types';
+import type { AppError, CommitDetails, CommitFiles, Context, DiffMode, DiffStat, FileEntry, FileViewMode, History, Operation, Preview, RecentRepo, RemoteEntry, RepoChanged, Session, Snapshot, TabItem } from '../lib/types';
+import { buildWebUrl } from '../lib/webUrl';
 
 type Notice = AppError | { message: string; category: 'success' };
 type RefreshReason = 'manual' | 'focus' | 'watcher' | 'mutation';
@@ -156,6 +157,7 @@ export interface AppState {
   fileHistoryPath: string | null;
   reflogOpen: boolean;
   remotesModalOpen: boolean;
+  remotes?: RemoteEntry[];
   historyScope: 'all' | 'current';
   compareOids: [string, string] | null;
   blameOpen: boolean;
@@ -170,6 +172,8 @@ export interface AppState {
   closeReflog(): void;
   openRemotesModal(): void;
   closeRemotesModal(): void;
+  openInBrowser?(options?: { branch?: string | null; commitOid?: string | null; filePath?: string | null }): Promise<void>;
+  restoreCommitFile?(commitOid: string, path: string): Promise<void>;
   setHistoryScope(scope: 'all' | 'current'): Promise<void>;
   compareCommits(baseOid: string, targetOid: string): Promise<void>;
   resolveConflict(path: string, choice: 'ours' | 'theirs' | 'both' | 'mark_resolved'): Promise<void>;
@@ -236,6 +240,18 @@ const asError = (error: unknown): AppError => {
 const sameFile = (a: FileEntry | null, b: FileEntry | null) => a?.id === b?.id && a?.area === b?.area;
 const localFiles = (snapshot: Snapshot) => [...snapshot.staged, ...snapshot.unstaged];
 const priority: Record<RefreshReason, number> = { watcher: 0, focus: 1, manual: 2, mutation: 3 };
+const NO_FILE_OPERATIONS = new Set<Operation>([
+  'stageAll', 'unstageAll', 'discardAll', 'push', 'forcePushWithLease', 'fetch', 'pull',
+  'switchBranch', 'createBranch', 'mergeBranch', 'mergeSquash', 'mergeAbort',
+  'deleteBranch', 'deleteRemoteBranch',
+  'cherryPick', 'cherryPickAbort', 'cherryPickContinue',
+  'stashPush', 'stashPop', 'stashApply', 'stashDrop', 'commit', 'commitAmend',
+  'reset', 'revertCommit', 'createTag', 'deleteTag', 'pushTag',
+  'rebase', 'rebaseContinue', 'rebaseAbort', 'rebaseSkip',
+  'stageHunk', 'unstageHunk', 'discardHunk', 'ignorePath', 'openTerminal', 'openEditor', 'revealFile',
+  'openBrowser', 'restoreCommitFile'
+]);
+const NO_REFRESH_OPERATIONS = new Set<Operation>(['openTerminal', 'openEditor', 'revealFile', 'openBrowser']);
 function mergeRefresh(current: typeof queuedRefresh, next: { reason: RefreshReason; event?: RepoChanged }) {
   if (!current) return next;
   const reason = priority[next.reason] >= priority[current.reason] ? next.reason : current.reason;
@@ -354,6 +370,7 @@ export const useAppStore = create<AppState>((set, get) => {
                 selectedFile: current.selectedFile,
                 preview: current.preview,
                 commitMessage: current.commitMessage,
+                remotes: current.remotes,
               }
             : t
         )
@@ -387,6 +404,7 @@ export const useAppStore = create<AppState>((set, get) => {
       preview: null,
       commitMessage: '',
       color: tabColor,
+      remotes: [],
     };
 
     const newTabs = [...currentTabs, newTab];
@@ -408,6 +426,7 @@ export const useAppStore = create<AppState>((set, get) => {
       selectedFile: null,
       preview: null,
       commitMessage: '',
+      remotes: [],
       notice: session.warning ?? null,
     });
 
@@ -452,6 +471,7 @@ export const useAppStore = create<AppState>((set, get) => {
     fileHistoryPath: null,
     reflogOpen: false,
     remotesModalOpen: false,
+    remotes: [],
     historyScope: 'all',
     compareOids: null,
     blameOpen: false,
@@ -501,6 +521,93 @@ export const useAppStore = create<AppState>((set, get) => {
     },
     closeRemotesModal() {
       set({ remotesModalOpen: false });
+    },
+    async openInBrowser(options) {
+      const state = get();
+      if (!state.session) return;
+
+      const bridge = getBridge();
+      let remotes: RemoteEntry[] = [];
+      if (bridge.getRemotes) {
+        try {
+          const res = await bridge.getRemotes(state.session.sessionId, Date.now());
+          if (res?.remotes && res.remotes.length > 0) {
+            remotes = res.remotes;
+            set((s) => ({
+              remotes: res.remotes,
+              tabs: s.tabs.map((t) => (t.id === s.activeTabId ? { ...t, remotes: res.remotes } : t)),
+            }));
+          }
+        } catch {}
+      }
+
+      // Fallback para remotes salvos na aba ativa caso bridge falhe
+      if (remotes.length === 0) {
+        const currentTab = state.tabs.find((t) => t.id === state.activeTabId);
+        remotes = currentTab?.remotes ?? [];
+      }
+
+      if (remotes.length === 0) {
+        notify({ category: 'validation', message: 'Nenhum repositório remoto configurado para abrir no navegador.' }, set);
+        return;
+      }
+
+      // 1. Tenta identificar o remoto pela branch tracking upstream atual (ex: "origin/main", "upstream/feat")
+      let selectedRemote: RemoteEntry | undefined;
+      let trackingBranch: string | undefined;
+
+      const upstream = state.snapshot?.upstream?.trim();
+      if (upstream) {
+        const slashIdx = upstream.indexOf('/');
+        if (slashIdx !== -1) {
+          const upRemote = upstream.slice(0, slashIdx);
+          const upBranch = upstream.slice(slashIdx + 1);
+          const match = remotes.find((r) => r.name === upRemote);
+          if (match) {
+            selectedRemote = match;
+            trackingBranch = upBranch;
+          }
+        }
+      }
+
+      // 2. Se não encontrou por upstream, prioriza 'origin'
+      if (!selectedRemote) {
+        selectedRemote = remotes.find((r) => r.name === 'origin');
+      }
+
+      // 3. Fallback para o primeiro remote configurado
+      if (!selectedRemote) {
+        selectedRemote = remotes[0];
+      }
+
+      const remoteUrl = selectedRemote.fetchUrl || selectedRemote.pushUrl;
+      if (!remoteUrl) {
+        notify({ category: 'validation', message: 'Nenhum repositório remoto configurado para abrir no navegador.' }, set);
+        return;
+      }
+
+      const branchToOpen = (options?.branch !== undefined && options.branch !== null && options.branch.trim().length > 0)
+        ? options.branch
+        : (trackingBranch || state.snapshot?.branch);
+
+      const webUrl = buildWebUrl(remoteUrl, {
+        branch: branchToOpen,
+        commitOid: options?.commitOid,
+        filePath: options?.filePath,
+        remoteName: selectedRemote.name,
+      });
+
+      if (!webUrl) {
+        notify({ category: 'validation', message: 'Não foi possível identificar a URL web do repositório remoto.' }, set);
+        return;
+      }
+
+      await state.runOperation('openBrowser', [], webUrl);
+    },
+    async restoreCommitFile(commitOid, path) {
+      const state = get();
+      if (!state.session) return;
+      await state.runOperation('restoreCommitFile', [], JSON.stringify({ oid: commitOid, path }));
     },
     async setHistoryScope(scope) {
       const current = get();
@@ -687,6 +794,7 @@ export const useAppStore = create<AppState>((set, get) => {
             selectedFile: null,
             preview: null,
             commitMessage: '',
+            remotes: [],
           });
           saveOpenTabs([], 'home');
         } else {
@@ -705,6 +813,7 @@ export const useAppStore = create<AppState>((set, get) => {
             selectedFile: nextTab.selectedFile,
             preview: nextTab.preview,
             commitMessage: nextTab.commitMessage,
+            remotes: nextTab.remotes ?? [],
           });
           saveOpenTabs(remainingTabs.map((t) => t.path), nextTab.id);
           if (!nextTab.snapshot) {
@@ -854,6 +963,7 @@ export const useAppStore = create<AppState>((set, get) => {
                   selectedFile: current.selectedFile,
                   preview: current.preview,
                   commitMessage: current.commitMessage,
+                  remotes: current.remotes,
                 }
               : t
           )
@@ -873,6 +983,7 @@ export const useAppStore = create<AppState>((set, get) => {
           selectedFile: null,
           preview: null,
           commitMessage: '',
+          remotes: [],
         });
         saveOpenTabs(updatedTabs.map((t) => t.path), 'home');
         return;
@@ -900,6 +1011,7 @@ export const useAppStore = create<AppState>((set, get) => {
         selectedFile: targetTab.selectedFile,
         preview: targetTab.preview,
         commitMessage: targetTab.commitMessage,
+        remotes: targetTab.remotes ?? [],
         notice: null,
       });
 
@@ -1103,16 +1215,6 @@ export const useAppStore = create<AppState>((set, get) => {
       set({ operation });
       const execute = async () => {
         const state = get(); if (!state.session) return;
-        const NO_FILE_OPERATIONS = new Set<Operation>([
-          'stageAll', 'unstageAll', 'discardAll', 'push', 'forcePushWithLease', 'fetch', 'pull',
-          'switchBranch', 'createBranch', 'mergeBranch', 'mergeSquash', 'mergeAbort',
-          'deleteBranch', 'deleteRemoteBranch',
-          'cherryPick', 'cherryPickAbort', 'cherryPickContinue',
-          'stashPush', 'stashPop', 'stashApply', 'stashDrop', 'commit', 'commitAmend',
-          'reset', 'revertCommit', 'createTag', 'deleteTag', 'pushTag',
-          'rebase', 'rebaseContinue', 'rebaseAbort', 'rebaseSkip',
-          'stageHunk', 'unstageHunk', 'discardHunk', 'ignorePath', 'openTerminal', 'openEditor', 'revealFile'
-        ]);
         const ids = fileIds ?? (NO_FILE_OPERATIONS.has(operation) ? [] : state.selectedFile ? [state.selectedFile.id] : []);
         const messageToSend = customMessage !== undefined
           ? (operation === 'mergeBranch' && state.mergeStrategy !== 'default' && !customMessage.startsWith('{'))
@@ -1134,7 +1236,7 @@ export const useAppStore = create<AppState>((set, get) => {
                 tabs: s.tabs.map((t) => (t.id === s.activeTabId ? { ...t, commitMessage: '' } : t)),
               }));
             }
-            await get().refresh('mutation');
+            if (!NO_REFRESH_OPERATIONS.has(operation)) await get().refresh('mutation');
           }
         } catch (error) { if (get().session?.sessionId === state.session.sessionId) notify(asError(error), set); }
         finally { writeReserved = false; if (get().session?.sessionId === state.session.sessionId) set({ operation: null }); }

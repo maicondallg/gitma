@@ -7,11 +7,13 @@ pub mod status;
 use crate::domain::*;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 /// Git service backed by the installed `git` executable.
 #[derive(Clone, Debug)]
 pub struct GitRepository {
     context: RepoContext,
+    git_dir: OnceLock<PathBuf>,
 }
 impl GitRepository {
     pub fn open(path: impl AsRef<Path>) -> GitResult<Self> {
@@ -26,10 +28,14 @@ impl GitRepository {
                 root,
                 generation: 0,
             },
+            git_dir: OnceLock::new(),
         })
     }
     pub fn from_context(context: RepoContext) -> Self {
-        Self { context }
+        Self {
+            context,
+            git_dir: OnceLock::new(),
+        }
     }
     pub fn snapshot(&self) -> GitResult<RepoSnapshot> {
         let raw = runner::read(
@@ -311,38 +317,45 @@ impl GitRepository {
         )
     }
     pub fn files_for_commit(&self, oid: &str) -> GitResult<Vec<ChangedFile>> {
-        let raw = runner::read(
-            &self.context.root,
-            &[
-                "diff-tree",
-                "--root",
-                "--diff-merges=first-parent",
-                "--no-commit-id",
-                "--name-status",
-                "-M",
-                "-C",
-                "-r",
-                "-z",
-                oid,
-            ],
-        )?;
+        let (raw, numstat_raw) = std::thread::scope(|scope| {
+            let numstat = scope.spawn(|| {
+                runner::read(
+                    &self.context.root,
+                    &[
+                        "diff-tree",
+                        "--root",
+                        "--diff-merges=first-parent",
+                        "--no-commit-id",
+                        "--numstat",
+                        "-M",
+                        "-C",
+                        "-r",
+                        "-z",
+                        oid,
+                    ],
+                )
+            });
+            let names = runner::read(
+                &self.context.root,
+                &[
+                    "diff-tree",
+                    "--root",
+                    "--diff-merges=first-parent",
+                    "--no-commit-id",
+                    "--name-status",
+                    "-M",
+                    "-C",
+                    "-r",
+                    "-z",
+                    oid,
+                ],
+            );
+            (names, numstat.join().expect("numstat reader panicked"))
+        });
+        let raw = raw?;
         let mut files = status::parse_commit_names(&raw);
 
-        if let Ok(numstat_raw) = runner::read(
-            &self.context.root,
-            &[
-                "diff-tree",
-                "--root",
-                "--diff-merges=first-parent",
-                "--no-commit-id",
-                "--numstat",
-                "-M",
-                "-C",
-                "-r",
-                "-z",
-                oid,
-            ],
-        ) {
+        if let Ok(numstat_raw) = numstat_raw {
             let numstat_map = status::parse_numstat_z(&numstat_raw);
             for f in &mut files {
                 if let Some(stat) = numstat_map
@@ -407,22 +420,23 @@ impl GitRepository {
             .map(str::to_owned))
     }
     pub fn git_dir(&self) -> GitResult<PathBuf> {
+        if let Some(dir) = self.git_dir.get() {
+            return Ok(dir.clone());
+        }
         let raw = runner::read(&self.context.root, &["rev-parse", "--git-dir"])?;
         let dir = path_from_git_output(raw)?;
-        Ok(if dir.is_absolute() {
+        let resolved = if dir.is_absolute() {
             dir
         } else {
             self.context.root.join(dir)
-        })
+        };
+        let _ = self.git_dir.set(resolved.clone());
+        Ok(resolved)
     }
     pub fn history_key(&self) -> GitResult<String> {
         use sha2::{Digest, Sha256};
         let mut data = runner::read(&self.context.root, &["show-ref", "--head", "--dereference"])
             .unwrap_or_default();
-        data.extend(
-            runner::read(&self.context.root, &["rev-parse", "--verify", "HEAD"])
-                .unwrap_or_default(),
-        );
         data.extend(
             runner::read(&self.context.root, &["symbolic-ref", "-q", "HEAD"]).unwrap_or_default(),
         );
@@ -701,6 +715,12 @@ impl GitRepository {
     }
     pub fn reveal_file(&self, rel_path: &str) -> GitResult<()> {
         operations::reveal_file(&self.context.root, rel_path)
+    }
+    pub fn open_browser(&self, url: &str) -> GitResult<()> {
+        operations::open_browser(url)
+    }
+    pub fn restore_file_from_commit(&self, commit_oid: &str, path: &Path) -> GitResult<()> {
+        operations::restore_file_from_commit(&self.context.root, commit_oid, path)
     }
     pub fn commit_details(&self, oid: &str) -> GitResult<CommitDetails> {
         operations::commit_details(&self.context.root, oid)

@@ -299,7 +299,7 @@ describe('gráfico', () => {
     const commitRow = screen.getByText('Actions button test').closest('button')!
     fireEvent.contextMenu(commitRow)
     expect(screen.getByRole('menu')).toBeInTheDocument()
-    expect(screen.getByText(/Copiar hash/i)).toBeInTheDocument()
+    expect(screen.getAllByText(/Copiar hash/i).length).toBeGreaterThanOrEqual(1)
   })
 })
 
@@ -552,6 +552,16 @@ describe('Stash, Cherry-pick e RefPopover no GraphPanel', () => {
     expect(screen.getByText('Pull')).toBeInTheDocument()
     expect(screen.getByText('Push')).toBeInTheDocument()
     expect(screen.getByText('Stash')).toBeInTheDocument()
+  })
+
+  it('abre configurações após carregar o modal sob demanda', async () => {
+    render(<App />)
+    act(() => useAppStore.setState({ settingsOpen: true }))
+    expect(await screen.findByRole('dialog', { name: 'Configurações' })).toBeInTheDocument()
+    act(() => useAppStore.setState({ settingsOpen: false }))
+    expect(screen.queryByRole('dialog', { name: 'Configurações' })).not.toBeInTheDocument()
+    act(() => useAppStore.setState({ settingsOpen: true }))
+    expect(await screen.findByRole('dialog', { name: 'Configurações' })).toBeInTheDocument()
   })
 
   it('permite navegar entre commits usando as setas para cima e para baixo', async () => {
@@ -1295,4 +1305,3 @@ describe('ContextMenu Tag Actions', () => {
     expect(actions.runOperation).toHaveBeenCalledWith('stage', ['u1']);
   });
 });
-

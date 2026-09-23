@@ -24,6 +24,7 @@ const modified = `import { repository } from './git';\n\nexport async function r
 
 export function createFixtureAdapter(name = 'local'): BridgeAdapter {
   const sessionId = 'demo-session';
+  let activeRepoName = 'Gitma';
   let revision = 1;
   let staged = name === 'clean' ? [] : [file('stage-app', 'src/app.ts', 'staged'), file('stage-cargo', 'Cargo.toml', 'staged')];
   let unstaged = name === 'clean' ? [] : [file('work-app', 'src/app.ts', 'unstaged'), file('work-schema', 'backend/prisma/schema.prisma', 'unstaged'), file('work-readme', 'README.md', 'unstaged'), file('work-tests', 'tests/workflows.ts', 'unstaged', 'untracked')];
@@ -34,18 +35,21 @@ export function createFixtureAdapter(name = 'local'): BridgeAdapter {
     startupOptions: async () => ({ repo: null, fixture: name }),
     openRepository: async (path?: string) => {
       const root = path ?? '/home/demo/projects/Gitma';
-      const name = root.split('/').filter(Boolean).pop() || 'Gitma';
-      return { sessionId: `session-${name}`, name, root };
+      const repoName = root.split('/').filter(Boolean).pop() || 'Gitma';
+      activeRepoName = repoName;
+      return { sessionId: `session-${repoName}`, name: repoName, root };
     },
     cloneRepository: async (_source: string, destination: string) => {
       const root = destination;
-      const name = root.split('/').filter(Boolean).pop() || 'Cloned';
-      return { sessionId: `session-${name}`, name, root };
+      const repoName = root.split('/').filter(Boolean).pop() || 'Cloned';
+      activeRepoName = repoName;
+      return { sessionId: `session-${repoName}`, name: repoName, root };
     },
     initRepository: async (path: string, _defaultBranch?: string) => {
       const root = path;
-      const name = root.split('/').filter(Boolean).pop() || 'NewRepo';
-      return { sessionId: `session-${name}`, name, root };
+      const repoName = root.split('/').filter(Boolean).pop() || 'NewRepo';
+      activeRepoName = repoName;
+      return { sessionId: `session-${repoName}`, name: repoName, root };
     },
     closeRepository: async () => { listener = null; },
     getSnapshot: async (_sessionId, requestId): Promise<Snapshot> => ({
@@ -76,7 +80,7 @@ export function createFixtureAdapter(name = 'local'): BridgeAdapter {
       sessionId,
       requestId,
       remotes: [
-        { name: 'origin', fetchUrl: 'https://github.com/maicondallg/Gitma.git', pushUrl: 'https://github.com/maicondallg/Gitma.git' },
+        { name: 'origin', fetchUrl: `https://github.com/maicondallg/${activeRepoName}.git`, pushUrl: `https://github.com/maicondallg/${activeRepoName}.git` },
       ],
     }),
     getCommitFiles: async (_sessionId, requestId, oid) => ({

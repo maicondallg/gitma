@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import {
   AlertTriangle,
   ChevronDown,
@@ -16,6 +16,7 @@ import {
 } from 'lucide-react';
 import { useAppStore } from '../store/app';
 import { languageForPath, monaco } from '../lib/monaco';
+import '../lib/editorTheme';
 import { useI18n } from '../i18n';
 import { applyTheme, getThemeById, getActiveThemeId } from '../lib/theme';
 import { getBridge } from '../lib/bridge';
@@ -48,11 +49,28 @@ function parseHunkDisplayInfo(hunk?: DiffHunk) {
   return { rangeText, scopeText, isSingle };
 }
 
+interface MonacoViewModelWithHiddenAreas {
+  getHiddenAreas(): monaco.IRange[];
+}
+
+interface MonacoEditorWithViewModel extends monaco.editor.ICodeEditor {
+  _getViewModel?(): MonacoViewModelWithHiddenAreas | null;
+}
+
+interface DiffViewModelWithUnchangedRegions extends monaco.editor.IDiffEditorViewModel {
+  unchangedRegions?: { get(): unknown[] };
+}
+
+function hiddenAreaCount(codeEditor: monaco.editor.ICodeEditor): number {
+  return (codeEditor as MonacoEditorWithViewModel)._getViewModel?.()?.getHiddenAreas()?.length ?? 0;
+}
+
 export function DiffPanel() {
   const { t } = useI18n();
   const host = useRef<HTMLDivElement>(null);
   const editor = useRef<monaco.editor.IStandaloneDiffEditor | null>(null);
   const models = useRef<{ original: monaco.editor.ITextModel; modified: monaco.editor.ITextModel } | null>(null);
+  const [diffPreparing, setDiffPreparing] = useState(false);
   const session = useAppStore((s) => s.session);
   const preview = useAppStore((s) => s.preview);
   const selectedFile = useAppStore((s) => s.selectedFile);
@@ -155,19 +173,20 @@ export function DiffPanel() {
     setCurrentHunkIndex(0);
   }, [preview?.fileId, preview?.version]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!host.current) return;
     const diffEditor = monaco.editor.createDiffEditor(host.current, {
       automaticLayout: true,
       renderSideBySide: diffMode === 'split',
       useInlineViewWhenSpaceIsLimited: false,
       minimap: { enabled: false },
+      smoothScrolling: false,
       scrollBeyondLastLine: false,
       readOnly: true,
       originalEditable: false,
       renderOverviewRuler: false,
       renderIndicators: true,
-      diffAlgorithm: 'advanced',
+      diffAlgorithm: 'legacy',
       ignoreTrimWhitespace: false,
       renderMarginRevertIcon: false,
       lineNumbers: 'on',
@@ -223,7 +242,7 @@ export function DiffPanel() {
     editor.current?.updateOptions({ renderSideBySide: diffMode === 'split' });
   }, [diffMode]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     editor.current?.updateOptions({
       hideUnchangedRegions: {
         enabled: compactDiff,
@@ -231,6 +250,10 @@ export function DiffPanel() {
         contextLineCount: 3,
       },
     });
+    if (!compactDiff) {
+      if (host.current) host.current.style.visibility = '';
+      setDiffPreparing(false);
+    }
   }, [compactDiff]);
 
   useEffect(() => {
@@ -269,19 +292,26 @@ export function DiffPanel() {
       highlight.classList.toggle('has-end', bottom <= panelRect.height);
     };
 
+    let frame: number | null = null;
+    const scheduleUpdate = () => {
+      if (frame !== null) return;
+      frame = requestAnimationFrame(() => {
+        frame = null;
+        update();
+      });
+    };
     const subscriptions = [
-      modified.onDidScrollChange(update),
-      modified.onDidLayoutChange(update),
-      modified.onDidChangeHiddenAreas(update),
-      modified.onDidChangeModel(update),
-      diffEditor.onDidUpdateDiff(update),
+      modified.onDidScrollChange(scheduleUpdate),
+      modified.onDidLayoutChange(scheduleUpdate),
+      modified.onDidChangeHiddenAreas(scheduleUpdate),
+      modified.onDidChangeModel(scheduleUpdate),
+      diffEditor.onDidUpdateDiff(scheduleUpdate),
     ];
-    const resizeObserver = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(update) : null;
+    const resizeObserver = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(scheduleUpdate) : null;
     resizeObserver?.observe(panel);
-    update();
-    const frame = requestAnimationFrame(update);
+    scheduleUpdate();
     return () => {
-      cancelAnimationFrame(frame);
+      if (frame !== null) cancelAnimationFrame(frame);
       subscriptions.forEach((subscription) => subscription.dispose());
       resizeObserver?.disconnect();
       highlight.remove();
@@ -412,40 +442,115 @@ export function DiffPanel() {
     const modEditor = diffEditor.getModifiedEditor?.();
     if (!modEditor) return;
 
-    updateVisibleBlame();
-    const t1 = setTimeout(updateVisibleBlame, 50);
-    const t2 = setTimeout(updateVisibleBlame, 150);
+    let frame: number | null = null;
+    const scheduleUpdate = () => {
+      if (frame !== null) return;
+      frame = requestAnimationFrame(() => {
+        frame = null;
+        updateVisibleBlame();
+      });
+    };
+
+    scheduleUpdate();
+    const t1 = setTimeout(scheduleUpdate, 50);
+    const t2 = setTimeout(scheduleUpdate, 150);
 
     const subs = [
-      modEditor.onDidScrollChange?.(() => updateVisibleBlame()),
-      modEditor.onDidLayoutChange?.(() => updateVisibleBlame()),
-      (modEditor as unknown as { onDidChangeHiddenAreas?: (cb: () => void) => { dispose: () => void } }).onDidChangeHiddenAreas?.(() => updateVisibleBlame()),
-      (diffEditor as unknown as { onDidUpdateDiff?: (cb: () => void) => { dispose: () => void } }).onDidUpdateDiff?.(() => updateVisibleBlame()),
-      (diffEditor as unknown as { onDidChangeModel?: (cb: () => void) => { dispose: () => void } }).onDidChangeModel?.(() => updateVisibleBlame()),
+      modEditor.onDidScrollChange?.(scheduleUpdate),
+      modEditor.onDidLayoutChange?.(scheduleUpdate),
+      (modEditor as unknown as { onDidChangeHiddenAreas?: (cb: () => void) => { dispose: () => void } }).onDidChangeHiddenAreas?.(scheduleUpdate),
+      (diffEditor as unknown as { onDidUpdateDiff?: (cb: () => void) => { dispose: () => void } }).onDidUpdateDiff?.(scheduleUpdate),
+      (diffEditor as unknown as { onDidChangeModel?: (cb: () => void) => { dispose: () => void } }).onDidChangeModel?.(scheduleUpdate),
     ].filter(Boolean);
 
     return () => {
       clearTimeout(t1);
       clearTimeout(t2);
+      if (frame !== null) cancelAnimationFrame(frame);
       subs.forEach((s) => s?.dispose?.());
     };
   }, [blameOpen, updateVisibleBlame, preview?.fileId, preview?.version]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const target = editor.current;
+    let disposed = false;
+    let viewModelAttached = false;
+    const compactSubscriptions: monaco.IDisposable[] = [];
     if (!target || !preview || (preview.kind !== 'text' && preview.kind !== 'conflict')) {
       target?.setModel(null);
+      if (host.current) host.current.style.visibility = '';
+      setDiffPreparing(false);
       return;
     }
+    const shouldCompact = compactDiff;
+    if (host.current) host.current.style.visibility = shouldCompact ? 'hidden' : '';
+    setDiffPreparing(shouldCompact);
+    // Never attach an uncomputed compact model to the visible editor. That is
+    // the state in which Monaco renders the complete file before folding it.
+    target.setModel(null);
     const language = languageForPath(selectedFile?.pathDisplay ?? selectedFile?.name ?? '');
     const old = models.current;
     const original = monaco.editor.createModel(preview.original, language);
     const modified = monaco.editor.createModel(preview.modified, language);
     models.current = { original, modified };
-    target.setModel({ original, modified });
+    const viewModel = shouldCompact
+      ? target.createViewModel({ original, modified }) as DiffViewModelWithUnchangedRegions
+      : null;
     old?.original.dispose();
     old?.modified.dispose();
-  }, [preview?.version, preview?.kind, selectedFile?.id]);
+    if (!shouldCompact) {
+      target.setModel({ original, modified });
+    } else {
+      void viewModel!.waitForDiff().then(() => {
+        if (disposed) return;
+        const originalEditor = target.getOriginalEditor();
+        const modifiedEditor = target.getModifiedEditor();
+        const expectedHiddenAreas = viewModel!.unchangedRegions?.get().length ?? 0;
+
+        const revealWhenFolded = () => {
+          if (disposed) return;
+          const changes = target.getLineChanges();
+          if (changes === null) return;
+          if (expectedHiddenAreas > 0 && (
+            hiddenAreaCount(originalEditor) < expectedHiddenAreas ||
+            hiddenAreaCount(modifiedEditor) < expectedHiddenAreas
+          )) return;
+
+          const firstChange = changes[0];
+          const firstHunk = preview.hunks?.[0];
+          const line = Math.max(1, Math.min(modified.getLineCount(),
+            firstChange?.modifiedStartLineNumber ?? firstHunk?.newStart ?? firstHunk?.oldStart ?? 1));
+          if (firstChange || firstHunk) modifiedEditor.revealLineInCenter(line);
+          originalEditor.render(true);
+          modifiedEditor.render(true);
+          requestAnimationFrame(() => {
+            if (disposed) return;
+            if (host.current) host.current.style.visibility = '';
+            setDiffPreparing(false);
+            compactSubscriptions.splice(0).forEach((subscription) => subscription.dispose());
+          });
+        };
+
+        compactSubscriptions.push(
+          originalEditor.onDidChangeHiddenAreas(revealWhenFolded),
+          modifiedEditor.onDidChangeHiddenAreas(revealWhenFolded),
+          target.onDidUpdateDiff(revealWhenFolded),
+        );
+        target.setModel(viewModel!);
+        viewModelAttached = true;
+        revealWhenFolded();
+      }).catch(() => {
+        if (disposed) return;
+        if (host.current) host.current.style.visibility = '';
+        setDiffPreparing(false);
+      });
+    }
+    return () => {
+      disposed = true;
+      compactSubscriptions.splice(0).forEach((subscription) => subscription.dispose());
+      if (viewModel && !viewModelAttached) viewModel.dispose();
+    };
+  }, [preview?.version, preview?.kind, selectedFile?.id, compactDiff]);
 
   const label = selectedFile
     ? selectedFile.oldPathDisplay
@@ -454,6 +559,9 @@ export function DiffPanel() {
     : t('diff.selectFile');
   const isConflict = preview?.kind === 'conflict';
   const unavailable = preview && preview.kind !== 'text' && !isConflict;
+  const loadingFile = Boolean(
+    selectedFile && (!preview || (diffPreparing && (preview.kind === 'text' || isConflict)))
+  );
 
   return (
     <section className="diff-panel" aria-label="Diff">
@@ -692,7 +800,12 @@ export function DiffPanel() {
             )}
           </div>
         )}
-        {!preview && <div className="empty-state">{t('diff.selectFilePrompt')}</div>}
+        {!preview && !selectedFile && <div className="empty-state">{t('diff.selectFile')}</div>}
+        {loadingFile && (
+          <div className="empty-state diff-preparing" role="status" aria-label={t('diff.loadingFile')}>
+            <Clock size={16} className="spin" />
+          </div>
+        )}
         {unavailable && (
           <div className="empty-state">
             <strong>

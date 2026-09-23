@@ -877,6 +877,41 @@ pub fn reveal_file(root: &Path, rel_path: &str) -> GitResult<()> {
     Ok(())
 }
 
+pub fn open_browser(url: &str) -> GitResult<()> {
+    let trimmed = url.trim();
+    if trimmed.is_empty() {
+        return Ok(());
+    }
+    #[cfg(target_os = "windows")]
+    {
+        let _ = std::process::Command::new("cmd")
+            .args(["/c", "start", "", trimmed])
+            .spawn();
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let _ = std::process::Command::new("open").arg(trimmed).spawn();
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        let _ = std::process::Command::new("xdg-open").arg(trimmed).spawn();
+    }
+    Ok(())
+}
+
+pub fn restore_file_from_commit(root: &Path, commit_oid: &str, path: &Path) -> GitResult<()> {
+    mutate_os(
+        root,
+        &[
+            OsStr::new("checkout"),
+            OsStr::new(commit_oid.trim()),
+            OsStr::new("--"),
+            path.as_os_str(),
+        ],
+    )
+    .map(|_| ())
+}
+
 pub fn commit_details(root: &Path, oid: &str) -> GitResult<CommitDetails> {
     let raw = read(
         root,

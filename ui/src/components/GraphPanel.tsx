@@ -316,6 +316,7 @@ export const GraphPanel = memo(function GraphPanel() {
   const historyScope = useAppStore((state) => state.historyScope);
   const setHistoryScope = useAppStore((state) => state.setHistoryScope);
   const compareCommits = useAppStore((state) => state.compareCommits);
+  const openInBrowser = useAppStore((state) => state.openInBrowser);
   const { t } = useI18n();
 
   const [graphWidth, setGraphWidth] = useState<number>(() => {
@@ -458,6 +459,7 @@ export const GraphPanel = memo(function GraphPanel() {
     isRemoteBranch?: boolean;
     isStash?: boolean;
     commitOid: string;
+    commitSubject?: string;
   } | null>(null);
 
   const [createTagModal, setCreateTagModal] = useState<{
@@ -987,6 +989,7 @@ export const GraphPanel = memo(function GraphPanel() {
                     isRemoteBranch: targetRef?.isRemote ?? false,
                     isStash: !!stashRef,
                     commitOid: commit.oid,
+                    commitSubject: commit.subject,
                   });
                 }}
                 title={`${commit.subject} — ${commit.oid}`}
@@ -1400,8 +1403,22 @@ export const GraphPanel = memo(function GraphPanel() {
           }}
           onCopyHash={(oid) => {
             setRefPopover(null);
+            void navigator.clipboard.writeText(oid.slice(0, 7));
+          }}
+          onCopyFullHash={(oid) => {
+            setRefPopover(null);
             void navigator.clipboard.writeText(oid);
           }}
+          onCopyMessage={(subject) => {
+            setRefPopover(null);
+            void navigator.clipboard.writeText(subject);
+          }}
+          onCheckoutCommit={(commitOid) => {
+            setRefPopover(null);
+            void runOperation('switchBranch', [], commitOid);
+          }}
+          commitSubject={contextMenu.commitSubject}
+          onOpenBrowser={openInBrowser ? () => void openInBrowser({ commitOid: contextMenu.commitOid }) : undefined}
         />
       )}
 

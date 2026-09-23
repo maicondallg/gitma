@@ -21,6 +21,7 @@ import {
   validateThemeJson,
   exportThemeJson,
   applyTheme,
+  registerEditorThemeApplier,
 } from './theme';
 import type { ThemeDefinition } from './types';
 
@@ -30,16 +31,18 @@ describe('Theme Engine', () => {
     document.documentElement.removeAttribute('data-theme');
   });
 
-  it('provides built-in themes including dark, light, midnight, dracula, nord, monokai', () => {
+  it('provides built-in themes including dark, light, midnight, dracula, nord, monokai, solarized-light, tokyo-night-light', () => {
     const builtin = getBuiltinThemes();
-    expect(builtin.length).toBeGreaterThanOrEqual(6);
+    expect(builtin.length).toBeGreaterThanOrEqual(8);
     expect(builtin.map((t) => t.id)).toContain('gitma-dark');
     expect(builtin.map((t) => t.id)).toContain('gitma-light');
     expect(builtin.map((t) => t.id)).toContain('dracula');
     expect(builtin.map((t) => t.id)).toContain('nord');
+    expect(builtin.map((t) => t.id)).toContain('solarized-light');
+    expect(builtin.map((t) => t.id)).toContain('tokyo-night-light');
 
     const all = getAllThemes();
-    expect(all.length).toBeGreaterThanOrEqual(6);
+    expect(all.length).toBeGreaterThanOrEqual(8);
   });
 
   it('retrieves active theme ID falling back to gitma-dark', () => {
@@ -111,5 +114,12 @@ describe('Theme Engine', () => {
     expect(document.documentElement.getAttribute('data-theme')).toBe(theme.id);
     expect(document.documentElement.style.getPropertyValue('--bg')).toBe(theme.colors.bg);
     expect(document.documentElement.style.getPropertyValue('--accent')).toBe(theme.colors.accent);
+  });
+
+  it('updates the editor theme after the editor registers', () => {
+    const applyEditorTheme = vi.fn();
+    registerEditorThemeApplier(applyEditorTheme);
+    applyTheme(BUILTIN_THEMES[1]);
+    expect(applyEditorTheme).toHaveBeenCalledWith(BUILTIN_THEMES[1]);
   });
 });

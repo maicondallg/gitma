@@ -15,6 +15,7 @@ import {
   Folder,
   FolderOpen,
   FolderTree,
+  Globe,
   List,
   TriangleAlert,
   Undo2,
@@ -628,6 +629,9 @@ export function FilesPanel() {
   const setFileViewMode = useAppStore((state) => state.setFileViewMode);
   const activePane = useAppStore((state) => state.activePane);
   const setActivePane = useAppStore((state) => state.setActivePane);
+  const openInBrowser = useAppStore((state) => state.openInBrowser);
+  const restoreCommitFile = useAppStore((state) => state.restoreCommitFile);
+  const setBlameOpen = useAppStore((state) => state.setBlameOpen);
   const { t } = useI18n();
 
   const [fileContextMenu, setFileContextMenu] = useState<{
@@ -811,24 +815,35 @@ export function FilesPanel() {
             <div className="commit-info-subject" title={selectedCommit?.subject ?? context.oid}>
               {selectedCommit?.subject ?? `Commit ${context.oid}`}
             </div>
-            <button
-              type="button"
-              className={`commit-info-hash-btn ${copiedHash === (selectedCommit?.oid ?? context.oid) ? 'is-copied' : ''}`}
-              onClick={() => void handleCopyHash(selectedCommit?.oid ?? context.oid)}
-              title={t('files.fullHash', { hash: selectedCommit?.oid ?? context.oid })}
-            >
-              {copiedHash === (selectedCommit?.oid ?? context.oid) ? (
-                <>
-                  <Check size={12} className="copy-icon-check" />
-                  <span>{t('files.copied')}</span>
-                </>
-              ) : (
-                <>
-                  <Copy size={12} />
-                  <code>{(selectedCommit?.oid ?? context.oid).slice(0, 8)}</code>
-                </>
-              )}
-            </button>
+            <div className="commit-info-header-actions" style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+              <button
+                type="button"
+                className="commit-info-hash-btn"
+                onClick={() => void openInBrowser?.({ commitOid: selectedCommit?.oid ?? context.oid })}
+                title={t('fileMenu.openCommitInBrowser')}
+                aria-label={t('fileMenu.openCommitInBrowser')}
+              >
+                <Globe size={12} />
+              </button>
+              <button
+                type="button"
+                className={`commit-info-hash-btn ${copiedHash === (selectedCommit?.oid ?? context.oid) ? 'is-copied' : ''}`}
+                onClick={() => void handleCopyHash(selectedCommit?.oid ?? context.oid)}
+                title={t('files.fullHash', { hash: selectedCommit?.oid ?? context.oid })}
+              >
+                {copiedHash === (selectedCommit?.oid ?? context.oid) ? (
+                  <>
+                    <Check size={12} className="copy-icon-check" />
+                    <span>{t('files.copied')}</span>
+                  </>
+                ) : (
+                  <>
+                    <Copy size={12} />
+                    <code>{(selectedCommit?.oid ?? context.oid).slice(0, 8)}</code>
+                  </>
+                )}
+              </button>
+            </div>
           </div>
 
           {selectedCommit && (
@@ -972,6 +987,7 @@ export function FilesPanel() {
           y={fileContextMenu.y}
           file={fileContextMenu.file}
           repoPath={session?.root}
+          commitOid={context.kind === 'commit' ? context.oid : null}
           onClose={() => setFileContextMenu(null)}
           onStage={(id) => void runOperation('stage', [id])}
           onUnstage={(id) => void runOperation('unstage', [id])}
@@ -980,6 +996,9 @@ export function FilesPanel() {
           onOpenEditor={(p) => void runOperation('openEditor', [], p)}
           onRevealFile={(p) => void runOperation('revealFile', [], p)}
           onViewHistory={(p) => openFileHistory(p)}
+          onRestoreCommitFile={(oid, path) => void restoreCommitFile?.(oid, path)}
+          onViewBlame={(_p, _oid) => setBlameOpen(true)}
+          onOpenBrowser={(p, oid) => void openInBrowser?.({ commitOid: oid, filePath: p })}
         />
       )}
     </section>

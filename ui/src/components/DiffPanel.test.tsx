@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, cleanup } from '@testing-library/react';
+import { render, screen, fireEvent, cleanup, act } from '@testing-library/react';
 import { DiffPanel } from './DiffPanel';
 import { useAppStore } from '../store/app';
 import { setLanguage } from '../i18n';
@@ -9,14 +9,23 @@ const { monacoMock } = vi.hoisted(() => {
     editor: {
       createDiffEditor: vi.fn(() => ({
         setModel: vi.fn(),
+        getLineChanges: vi.fn(() => []),
+        createViewModel: vi.fn((model) => ({ model, waitForDiff: vi.fn().mockResolvedValue(undefined) })),
         updateOptions: vi.fn(),
         dispose: vi.fn(),
-        onDidUpdateDiff: vi.fn(() => ({ dispose: vi.fn() })),
+        onDidUpdateDiff: vi.fn((_listener?: () => void) => ({ dispose: vi.fn() })),
+        getOriginalEditor: vi.fn(() => ({
+          render: vi.fn(),
+          _getViewModel: vi.fn(() => ({ getHiddenAreas: vi.fn<() => unknown[]>(() => []) })),
+          onDidChangeHiddenAreas: vi.fn((_listener?: () => void) => ({ dispose: vi.fn() })),
+        })),
         getModifiedEditor: vi.fn(() => ({
+          render: vi.fn(),
           getDomNode: vi.fn(() => null),
           getModel: vi.fn(() => null),
           onDidChangeModel: vi.fn(() => ({ dispose: vi.fn() })),
-          onDidChangeHiddenAreas: vi.fn(() => ({ dispose: vi.fn() })),
+          onDidChangeHiddenAreas: vi.fn((_listener?: () => void) => ({ dispose: vi.fn() })),
+          _getViewModel: vi.fn(() => ({ getHiddenAreas: vi.fn<() => unknown[]>(() => []) })),
           onDidChangeCursorPosition: vi.fn(() => ({ dispose: vi.fn() })),
           revealLineInCenter: vi.fn(),
           setPosition: vi.fn(),
@@ -30,6 +39,7 @@ const { monacoMock } = vi.hoisted(() => {
         })),
       })),
       createModel: vi.fn(() => ({
+        getLineCount: vi.fn(() => 2),
         dispose: vi.fn(),
       })),
       setTheme: vi.fn(),
@@ -123,6 +133,77 @@ describe('DiffPanel header e botões de ação', () => {
     // Alterna diffMode ao clicar em "Lado a lado"
     fireEvent.click(splitBtn);
     expect(useAppStore.getState().diffMode).toBe('split');
+  });
+
+  it('aguarda o diff antes de exibir um arquivo no modo compacto', async () => {
+    let finishDiff!: () => void;
+    let changesPublished = false;
+    let regionsFolded = false;
+    let diffListener: () => void = () => undefined;
+    let originalHiddenListener: () => void = () => undefined;
+    let modifiedHiddenListener: () => void = () => undefined;
+    const diffReady = new Promise<void>((resolve) => { finishDiff = resolve; });
+    const createDiffEditor = monacoMock.editor.createDiffEditor.getMockImplementation()!;
+    monacoMock.editor.createDiffEditor.mockImplementationOnce(() => {
+      const instance = createDiffEditor();
+      instance.createViewModel.mockImplementationOnce((model) => ({
+        model,
+        waitForDiff: vi.fn(() => diffReady),
+        unchangedRegions: { get: vi.fn(() => [{}]) },
+      }));
+      instance.getLineChanges.mockImplementation(() => changesPublished ? [{ modifiedStartLineNumber: 176 }] as never : null as never);
+      instance.onDidUpdateDiff.mockImplementation((listener?: () => void) => {
+        if (listener) diffListener = listener;
+        return { dispose: vi.fn() };
+      });
+      const originalEditor = instance.getOriginalEditor();
+      const modifiedEditor = instance.getModifiedEditor();
+      originalEditor._getViewModel.mockImplementation(() => ({ getHiddenAreas: vi.fn(() => regionsFolded ? [{}] : []) }));
+      modifiedEditor._getViewModel.mockImplementation(() => ({ getHiddenAreas: vi.fn(() => regionsFolded ? [{}] : []) }));
+      originalEditor.onDidChangeHiddenAreas.mockImplementation((listener?: () => void) => {
+        if (listener) originalHiddenListener = listener;
+        return { dispose: vi.fn() };
+      });
+      modifiedEditor.onDidChangeHiddenAreas.mockImplementation((listener?: () => void) => {
+        if (listener) modifiedHiddenListener = listener;
+        return { dispose: vi.fn() };
+      });
+      instance.getOriginalEditor.mockReturnValue(originalEditor);
+      instance.getModifiedEditor.mockReturnValue(modifiedEditor);
+      return instance;
+    });
+    const createModel = monacoMock.editor.createModel.getMockImplementation()!;
+    monacoMock.editor.createModel.mockImplementationOnce(() => ({ ...createModel(), getLineCount: vi.fn(() => 326) }));
+    monacoMock.editor.createModel.mockImplementationOnce(() => ({ ...createModel(), getLineCount: vi.fn(() => 326) }));
+    useAppStore.setState({
+      compactDiff: true,
+      preview: {
+        sessionId: 's1', requestId: 1, fileId: 'f1', version: 'v1', kind: 'text',
+        original: 'before\n', modified: 'after\n', message: null,
+        hunks: [],
+      },
+    });
+    const { container } = render(<DiffPanel />);
+    const host = container.querySelector('.monaco-host') as HTMLElement;
+    expect(host.style.visibility).toBe('hidden');
+    expect(screen.getByRole('status')).toBeInTheDocument();
+
+    await act(async () => {
+      finishDiff();
+      await diffReady;
+    });
+    await act(async () => { await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))); });
+    expect(host.style.visibility).toBe('hidden');
+
+    changesPublished = true;
+    act(() => diffListener());
+    expect(host.style.visibility).toBe('hidden');
+
+    regionsFolded = true;
+    act(() => { originalHiddenListener(); modifiedHiddenListener(); });
+    await act(async () => { await new Promise<void>((resolve) => requestAnimationFrame(() => resolve())); });
+    expect(host.style.visibility).toBe('');
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
   });
 
   it('renderiza barra de hunks e permite navegar e preparar trecho', () => {

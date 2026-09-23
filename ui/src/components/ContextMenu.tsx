@@ -5,10 +5,12 @@ import {
   Copy,
   CopyPlus,
   GitBranch,
+  GitCommit,
   GitFork,
-  Merge,
   GitPullRequest,
+  Globe,
   Layers,
+  Merge,
   RotateCcw,
   Tag,
   Trash2,
@@ -27,9 +29,11 @@ export interface ContextMenuProps {
   isStash?: boolean;
   currentBranchName?: string | null;
   commitOid: string;
+  commitSubject?: string;
   onClose: () => void;
   onCheckoutBranch?: (branch: string) => void;
   onCheckoutTag?: (tagName: string) => void;
+  onCheckoutCommit?: (commitOid: string) => void;
   onPushTag?: (tagName: string) => void;
   onMergeBranch?: (branch: string) => void;
   onMergeSquash?: (branch: string) => void;
@@ -48,7 +52,10 @@ export interface ContextMenuProps {
   onStashApply?: (stashRef?: string) => void;
   onStashDrop?: (stashRef?: string) => void;
   onCopyHash?: (oid: string) => void;
+  onCopyFullHash?: (oid: string) => void;
+  onCopyMessage?: (subject: string) => void;
   onCompareWith?: (oid: string) => void;
+  onOpenBrowser?: () => void;
 }
 
 export function ContextMenu({
@@ -61,9 +68,11 @@ export function ContextMenu({
   isStash,
   currentBranchName,
   commitOid,
+  commitSubject,
   onClose,
   onCheckoutBranch,
   onCheckoutTag,
+  onCheckoutCommit,
   onPushTag,
   onMergeBranch,
   onMergeSquash,
@@ -82,13 +91,16 @@ export function ContextMenu({
   onStashApply,
   onStashDrop,
   onCopyHash,
+  onCopyFullHash,
+  onCopyMessage,
   onCompareWith,
+  onOpenBrowser,
 }: ContextMenuProps) {
   const { t } = useI18n();
   const menuRef = useRef<HTMLDivElement>(null);
   const [pos, setPos] = useState({
     x: Math.max(8, Math.min(x, (typeof window !== 'undefined' ? window.innerWidth : 1000) - 270)),
-    y: Math.max(8, Math.min(y, (typeof window !== 'undefined' ? window.innerHeight : 800) - 320)),
+    y: Math.max(8, Math.min(y, (typeof window !== 'undefined' ? window.innerHeight : 800) - 360)),
   });
 
   useLayoutEffect(() => {
@@ -142,66 +154,13 @@ export function ContextMenu({
       style={{ left: `${pos.x}px`, top: `${pos.y}px`, zIndex: 99999 }}
       role="menu"
     >
-      {tagName && (
+      {/* 1. SEÇÃO DE STASH (SE FOR STASH) */}
+      {isStash ? (
         <>
-          <button
-            type="button"
-            className="menu-item"
-            onClick={() => {
-              onClose();
-              if (onCheckoutTag) {
-                onCheckoutTag(tagName);
-              } else {
-                onCheckoutBranch?.(tagName);
-              }
-            }}
-            title={t('contextMenu.checkoutTag', { name: tagName })}
-          >
-            <Tag size={14} />
-            <span>{t('contextMenu.checkoutTag', { name: tagName })}</span>
-          </button>
-          <button
-            type="button"
-            className="menu-item"
-            onClick={() => {
-              onClose();
-              onPushTag?.(tagName);
-            }}
-            title={t('contextMenu.pushTag', { name: tagName })}
-          >
-            <Upload size={14} />
-            <span>{t('contextMenu.pushTag', { name: tagName })}</span>
-          </button>
-          <button
-            type="button"
-            className="menu-item menu-item-danger"
-            onClick={() => {
-              onClose();
-              onDeleteTag?.(tagName);
-            }}
-            title={t('contextMenu.deleteTag', { name: tagName })}
-          >
-            <Trash2 size={14} />
-            <span>{t('contextMenu.deleteTag', { name: tagName })}</span>
-          </button>
-          <button
-            type="button"
-            className="menu-item menu-item-danger"
-            onClick={() => {
-              onClose();
-              onDeleteRemoteTag?.(tagName);
-            }}
-            title={t('contextMenu.deleteRemoteTagPush', { name: tagName })}
-          >
-            <Trash2 size={14} />
-            <span>{t('contextMenu.deleteRemoteTagPush', { name: tagName })}</span>
-          </button>
-          <div className="menu-separator" />
-        </>
-      )}
-
-      {isStash && (
-        <>
+          <div className="menu-header">
+            <Archive size={12} />
+            <span>{t('contextMenu.stashHeader')}</span>
+          </div>
           <button
             type="button"
             className="menu-item"
@@ -239,106 +198,36 @@ export function ContextMenu({
             <span>{t('contextMenu.stashDrop')}</span>
           </button>
           <div className="menu-separator" />
+          <button
+            type="button"
+            className="menu-item"
+            onClick={() => {
+              onClose();
+              onCopyHash?.(commitOid);
+            }}
+          >
+            <Copy size={14} />
+            <span>{t('contextMenu.copyHashWithOid', { hash: commitOid.slice(0, 7) })}</span>
+          </button>
         </>
-      )}
-
-      {!isStash && branchName && (
+      ) : (
         <>
-          <button
-            type="button"
-            className="menu-item"
-            disabled={isCurrentBranch}
-            onClick={() => {
-              onClose();
-              onCheckoutBranch?.(branchName);
-            }}
-          >
-            <GitBranch size={14} />
-            <span>{t('contextMenu.checkout', { name: branchName })}</span>
-          </button>
-          <button
-            type="button"
-            className="menu-item"
-            disabled={isCurrentBranch || !currentBranchName}
-            onClick={() => {
-              onClose();
-              onMergeBranch?.(branchName);
-            }}
-          >
-            <Merge size={14} />
-            <span>{t('contextMenu.merge', { branch: currentBranchName ?? 'HEAD' })}</span>
-          </button>
-          <button
-            type="button"
-            className="menu-item"
-            disabled={isCurrentBranch || !currentBranchName}
-            onClick={() => {
-              onClose();
-              onMergeSquash?.(branchName);
-            }}
-            title={t('contextMenu.mergeSquashDesc')}
-          >
-            <Layers size={14} />
-            <span>{t('contextMenu.mergeSquash')}</span>
-          </button>
-          <button
-            type="button"
-            className="menu-item"
-            disabled={isCurrentBranch || !currentBranchName}
-            onClick={() => {
-              onClose();
-              onRebase?.(branchName);
-            }}
-            title={t('contextMenu.rebase', { branch: branchName })}
-          >
-            <GitPullRequest size={14} />
-            <span>{t('contextMenu.rebase', { branch: branchName })}</span>
-          </button>
-          <button
-            type="button"
-            className="menu-item"
-            onClick={() => {
-              onClose();
-              onCreateBranch?.(branchName);
-            }}
-          >
-            <GitFork size={14} />
-            <span>{t('contextMenu.createBranchHere')}</span>
-          </button>
-          {!isRemoteBranch && (
+          {/* 2. AÇÕES PRINCIPAIS DO COMMIT */}
+          {onCheckoutCommit && (
             <button
               type="button"
-              className="menu-item menu-item-danger"
-              disabled={isCurrentBranch}
+              className="menu-item"
               onClick={() => {
                 onClose();
-                onDeleteBranch?.(branchName);
+                onCheckoutCommit(commitOid);
               }}
+              title={t('contextMenu.checkoutCommit')}
             >
-              <Trash2 size={14} />
-              <span>{t('contextMenu.deleteBranch', { name: branchName })}</span>
+              <GitCommit size={14} />
+              <span>{t('contextMenu.checkoutCommit')}</span>
             </button>
           )}
-          {isRemoteBranch && (
-            <button
-              type="button"
-              className="menu-item menu-item-danger"
-              onClick={() => {
-                onClose();
-                onDeleteRemoteBranch?.(branchName);
-              }}
-              title={t('contextMenu.deleteRemotePush')}
-            >
-              <Trash2 size={14} />
-              <span>{t('contextMenu.deleteRemotePush')}</span>
-            </button>
-          )}
-          <div className="menu-separator" />
-        </>
-      )}
 
-      {!isStash && !branchName && (
-        <>
           <button
             type="button"
             className="menu-item"
@@ -348,82 +237,35 @@ export function ContextMenu({
             }}
           >
             <GitFork size={14} />
-            <span>{t('contextMenu.createBranchAtCommit')}</span>
+            <span>{t('contextMenu.createBranchHere')}</span>
           </button>
-          {currentBranchName && (
-            <button
-              type="button"
-              className="menu-item"
-              onClick={() => {
-                onClose();
-                onRebase?.(commitOid);
-              }}
-              title={t('contextMenu.rebaseCurrentOverCommit')}
-            >
-              <GitPullRequest size={14} />
-              <span>{t('contextMenu.rebaseCurrentOverCommit')}</span>
-            </button>
-          )}
+
           <button
             type="button"
             className="menu-item"
             onClick={() => {
               onClose();
-              onSquashTo?.(commitOid);
+              onCreateTag?.(commitOid);
             }}
-            title={t('contextMenu.squashCommitsToHere')}
+            title={t('contextMenu.createTagAtCommit')}
           >
-            <Layers size={14} />
-            <span>{t('contextMenu.squashCommitsToHere')}</span>
+            <Tag size={14} />
+            <span>{t('contextMenu.createTagAtCommit')}</span>
           </button>
-        </>
-      )}
 
-      {!isStash && (
-        <button
-          type="button"
-          className="menu-item"
-          onClick={() => {
-            onClose();
-            onCreateTag?.(commitOid);
-          }}
-          title={t('contextMenu.createTagAtCommit')}
-        >
-          <Tag size={14} />
-          <span>{t('contextMenu.createTagAtCommit')}</span>
-        </button>
-      )}
+          <button
+            type="button"
+            className="menu-item"
+            onClick={() => {
+              onClose();
+              onCherryPick?.(commitOid);
+            }}
+            title={currentBranchName ? t('contextMenu.cherryPickToBranch', { branch: currentBranchName }) : t('contextMenu.cherryPick')}
+          >
+            <CopyPlus size={14} />
+            <span>{currentBranchName ? t('contextMenu.cherryPickToBranch', { branch: currentBranchName }) : t('contextMenu.cherryPick')}</span>
+          </button>
 
-      <button
-        type="button"
-        className="menu-item"
-        onClick={() => {
-          onClose();
-          onCherryPick?.(commitOid);
-        }}
-        title={t('contextMenu.cherryPick')}
-      >
-        <CopyPlus size={14} />
-        <span>{t('contextMenu.cherryPick')}</span>
-      </button>
-
-      {onCompareWith && (
-        <button
-          type="button"
-          className="menu-item"
-          onClick={() => {
-            onClose();
-            onCompareWith(commitOid);
-          }}
-          title={t('compare.compareWith')}
-        >
-          <GitFork size={14} />
-          <span>{t('compare.compareWith')}</span>
-        </button>
-      )}
-
-      {!isStash && (
-        <>
           <button
             type="button"
             className="menu-item"
@@ -436,6 +278,7 @@ export function ContextMenu({
             <Undo2 size={14} />
             <span>{t('contextMenu.revertCommit')}</span>
           </button>
+
           <button
             type="button"
             className="menu-item"
@@ -454,20 +297,262 @@ export function ContextMenu({
               })}
             </span>
           </button>
+
+          {currentBranchName && !isCurrentBranch && (
+            <button
+              type="button"
+              className="menu-item"
+              onClick={() => {
+                onClose();
+                onRebase?.(commitOid);
+              }}
+              title={t('contextMenu.rebaseCurrentOverCommit')}
+            >
+              <GitPullRequest size={14} />
+              <span>{t('contextMenu.rebaseCurrentOverCommit')}</span>
+            </button>
+          )}
+
+          {onSquashTo && (
+            <button
+              type="button"
+              className="menu-item"
+              onClick={() => {
+                onClose();
+                onSquashTo(commitOid);
+              }}
+              title={t('contextMenu.squashCommitsToHere')}
+            >
+              <Layers size={14} />
+              <span>{t('contextMenu.squashCommitsToHere')}</span>
+            </button>
+          )}
+
+          {onCompareWith && (
+            <button
+              type="button"
+              className="menu-item"
+              onClick={() => {
+                onClose();
+                onCompareWith(commitOid);
+              }}
+              title={t('compare.compareWith')}
+            >
+              <GitFork size={14} />
+              <span>{t('compare.compareWith')}</span>
+            </button>
+          )}
+
+          <div className="menu-separator" />
+
+          {/* 3. LINKS EXTERNOS E CÓPIA */}
+          {onOpenBrowser && (
+            <button
+              type="button"
+              className="menu-item"
+              onClick={() => {
+                onClose();
+                onOpenBrowser();
+              }}
+              title={t('contextMenu.openInBrowser')}
+            >
+              <Globe size={14} />
+              <span>{t('contextMenu.openInBrowser')}</span>
+            </button>
+          )}
+
+          <button
+            type="button"
+            className="menu-item"
+            onClick={() => {
+              onClose();
+              onCopyHash?.(commitOid);
+            }}
+          >
+            <Copy size={14} />
+            <span>{t('contextMenu.copyHashWithOid', { hash: commitOid.slice(0, 7) })}</span>
+          </button>
+
+          {onCopyFullHash && (
+            <button
+              type="button"
+              className="menu-item"
+              onClick={() => {
+                onClose();
+                onCopyFullHash(commitOid);
+              }}
+            >
+              <Copy size={14} />
+              <span>{t('contextMenu.copyFullHash')}</span>
+            </button>
+          )}
+
+          {commitSubject && onCopyMessage && (
+            <button
+              type="button"
+              className="menu-item"
+              onClick={() => {
+                onClose();
+                onCopyMessage(commitSubject);
+              }}
+            >
+              <Copy size={14} />
+              <span>{t('contextMenu.copySubject')}</span>
+            </button>
+          )}
+
+          {/* 4. SEÇÃO DE BRANCH ASSOCIADA (SE NÃO FOR A ATUAL OU SE TIVER AÇÕES RELEVANTES) */}
+          {branchName && !isCurrentBranch && (
+            <>
+              <div className="menu-separator" />
+              <div className="menu-header">
+                <GitBranch size={12} />
+                <span>{t('contextMenu.branchHeader', { name: branchName })}</span>
+              </div>
+              <button
+                type="button"
+                className="menu-item"
+                onClick={() => {
+                  onClose();
+                  onCheckoutBranch?.(branchName);
+                }}
+              >
+                <GitBranch size={14} />
+                <span>{t('contextMenu.checkout', { name: branchName })}</span>
+              </button>
+              {currentBranchName && (
+                <>
+                  <button
+                    type="button"
+                    className="menu-item"
+                    onClick={() => {
+                      onClose();
+                      onMergeBranch?.(branchName);
+                    }}
+                  >
+                    <Merge size={14} />
+                    <span>{t('contextMenu.merge', { branch: currentBranchName })}</span>
+                  </button>
+                  <button
+                    type="button"
+                    className="menu-item"
+                    onClick={() => {
+                      onClose();
+                      onMergeSquash?.(branchName);
+                    }}
+                    title={t('contextMenu.mergeSquashDesc')}
+                  >
+                    <Layers size={14} />
+                    <span>{t('contextMenu.mergeSquash')}</span>
+                  </button>
+                  <button
+                    type="button"
+                    className="menu-item"
+                    onClick={() => {
+                      onClose();
+                      onRebase?.(branchName);
+                    }}
+                    title={t('contextMenu.rebase', { branch: branchName })}
+                  >
+                    <GitPullRequest size={14} />
+                    <span>{t('contextMenu.rebase', { branch: branchName })}</span>
+                  </button>
+                </>
+              )}
+              {!isRemoteBranch && onDeleteBranch && (
+                <button
+                  type="button"
+                  className="menu-item menu-item-danger"
+                  onClick={() => {
+                    onClose();
+                    onDeleteBranch(branchName);
+                  }}
+                >
+                  <Trash2 size={14} />
+                  <span>{t('contextMenu.deleteBranch', { name: branchName })}</span>
+                </button>
+              )}
+              {isRemoteBranch && onDeleteRemoteBranch && (
+                <button
+                  type="button"
+                  className="menu-item menu-item-danger"
+                  onClick={() => {
+                    onClose();
+                    onDeleteRemoteBranch(branchName);
+                  }}
+                  title={t('contextMenu.deleteRemotePush')}
+                >
+                  <Trash2 size={14} />
+                  <span>{t('contextMenu.deleteRemotePush')}</span>
+                </button>
+              )}
+            </>
+          )}
+
+          {/* 5. SEÇÃO DE TAG ASSOCIADA */}
+          {tagName && (
+            <>
+              <div className="menu-separator" />
+              <div className="menu-header">
+                <Tag size={12} />
+                <span>{t('contextMenu.tagHeader', { name: tagName })}</span>
+              </div>
+              <button
+                type="button"
+                className="menu-item"
+                onClick={() => {
+                  onClose();
+                  if (onCheckoutTag) {
+                    onCheckoutTag(tagName);
+                  } else {
+                    onCheckoutBranch?.(tagName);
+                  }
+                }}
+                title={t('contextMenu.checkoutTag', { name: tagName })}
+              >
+                <Tag size={14} />
+                <span>{t('contextMenu.checkoutTag', { name: tagName })}</span>
+              </button>
+              <button
+                type="button"
+                className="menu-item"
+                onClick={() => {
+                  onClose();
+                  onPushTag?.(tagName);
+                }}
+                title={t('contextMenu.pushTag', { name: tagName })}
+              >
+                <Upload size={14} />
+                <span>{t('contextMenu.pushTag', { name: tagName })}</span>
+              </button>
+              <button
+                type="button"
+                className="menu-item menu-item-danger"
+                onClick={() => {
+                  onClose();
+                  onDeleteTag?.(tagName);
+                }}
+                title={t('contextMenu.deleteTag', { name: tagName })}
+              >
+                <Trash2 size={14} />
+                <span>{t('contextMenu.deleteTag', { name: tagName })}</span>
+              </button>
+              <button
+                type="button"
+                className="menu-item menu-item-danger"
+                onClick={() => {
+                  onClose();
+                  onDeleteRemoteTag?.(tagName);
+                }}
+                title={t('contextMenu.deleteRemoteTagPush', { name: tagName })}
+              >
+                <Trash2 size={14} />
+                <span>{t('contextMenu.deleteRemoteTagPush', { name: tagName })}</span>
+              </button>
+            </>
+          )}
         </>
       )}
-
-      <button
-        type="button"
-        className="menu-item"
-        onClick={() => {
-          onClose();
-          onCopyHash?.(commitOid);
-        }}
-      >
-        <Copy size={14} />
-        <span>{t('contextMenu.copyHashWithOid', { hash: commitOid.slice(0, 7) })}</span>
-      </button>
     </div>,
     document.body
   );

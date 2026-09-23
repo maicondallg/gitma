@@ -68,6 +68,10 @@ fn sessions_keep_file_ids_opaque_and_previews_use_real_sides() {
         snapshot.revision, unchanged.revision,
         "identical snapshots retain their identity"
     );
+    assert_eq!(
+        snapshot.unstaged[0].id, unchanged.unstaged[0].id,
+        "file IDs remain stable across snapshots"
+    );
     assert!(backend
         .file_preview(&second.session_id, 6, &file.id)
         .is_err());
@@ -142,6 +146,31 @@ fn commit_preview_handles_root_and_rename_paths() {
     assert_eq!(root_preview.original, "");
     assert_eq!(root_preview.modified, "before\n");
     backend.close(&session.session_id).unwrap();
+}
+
+#[test]
+fn deleted_commit_preview_keeps_the_original_side() {
+    let dir = repo();
+    commit(dir.path(), "removed.txt", "before\n", "add file");
+    git(dir.path(), &["rm", "-q", "removed.txt"]);
+    git(dir.path(), &["commit", "-qm", "remove file"]);
+
+    let backend = Backend::new();
+    let session = backend.open(dir.path(), |_| {}).unwrap();
+    let history = backend.history(&session.session_id, 1, 0, None).unwrap();
+    let oid = &history.rows[0].commit.oid;
+    let files = backend.commit_files(&session.session_id, 2, oid).unwrap();
+    let file = files
+        .files
+        .iter()
+        .find(|file| file.status == "deleted")
+        .unwrap();
+    let preview = backend
+        .file_preview(&session.session_id, 3, &file.id)
+        .unwrap();
+
+    assert_eq!(preview.original, "before\n");
+    assert_eq!(preview.modified, "");
 }
 
 #[test]

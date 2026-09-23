@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { lazy, Suspense, useEffect, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import {
   AlertCircle,
@@ -9,6 +9,7 @@ import {
   GitBranch,
   GitBranchPlus,
   GitFork,
+  Globe,
   HelpCircle,
   RefreshCw,
   Settings,
@@ -19,16 +20,11 @@ import {
 } from 'lucide-react';
 import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels';
 import { CommitForm } from './components/CommitForm';
-import { DiffPanel } from './components/DiffPanel';
-import { FileHistoryModal } from './components/FileHistoryModal';
 import { FilesPanel } from './components/FilesPanel';
 import { GraphPanel } from './components/GraphPanel';
 import { HomeTab } from './components/HomeTab';
 import { InProgressBanner } from './components/InProgressBanner';
 import { NewBranchModal } from './components/NewBranchModal';
-import { ReflogModal } from './components/ReflogModal';
-import { RemotesModal } from './components/RemotesModal';
-import { SettingsModal } from './components/SettingsModal';
 import { ShortcutsModal } from './components/ShortcutsModal';
 import { TabBar } from './components/TabBar';
 import { TerminalButton } from './components/TerminalButton';
@@ -37,6 +33,19 @@ import { useAppStore } from './store/app';
 import type { Operation } from './lib/types';
 
 const LAYOUT_KEY = 'Gitma:panel-layout-v2';
+const DiffPanel = lazy(() => import('./components/DiffPanel').then((module) => ({ default: module.DiffPanel })));
+const SettingsModal = lazy(() => import('./components/SettingsModal').then((module) => ({ default: module.SettingsModal })));
+const FileHistoryModal = lazy(() => import('./components/FileHistoryModal').then((module) => ({ default: module.FileHistoryModal })));
+const ReflogModal = lazy(() => import('./components/ReflogModal').then((module) => ({ default: module.ReflogModal })));
+const RemotesModal = lazy(() => import('./components/RemotesModal').then((module) => ({ default: module.RemotesModal })));
+
+function LoadOnFirstOpen({ open, children }: { open: boolean; children: ReactNode }) {
+  const [loaded, setLoaded] = useState(open);
+  useEffect(() => {
+    if (open) setLoaded(true);
+  }, [open]);
+  return loaded ? <Suspense fallback={null}>{children}</Suspense> : null;
+}
 
 function savedLayout(): number[] | null {
   try {
@@ -65,6 +74,7 @@ export default function App() {
   const refresh = useAppStore((s) => s.refresh);
   const dismissNotice = useAppStore((s) => s.dismissNotice);
   const runOperation = useAppStore((s) => s.runOperation);
+  const openInBrowser = useAppStore((s) => s.openInBrowser);
   const operation = useAppStore((s) => s.operation);
   const expandedDiff = useAppStore((s) => s.expandedDiff);
   const setExpandedDiff = useAppStore((s) => s.setExpandedDiff);
@@ -304,6 +314,19 @@ export default function App() {
             </div>
 
             <div className="toolbar-right">
+              {openInBrowser && (
+                <button
+                  type="button"
+                  className="sync-button"
+                  onClick={() => void openInBrowser({ branch: snapshot?.branch })}
+                  disabled={!!operation}
+                  title={t('toolbar.openInBrowserTitle', { branch: snapshot?.branch ?? 'HEAD' })}
+                  aria-label={t('toolbar.openInBrowser')}
+                >
+                  <Globe size={14} />
+                  <span>{t('toolbar.openInBrowser')}</span>
+                </button>
+              )}
               <TerminalButton />
             </div>
 
@@ -514,7 +537,9 @@ export default function App() {
             </Panel>
             <PanelResizeHandle className="resize-handle" />
             <Panel defaultSize={expandedDiff ? 80 : savedLayout()?.[2] ?? 35} minSize={26}>
-              <DiffPanel />
+              <Suspense fallback={<div className="diff-panel-loading" aria-busy="true" />}>
+                <DiffPanel />
+              </Suspense>
             </Panel>
           </PanelGroup>
         </>
@@ -604,25 +629,21 @@ export default function App() {
         <ShortcutsModal onClose={() => setShowShortcutsModal(false)} />
       )}
 
-      <SettingsModal
-        isOpen={settingsOpen}
-        onClose={closeSettings}
-      />
+      <LoadOnFirstOpen open={settingsOpen}>
+        <SettingsModal isOpen={settingsOpen} onClose={closeSettings} />
+      </LoadOnFirstOpen>
 
-      <FileHistoryModal
-        filePath={fileHistoryPath}
-        onClose={closeFileHistory}
-      />
+      <LoadOnFirstOpen open={Boolean(fileHistoryPath)}>
+        <FileHistoryModal filePath={fileHistoryPath} onClose={closeFileHistory} />
+      </LoadOnFirstOpen>
 
-      <ReflogModal
-        isOpen={reflogOpen}
-        onClose={closeReflog}
-      />
+      <LoadOnFirstOpen open={reflogOpen}>
+        <ReflogModal isOpen={reflogOpen} onClose={closeReflog} />
+      </LoadOnFirstOpen>
 
-      <RemotesModal
-        isOpen={remotesModalOpen}
-        onClose={closeRemotesModal}
-      />
+      <LoadOnFirstOpen open={remotesModalOpen}>
+        <RemotesModal isOpen={remotesModalOpen} onClose={closeRemotesModal} />
+      </LoadOnFirstOpen>
     </main>
   );
 }

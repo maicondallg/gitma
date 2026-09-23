@@ -255,6 +255,18 @@ describe('repository state coordination', () => {
     expect(write).toHaveBeenCalledWith(sessionId, expect.any(Number), 'forcePushWithLease', [], '');
   });
 
+  it('does not rescan the repository after external open actions', async () => {
+    const { store, adapter } = await setup();
+    const snapshot = vi.spyOn(adapter, 'getSnapshot');
+    adapter.applyOperation = async (sessionId, requestId) => ({ sessionId, requestId, message: 'Opened' });
+
+    for (const operation of ['openTerminal', 'openEditor', 'revealFile', 'openBrowser'] as const) {
+      await store.getState().runOperation(operation, [], 'target');
+    }
+
+    expect(snapshot).not.toHaveBeenCalled();
+  });
+
   it('executes stash operations without file ids', async () => {
     const { store, adapter } = await setup();
     const write = vi.spyOn(adapter, 'applyOperation');

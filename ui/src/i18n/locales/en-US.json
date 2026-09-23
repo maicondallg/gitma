@@ -90,7 +90,9 @@
     "pushAllTagsTitle": "Push all local tags to the remote repository (--tags)",
     "detachedHead": "HEAD detached",
     "detached": "detached",
-    "currentBranchCheckedOut": "Current checked out branch"
+    "currentBranchCheckedOut": "Current checked out branch",
+    "openInBrowser": "Open in browser",
+    "openInBrowserTitle": "Open repository in browser ({{branch}})"
   },
   "tabs": {
     "home": "Home",
@@ -209,6 +211,7 @@
   },
   "diff": {
     "selectFile": "Select a file to view changes",
+    "loadingFile": "Loading file",
     "onlyChanges": "Changes only",
     "compactDiffActive": "Compact: showing changed lines only (click to show entire file)",
     "compactDiffInactive": "Full: showing entire file (click to fold unchanged lines)",
@@ -253,7 +256,12 @@
     "openEditor": "Open in VS Code / Editor",
     "revealFile": "Reveal in file manager",
     "openTerminal": "Open in terminal",
-    "fileHistory": "View file history"
+    "fileHistory": "View file history",
+    "restoreFile": "Restore to working directory",
+    "restoreFileConfirm": "Restore file \"{{name}}\" to this commit version ({{hash}})? Current local changes will be replaced.",
+    "viewBlameAtCommit": "View Git Blame at this commit",
+    "openInBrowser": "Open in browser",
+    "copyPatch": "Copy file diff"
   },
   "commit": {
     "label": "Commit message",
@@ -311,7 +319,16 @@
     "revertCommitConfirm": "Revert commit {{hash}} (\"{{subject}}\")?\nThis will create a new commit undoing the changes.",
     "deleteTagConfirm": "Are you sure you want to delete local tag \"{{tag}}\"?",
     "deleteRemoteTagConfirm": "Are you sure you want to delete tag \"{{tag}}\" on the remote server (origin)?",
-    "stashDropConfirm": "Are you sure you want to drop this stash ({{name}})?"
+    "stashDropConfirm": "Are you sure you want to drop this stash ({{name}})?",
+    "checkoutCommit": "Checkout this commit",
+    "cherryPickToBranch": "Cherry-pick into {{branch}}",
+    "openInBrowser": "Open commit in browser",
+    "openBranchInBrowser": "Open repository in browser ({{branch}})",
+    "copyFullHash": "Copy full hash",
+    "copySubject": "Copy commit message",
+    "branchHeader": "Branch: {{name}}",
+    "tagHeader": "Tag: {{name}}",
+    "stashHeader": "Stash"
   },
   "newBranch": {
     "title": "Create New Branch",

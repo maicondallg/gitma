@@ -6,7 +6,9 @@ import {
   FileMinus2,
   FilePlus2,
   FolderOpen,
+  Globe,
   History,
+  RotateCcw,
   Slash,
   Undo2,
 } from 'lucide-react';
@@ -18,6 +20,7 @@ export interface FileContextMenuProps {
   y: number;
   file: FileEntry;
   repoPath?: string;
+  commitOid?: string | null;
   onClose: () => void;
   onStage?: (fileId: string) => void;
   onUnstage?: (fileId: string) => void;
@@ -26,6 +29,9 @@ export interface FileContextMenuProps {
   onOpenEditor?: (path: string) => void;
   onRevealFile?: (path: string) => void;
   onViewHistory?: (path: string) => void;
+  onRestoreCommitFile?: (commitOid: string, path: string) => void;
+  onViewBlame?: (path: string, commitOid?: string | null) => void;
+  onOpenBrowser?: (path: string, commitOid?: string | null) => void;
 }
 
 export function FileContextMenu({
@@ -33,6 +39,7 @@ export function FileContextMenu({
   y,
   file,
   repoPath,
+  commitOid,
   onClose,
   onStage,
   onUnstage,
@@ -41,6 +48,9 @@ export function FileContextMenu({
   onOpenEditor,
   onRevealFile,
   onViewHistory,
+  onRestoreCommitFile,
+  onViewBlame,
+  onOpenBrowser,
 }: FileContextMenuProps) {
   const { t } = useI18n();
   const menuRef = useRef<HTMLDivElement>(null);
@@ -121,6 +131,64 @@ export function FileContextMenu({
       onClick={(e) => e.stopPropagation()}
       onContextMenu={(e) => e.preventDefault()}
     >
+      {file.area === 'commit' && commitOid && onRestoreCommitFile && (
+        <button
+          type="button"
+          className="menu-item"
+          onClick={() => {
+            onClose();
+            if (
+              window.confirm(
+                t('fileMenu.restoreFileConfirm', {
+                  name: file.name,
+                  hash: commitOid.slice(0, 7),
+                })
+              )
+            ) {
+              onRestoreCommitFile(commitOid, file.pathDisplay);
+            }
+          }}
+          title={t('fileMenu.restoreFile')}
+        >
+          <RotateCcw size={14} />
+          <span>{t('fileMenu.restoreFile')}</span>
+        </button>
+      )}
+
+      {file.area === 'commit' && onViewBlame && (
+        <button
+          type="button"
+          className="menu-item"
+          onClick={() => {
+            onClose();
+            onViewBlame(file.pathDisplay, commitOid);
+          }}
+          title={t('fileMenu.viewBlameAtCommit')}
+        >
+          <History size={14} />
+          <span>{t('fileMenu.viewBlameAtCommit')}</span>
+        </button>
+      )}
+
+      {file.area === 'commit' && onOpenBrowser && (
+        <button
+          type="button"
+          className="menu-item"
+          onClick={() => {
+            onClose();
+            onOpenBrowser(file.pathDisplay, commitOid);
+          }}
+          title={t('fileMenu.openInBrowser')}
+        >
+          <Globe size={14} />
+          <span>{t('fileMenu.openInBrowser')}</span>
+        </button>
+      )}
+
+      {file.area === 'commit' && (onRestoreCommitFile || onViewBlame || onOpenBrowser) && (
+        <div className="menu-separator" />
+      )}
+
       {file.area === 'unstaged' && onStage && (
         <button
           type="button"

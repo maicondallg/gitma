@@ -1,5 +1,11 @@
-import { monaco } from './monaco';
 import type { ThemeColors, ThemeDefinition } from './types';
+
+let applyEditorTheme: ((theme: ThemeDefinition) => void) | null = null;
+
+// The editor registers only after its code has been loaded.
+export function registerEditorThemeApplier(applier: (theme: ThemeDefinition) => void): void {
+  applyEditorTheme = applier;
+}
 
 export const BUILTIN_THEMES: ThemeDefinition[] = [
   {
@@ -134,6 +140,50 @@ export const BUILTIN_THEMES: ThemeDefinition[] = [
       monacoBase: 'vs',
     },
   },
+  {
+    id: 'solarized-light',
+    name: 'Solarized Light',
+    author: 'Ethan Schoonover',
+    type: 'light',
+    colors: {
+      bg: '#fdf6e3',
+      surface: '#eee8d5',
+      raised: '#e4ddc8',
+      border: '#d3cbb7',
+      text: '#657b83',
+      muted: '#93a1a1',
+      accent: '#268bd2',
+      green: '#859900',
+      red: '#dc322f',
+      selected: '#e4dfd2',
+      tabBarBg: '#eee8d5',
+      tabActiveBg: '#fdf6e3',
+      tabActiveText: '#586e75',
+      monacoBase: 'vs',
+    },
+  },
+  {
+    id: 'tokyo-night-light',
+    name: 'Tokyo Night Light',
+    author: 'Enkia',
+    type: 'light',
+    colors: {
+      bg: '#d5d6db',
+      surface: '#cbccd1',
+      raised: '#c1c2c7',
+      border: '#b4b5b9',
+      text: '#343b58',
+      muted: '#6a6f87',
+      accent: '#34548a',
+      green: '#33635c',
+      red: '#8c4351',
+      selected: '#c4d0f5',
+      tabBarBg: '#cbccd1',
+      tabActiveBg: '#d5d6db',
+      tabActiveText: '#343b58',
+      monacoBase: 'vs',
+    },
+  },
 ];
 
 const ACTIVE_THEME_KEY = 'Gitma:active-theme-id';
@@ -237,41 +287,7 @@ export function applyTheme(theme: ThemeDefinition): void {
   root.setAttribute('data-theme', theme.id);
   root.setAttribute('data-theme-type', theme.type);
 
-  // Define and apply Monaco Editor theme
-  try {
-    const isLight = theme.type === 'light';
-    const monacoThemeName = `gitma-theme-${theme.id}`;
-
-    monaco.editor.defineTheme(monacoThemeName, {
-      base: colors.monacoBase ?? (isLight ? 'vs' : 'vs-dark'),
-      inherit: true,
-      rules: [],
-      colors: {
-        'editor.background': colors.bg,
-        'editorGutter.background': colors.bg,
-        'editor.lineHighlightBackground': isLight ? '#f0f3f6' : colors.surface,
-        'diffEditor.insertedLineBackground': isLight ? '#2ea04314' : '#2ea04318',
-        'diffEditor.removedLineBackground': isLight ? '#cf222e14' : '#f8514918',
-        'diffEditor.insertedTextBackground': isLight ? '#2ea04330' : '#2ea04338',
-        'diffEditor.removedTextBackground': isLight ? '#cf222e30' : '#f8514938',
-        'diffEditor.insertedTextBorder': '#00000000',
-        'diffEditor.removedTextBorder': '#00000000',
-        'diffEditorGutter.insertedLineBackground': isLight ? '#2ea04320' : '#2ea04328',
-        'diffEditorGutter.removedLineBackground': isLight ? '#cf222e20' : '#f8514928',
-        'diffEditorOverview.insertedForeground': isLight ? '#2ea04366' : '#2ea04377',
-        'diffEditorOverview.removedForeground': isLight ? '#cf222e66' : '#f8514977',
-        'diffEditor.diagonalFill': isLight ? '#e1e4e8' : '#1c2024',
-        'scrollbarSlider.background': isLight ? '#8c959f66' : '#3b424a',
-        'scrollbarSlider.hoverBackground': isLight ? '#8c959f99' : '#4b5563',
-        'scrollbarSlider.activeBackground': colors.accent,
-        'scrollbar.shadow': '#00000000',
-      },
-    });
-
-    monaco.editor.setTheme(monacoThemeName);
-  } catch {
-    // Monaco might not be fully mounted yet in SSR or test contexts
-  }
+  applyEditorTheme?.(theme);
 }
 
 export function validateThemeJson(jsonStr: string): { valid: boolean; theme?: ThemeDefinition; error?: string } {
