@@ -13,7 +13,9 @@ import {
   FileMinus2,
   FilePenLine,
   Folder,
+  FolderMinus,
   FolderOpen,
+  FolderPlus,
   FolderTree,
   Globe,
   List,
@@ -26,6 +28,7 @@ import { useAppStore } from '../store/app';
 import { useI18n } from '../i18n';
 import type { Area, FileEntry } from '../lib/types';
 import { FileContextMenu } from './FileContextMenu';
+import { DirContextMenu } from './DirContextMenu';
 import './Lists.css';
 
 export function formatFullDate(timestamp: number): string {
@@ -177,6 +180,87 @@ export function flattenTree(nodes: FileTreeNode[], collapsed: Set<string>): File
   return list;
 }
 
+export function getDescendantFiles(node: FileTreeNode): FileEntry[] {
+  const result: FileEntry[] = [];
+  function traverse(n: FileTreeNode) {
+    if (!n.isDir && n.file) {
+      result.push(n.file);
+    } else if (n.isDir && n.children) {
+      for (const child of n.children) {
+        traverse(child);
+      }
+    }
+  }
+  traverse(node);
+  return result;
+}
+
+export function DiscardButton({
+  disabled = false,
+  size = 13,
+  onDiscard,
+  title,
+  confirmTitle,
+  ariaLabel,
+  confirmAriaLabel,
+}: {
+  disabled?: boolean;
+  size?: number;
+  onDiscard: () => void;
+  title: string;
+  confirmTitle: string;
+  ariaLabel: string;
+  confirmAriaLabel: string;
+}) {
+  const [confirming, setConfirming] = useState(false);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (timerRef.current) clearTimeout(timerRef.current);
+    };
+  }, []);
+
+  const handleClick = (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (confirming) {
+      if (timerRef.current) clearTimeout(timerRef.current);
+      setConfirming(false);
+      onDiscard();
+    } else {
+      setConfirming(true);
+      if (timerRef.current) clearTimeout(timerRef.current);
+      timerRef.current = setTimeout(() => {
+        setConfirming(false);
+      }, 3500);
+    }
+  };
+
+  const handleBlur = () => {
+    if (timerRef.current) clearTimeout(timerRef.current);
+    setConfirming(false);
+  };
+
+  return (
+    <button
+      type="button"
+      disabled={disabled}
+      className={`lists-file-discard-btn ${confirming ? 'is-confirming' : ''}`}
+      onClick={handleClick}
+      onBlur={handleBlur}
+      onDoubleClick={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+      }}
+      title={confirming ? confirmTitle : title}
+      aria-label={confirming ? confirmAriaLabel : ariaLabel}
+    >
+      {confirming ? <Check size={size} strokeWidth={2.5} /> : <Undo2 size={size} />}
+    </button>
+  );
+}
+
 function FileRow({
   file,
   selected = false,
@@ -276,20 +360,105 @@ function FileRow({
         </div>
       </button>
       {file.area === 'unstaged' && onDiscard && (
-        <button
-          type="button"
+        <DiscardButton
           disabled={disabled}
-          className="lists-file-discard-btn"
-          onClick={(e) => {
-            e.stopPropagation();
-            onDiscard();
-          }}
+          size={isTree ? 11 : 13}
+          onDiscard={onDiscard}
           title={t('files.discardFile', { name: file.name })}
-          aria-label={t('files.discard')}
-        >
-          <Undo2 size={isTree ? 11 : 13} />
-        </button>
+          confirmTitle={t('files.confirmDiscard')}
+          ariaLabel={t('files.discard')}
+          confirmAriaLabel={t('files.confirmDiscard')}
+        />
       )}
+    </div>
+  );
+}
+
+export function DirRow({
+  node,
+  descendantFiles,
+  isCollapsed,
+  area,
+  disabled = false,
+  onToggle,
+  onStage,
+  onUnstage,
+  onDiscard,
+  onContextMenu,
+}: {
+  node: FileTreeNode;
+  descendantFiles: FileEntry[];
+  isCollapsed: boolean;
+  area?: Area;
+  disabled?: boolean;
+  onToggle: () => void;
+  onStage?: () => void;
+  onUnstage?: () => void;
+  onDiscard?: () => void;
+  onContextMenu?: (e: React.MouseEvent) => void;
+}) {
+  const { t } = useI18n();
+
+  return (
+    <div
+      className="lists-tree-dir-container"
+      onContextMenu={onContextMenu}
+    >
+      <button
+        type="button"
+        className="lists-tree-dir-row"
+        style={{ paddingLeft: `${6 + node.depth * 11}px` }}
+        onClick={onToggle}
+        title={node.fullPath}
+      >
+        {isCollapsed ? <ChevronRight size={12} /> : <ChevronDown size={12} />}
+        {isCollapsed ? <Folder size={13} /> : <FolderOpen size={13} />}
+        <span className="lists-tree-dir-name">{node.name}</span>
+        <span className="lists-tree-dir-count">({descendantFiles.length})</span>
+      </button>
+      <div className="lists-dir-actions" onClick={(e) => e.stopPropagation()}>
+        {area === 'unstaged' && onStage && (
+          <button
+            type="button"
+            disabled={disabled}
+            className="lists-dir-action-btn lists-dir-stage-btn"
+            onClick={(e) => {
+              e.stopPropagation();
+              onStage();
+            }}
+            title={t('files.stageDir', { name: node.name })}
+            aria-label={t('files.stageDir', { name: node.name })}
+          >
+            <FolderPlus size={12} />
+          </button>
+        )}
+        {area === 'staged' && onUnstage && (
+          <button
+            type="button"
+            disabled={disabled}
+            className="lists-dir-action-btn lists-dir-unstage-btn"
+            onClick={(e) => {
+              e.stopPropagation();
+              onUnstage();
+            }}
+            title={t('files.unstageDir', { name: node.name })}
+            aria-label={t('files.unstageDir', { name: node.name })}
+          >
+            <FolderMinus size={12} />
+          </button>
+        )}
+        {area === 'unstaged' && onDiscard && (
+          <DiscardButton
+            disabled={disabled}
+            size={11}
+            onDiscard={onDiscard}
+            title={t('files.discardDir', { name: node.name })}
+            confirmTitle={t('files.confirmDiscardDir', { name: node.name })}
+            ariaLabel={t('files.discardDir', { name: node.name })}
+            confirmAriaLabel={t('files.confirmDiscardDir', { name: node.name })}
+          />
+        )}
+      </div>
     </div>
   );
 }
@@ -310,7 +479,11 @@ function FileGroup({
   onAll,
   onDiscard,
   onDiscardAll,
+  onStageDir,
+  onUnstageDir,
+  onDiscardDir,
   onContextMenu,
+  onDirContextMenu,
 }: {
   title: string;
   shortTitle?: string;
@@ -327,7 +500,11 @@ function FileGroup({
   onAll: () => void;
   onDiscard?: (file: FileEntry) => void;
   onDiscardAll?: () => void;
+  onStageDir?: (files: FileEntry[]) => void;
+  onUnstageDir?: (files: FileEntry[]) => void;
+  onDiscardDir?: (files: FileEntry[]) => void;
   onContextMenu?: (e: React.MouseEvent, file: FileEntry) => void;
+  onDirContextMenu?: (e: React.MouseEvent, node: FileTreeNode, descendantFiles: FileEntry[], area: Area) => void;
 }) {
   const treeNodes = useMemo(() => buildTree(files), [files]);
   const visibleItems = useMemo(
@@ -422,22 +599,25 @@ function FileGroup({
               if (!node) return null;
               if (node.isDir) {
                 const isDirCollapsed = collapsed.has(node.fullPath);
+                const descendantFiles = getDescendantFiles(node);
                 return (
                   <div
                     key={node.id}
                     className="lists-virtual-row lists-tree-row"
                     style={{ transform: `translateY(${item.start}px)`, height: `${TREE_ROW_HEIGHT}px` }}
                   >
-                    <button
-                      type="button"
-                      className="lists-tree-dir-row"
-                      style={{ paddingLeft: `${6 + node.depth * 11}px` }}
-                      onClick={() => onToggleDir(node.fullPath)}
-                    >
-                      {isDirCollapsed ? <ChevronRight size={12} /> : <ChevronDown size={12} />}
-                      {isDirCollapsed ? <Folder size={13} /> : <FolderOpen size={13} />}
-                      <span className="lists-tree-dir-name">{node.name}</span>
-                    </button>
+                    <DirRow
+                      node={node}
+                      descendantFiles={descendantFiles}
+                      isCollapsed={isDirCollapsed}
+                      area={area}
+                      disabled={disabled}
+                      onToggle={() => onToggleDir(node.fullPath)}
+                      onStage={onStageDir ? () => onStageDir(descendantFiles) : undefined}
+                      onUnstage={onUnstageDir ? () => onUnstageDir(descendantFiles) : undefined}
+                      onDiscard={onDiscardDir ? () => onDiscardDir(descendantFiles) : undefined}
+                      onContextMenu={(e) => onDirContextMenu?.(e, node, descendantFiles, area)}
+                    />
                   </div>
                 );
               }
@@ -506,6 +686,7 @@ function VirtualHistoryFiles({
   onSelect,
   onPrefetch,
   onContextMenu,
+  onDirContextMenu,
 }: {
   files: FileEntry[];
   selectedId?: string;
@@ -515,6 +696,7 @@ function VirtualHistoryFiles({
   onSelect: (file: FileEntry) => void;
   onPrefetch?: (file: FileEntry) => void;
   onContextMenu?: (e: React.MouseEvent, file: FileEntry) => void;
+  onDirContextMenu?: (e: React.MouseEvent, node: FileTreeNode, descendantFiles: FileEntry[], area: Area) => void;
 }) {
   const treeNodes = useMemo(() => buildTree(files), [files]);
   const visibleItems = useMemo(
@@ -555,22 +737,22 @@ function VirtualHistoryFiles({
             if (!node) return null;
             if (node.isDir) {
               const isDirCollapsed = collapsed.has(node.fullPath);
+              const descendantFiles = getDescendantFiles(node);
               return (
                 <div
                   key={node.id}
                   className="lists-virtual-row lists-tree-row"
                   style={{ transform: `translateY(${item.start}px)`, height: `${TREE_ROW_HEIGHT}px` }}
                 >
-                  <button
-                    type="button"
-                    className="lists-tree-dir-row"
-                    style={{ paddingLeft: `${6 + node.depth * 11}px` }}
-                    onClick={() => onToggleDir(node.fullPath)}
-                  >
-                    {isDirCollapsed ? <ChevronRight size={12} /> : <ChevronDown size={12} />}
-                    {isDirCollapsed ? <Folder size={13} /> : <FolderOpen size={13} />}
-                    <span className="lists-tree-dir-name">{node.name}</span>
-                  </button>
+                  <DirRow
+                    node={node}
+                    descendantFiles={descendantFiles}
+                    isCollapsed={isDirCollapsed}
+                    area="commit"
+                    disabled={false}
+                    onToggle={() => onToggleDir(node.fullPath)}
+                    onContextMenu={(e) => onDirContextMenu?.(e, node, descendantFiles, 'commit')}
+                  />
                 </div>
               );
             }
@@ -655,6 +837,31 @@ export function FilesPanel() {
     y: number;
     file: FileEntry;
   } | null>(null);
+
+  const [dirContextMenu, setDirContextMenu] = useState<{
+    x: number;
+    y: number;
+    dirName: string;
+    dirPath: string;
+    files: FileEntry[];
+    area?: Area;
+  } | null>(null);
+
+  const handleDirContextMenu = useCallback(
+    (e: React.MouseEvent, node: FileTreeNode, descendantFiles: FileEntry[], area: Area) => {
+      e.preventDefault();
+      e.stopPropagation();
+      setDirContextMenu({
+        x: e.clientX,
+        y: e.clientY,
+        dirName: node.name,
+        dirPath: node.fullPath,
+        files: descendantFiles,
+        area,
+      });
+    },
+    []
+  );
 
   const local = context?.kind === 'local';
   const staged = local ? snapshot?.staged ?? EMPTY_FILES : EMPTY_FILES;
@@ -1030,7 +1237,9 @@ export function FilesPanel() {
             onPrefetch={prefetchFile}
             onStage={(file) => runOperation('unstage', [file.id])}
             onAll={() => runOperation('unstageAll')}
+            onUnstageDir={(files) => void runOperation('unstage', files.map((f) => f.id))}
             onContextMenu={handleFileContextMenu}
+            onDirContextMenu={handleDirContextMenu}
           />
           <FileGroup
             title={t('files.unstaged')}
@@ -1046,15 +1255,10 @@ export function FilesPanel() {
             onPrefetch={prefetchFile}
             onStage={(file) => runOperation('stage', [file.id])}
             onAll={() => runOperation('stageAll')}
-            onContextMenu={handleFileContextMenu}
+            onStageDir={(files) => void runOperation('stage', files.map((f) => f.id))}
+            onDiscardDir={(files) => void runOperation('discard', files.map((f) => f.id))}
             onDiscard={(file) => {
-              if (
-                window.confirm(
-                  t('files.discardConfirmFile', { name: file.name })
-                )
-              ) {
-                void runOperation('discard', [file.id]);
-              }
+              void runOperation('discard', [file.id]);
             }}
             onDiscardAll={() => {
               if (
@@ -1065,6 +1269,8 @@ export function FilesPanel() {
                 void runOperation('discardAll');
               }
             }}
+            onContextMenu={handleFileContextMenu}
+            onDirContextMenu={handleDirContextMenu}
           />
         </>
       ) : (
@@ -1077,6 +1283,7 @@ export function FilesPanel() {
           onSelect={selectFile}
           onPrefetch={prefetchFile}
           onContextMenu={handleFileContextMenu}
+          onDirContextMenu={handleDirContextMenu}
         />
       )}
 
@@ -1098,6 +1305,24 @@ export function FilesPanel() {
           onRestoreCommitFile={(oid, path) => void restoreCommitFile?.(oid, path)}
           onViewBlame={(_p, _oid) => setBlameOpen(true)}
           onOpenBrowser={(p, oid) => void openInBrowser?.({ commitOid: oid, filePath: p })}
+        />
+      )}
+
+      {dirContextMenu && (
+        <DirContextMenu
+          x={dirContextMenu.x}
+          y={dirContextMenu.y}
+          dirName={dirContextMenu.dirName}
+          dirPath={dirContextMenu.dirPath}
+          files={dirContextMenu.files}
+          area={dirContextMenu.area}
+          repoPath={session?.root}
+          onClose={() => setDirContextMenu(null)}
+          onStage={(files) => void runOperation('stage', files.map((f) => f.id))}
+          onUnstage={(files) => void runOperation('unstage', files.map((f) => f.id))}
+          onDiscard={(files) => void runOperation('discard', files.map((f) => f.id))}
+          onOpenEditor={(p) => void runOperation('openEditor', [], p)}
+          onRevealFile={(p) => void runOperation('revealFile', [], p)}
         />
       )}
     </section>

@@ -969,8 +969,22 @@
 .lists-tree-row {
   height: 25px !important;
 }
-.lists-tree-dir-row {
+.lists-tree-dir-container {
+  display: flex;
+  align-items: center;
   width: 100%;
+  height: 25px;
+  box-sizing: border-box;
+}
+.lists-tree-dir-container:hover {
+  background: var(--selected);
+}
+.lists-tree-dir-container:hover .lists-tree-dir-row {
+  color: var(--text);
+}
+.lists-tree-dir-row {
+  flex: 1;
+  min-width: 0;
   height: 25px;
   display: flex;
   align-items: center;
@@ -982,8 +996,8 @@
   font-weight: 500;
   cursor: pointer;
   text-align: left;
+  padding-right: 4px;
 }
-.lists-tree-dir-row:hover { background: var(--selected); color: var(--text); }
 .lists-tree-dir-name {
   color: var(--text);
   overflow: hidden;
@@ -991,6 +1005,54 @@
   white-space: nowrap;
   font-weight: 550;
   font-size: 12px;
+}
+.lists-tree-dir-count {
+  font-size: 10.5px;
+  color: var(--muted);
+  opacity: 0.75;
+  font-weight: normal;
+  margin-left: 2px;
+  flex-shrink: 0;
+}
+.lists-dir-actions {
+  display: none;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+  padding-right: 4px;
+}
+.lists-tree-dir-container:hover .lists-dir-actions,
+.lists-tree-dir-container:focus-within .lists-dir-actions,
+.lists-dir-actions.has-confirming,
+.lists-dir-actions:has(.is-confirming) {
+  display: flex;
+}
+.lists-dir-action-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  border-radius: 3px;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background-color 0.1s ease, color 0.1s ease;
+}
+.lists-dir-action-btn:hover {
+  background: var(--surface);
+  color: var(--text);
+}
+.lists-dir-stage-btn:hover {
+  background: rgba(34, 197, 94, 0.15) !important;
+  color: #22c55e !important;
+}
+.lists-dir-unstage-btn:hover {
+  background: rgba(239, 68, 68, 0.15) !important;
+  color: #ef4444 !important;
 }
 .is-tree-file-row {
   height: 25px !important;
@@ -1365,12 +1427,23 @@
   margin-right: 4px;
   transition: background-color 0.1s ease, color 0.1s ease;
 }
-.lists-file-row:hover .lists-file-discard-btn {
-  display: inline-flex;
+.lists-file-row:hover .lists-file-discard-btn,
+.lists-file-row:focus-within .lists-file-discard-btn,
+.lists-file-discard-btn.is-confirming {
+  display: inline-flex !important;
 }
 .lists-file-discard-btn:hover {
   background: rgba(239, 68, 68, 0.15);
   color: #ef4444;
+}
+.lists-file-discard-btn.is-confirming {
+  background: #dc2626 !important;
+  color: #ffffff !important;
+  box-shadow: 0 0 0 1px rgba(220, 38, 38, 0.5);
+}
+.lists-file-discard-btn.is-confirming:hover {
+  background: #b91c1c !important;
+  color: #ffffff !important;
 }
 
 /* History Search Input and Scope Toggle in GraphPanel header */
@@ -1821,6 +1894,7 @@
   border-bottom: 1px solid color-mix(in srgb, var(--accent) 70%, transparent);
 }
 
-.file-context-menu {
+.file-context-menu,
+.dir-context-menu {
   min-width: 220px;
 }

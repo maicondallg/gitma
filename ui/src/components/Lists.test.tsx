@@ -950,17 +950,18 @@ describe('Stash, Cherry-pick e RefPopover no GraphPanel', () => {
     expect(blurSpy).toHaveBeenCalled();
   });
 
-  it('permite descartar alterações de um arquivo não preparado com confirmação', () => {
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+  it('permite descartar alterações de um arquivo não preparado com confirmação inline', () => {
     render(<FilesPanel />);
 
     const discardBtn = screen.getByRole('button', { name: 'Descartar alterações' });
     expect(discardBtn).toBeInTheDocument();
     fireEvent.click(discardBtn);
 
-    expect(confirmSpy).toHaveBeenCalled();
+    const confirmBtn = screen.getByRole('button', { name: 'Confirmar descarte' });
+    expect(confirmBtn).toBeInTheDocument();
+    fireEvent.click(confirmBtn);
+
     expect(actions.runOperation).toHaveBeenCalledWith('discard', ['u1']);
-    confirmSpy.mockRestore();
   });
 
   it('permite descartar todas as alterações não preparadas no cabeçalho com confirmação', () => {
@@ -1351,5 +1352,116 @@ describe('ContextMenu Tag Actions', () => {
     // Clica em preparar arquivo no menu de contexto
     fireEvent.click(screen.getByText(/Preparar arquivo/i));
     expect(actions.runOperation).toHaveBeenCalledWith('stage', ['u1']);
+  });
+
+  it('permite preparar pasta e descartar alterações de pasta com confirmação inline no modo árvore', () => {
+    const f1 = file('u1', 'src/a.ts', 'unstaged');
+    const f2 = file('u2', 'src/b.ts', 'unstaged');
+    useAppStore.setState(
+      state({
+        context: { kind: 'local' },
+        snapshot: {
+          sessionId: 's',
+          requestId: 1,
+          revision: 1,
+          branch: 'main',
+          upstream: null,
+          conflicted: false,
+          staged: [],
+          unstaged: [f1, f2],
+          historyKey: 'h',
+        },
+        fileViewMode: 'tree',
+        activePane: 'files',
+      })
+    );
+
+    render(<FilesPanel />);
+
+    // Na pasta src, deve ter o botão de preparar pasta
+    const stageDirBtn = screen.getByRole('button', { name: 'Adicionar pasta ao stage (src)' });
+    expect(stageDirBtn).toBeInTheDocument();
+    fireEvent.click(stageDirBtn);
+    expect(actions.runOperation).toHaveBeenCalledWith('stage', ['u1', 'u2']);
+
+    // O botão de descartar pasta deve ter confirmação inline
+    const discardDirBtn = screen.getByRole('button', { name: 'Descartar alterações na pasta "src"' });
+    expect(discardDirBtn).toBeInTheDocument();
+    fireEvent.click(discardDirBtn);
+
+    const confirmDirBtn = screen.getByRole('button', { name: 'Confirmar descarte da pasta "src"?' });
+    expect(confirmDirBtn).toBeInTheDocument();
+    fireEvent.click(confirmDirBtn);
+
+    expect(actions.runOperation).toHaveBeenCalledWith('discard', ['u1', 'u2']);
+  });
+
+  it('permite desestagiar pasta no modo árvore', () => {
+    const s1 = file('s1', 'components/Button.tsx', 'staged');
+    const s2 = file('s2', 'components/Input.tsx', 'staged');
+    useAppStore.setState(
+      state({
+        context: { kind: 'local' },
+        snapshot: {
+          sessionId: 's',
+          requestId: 1,
+          revision: 1,
+          branch: 'main',
+          upstream: null,
+          conflicted: false,
+          staged: [s1, s2],
+          unstaged: [],
+          historyKey: 'h',
+        },
+        fileViewMode: 'tree',
+        activePane: 'files',
+      })
+    );
+
+    render(<FilesPanel />);
+
+    const unstageDirBtn = screen.getByRole('button', { name: 'Remover pasta do stage (components)' });
+    expect(unstageDirBtn).toBeInTheDocument();
+    fireEvent.click(unstageDirBtn);
+    expect(actions.runOperation).toHaveBeenCalledWith('unstage', ['s1', 's2']);
+  });
+
+  it('abre menu de contexto ao clicar com botão direito em uma pasta e executa ações', () => {
+    const u1 = file('u1', 'lib/helper.ts', 'unstaged');
+    useAppStore.setState(
+      state({
+        context: { kind: 'local' },
+        snapshot: {
+          sessionId: 's',
+          requestId: 1,
+          revision: 1,
+          branch: 'main',
+          upstream: null,
+          conflicted: false,
+          staged: [],
+          unstaged: [u1],
+          historyKey: 'h',
+        },
+        fileViewMode: 'tree',
+        activePane: 'files',
+      })
+    );
+
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    render(<FilesPanel />);
+
+    const dirRow = screen.getByText('lib');
+    fireEvent.contextMenu(dirRow);
+
+    // O menu de contexto da pasta deve aparecer com opções de preparar pasta e descartar
+    expect(screen.getByText(/Preparar pasta \(1 arquivos\)/i)).toBeInTheDocument();
+    expect(screen.getByText(/Descartar alterações na pasta\.\.\./i)).toBeInTheDocument();
+    expect(screen.getByText(/Copiar caminho relativo/i)).toBeInTheDocument();
+
+    // Clica em descartar no menu de contexto
+    fireEvent.click(screen.getByText(/Descartar alterações na pasta\.\.\./i));
+    expect(confirmSpy).toHaveBeenCalled();
+    expect(actions.runOperation).toHaveBeenCalledWith('discard', ['u1']);
+    confirmSpy.mockRestore();
   });
 });

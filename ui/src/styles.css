@@ -924,7 +924,8 @@ select.modal-input option {
 }
 
 /* Context Menu */
-.custom-context-menu {
+.custom-context-menu,
+.context-menu {
   position: fixed;
   z-index: 99999;
   background: var(--surface);
