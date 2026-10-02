@@ -418,7 +418,8 @@
     "rebase": "Rebasando rama",
     "rebaseContinue": "Continuando rebase",
     "rebaseAbort": "Abortando rebase",
-    "rebaseSkip": "Saltando commit en rebase"
+    "rebaseSkip": "Saltando commit en rebase",
+    "gitCommand": "Ejecutando comando Git"
   },
   "settings": {
     "title": "Configuración",
@@ -681,5 +682,26 @@
     "testOpened": "Terminal abierto con éxito",
     "noSession": "Abra un repositorio para probar",
     "save": "Guardar"
+  },
+  "console": {
+    "title": "Mini Terminal & Logs",
+    "toggleTitle": "Alternar Mini Terminal y Logs",
+    "toggleButton": "Terminal & Logs",
+    "inputPlaceholder": "Escribe un comando git (ej: status, log -5, branch -a, diff --stat)...",
+    "run": "Ejecutar",
+    "running": "Ejecutando...",
+    "clear": "Limpiar logs",
+    "clearTitle": "Limpiar historial de logs",
+    "copy": "Copiar salida",
+    "copied": "¡Copiado!",
+    "copyAll": "Copiar todo",
+    "maximize": "Maximizar",
+    "restore": "Restaurar tamaño",
+    "close": "Cerrar panel",
+    "emptyLogs": "Aún no hay comandos ni registros guardados.",
+    "quickActions": "Acciones rápidas:",
+    "hint": "Consejo: usa ↑ y ↓ para navegar por el historial. Atajo: Ctrl+`",
+    "noRepo": "Abre un repositorio para ejecutar comandos Git.",
+    "noOutput": "(comando completado sin salida)"
   }
 }

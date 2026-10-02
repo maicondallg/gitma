@@ -1226,3 +1226,52 @@ pub fn resolve_conflict(root: &Path, rel_path: &str, choice: &str) -> GitResult<
     }
     Ok(())
 }
+
+pub fn run_raw_git_command(root: &Path, raw_command: &str) -> GitResult<String> {
+    let args = parse_command_args(raw_command);
+    if args.is_empty() {
+        return Err(GitError {
+            category: GitErrorCategory::Process,
+            message: "Comando vazio".into(),
+            details: None,
+        });
+    }
+    let os_args: Vec<&OsStr> = args.iter().map(|s| OsStr::new(s.as_str())).collect();
+    super::runner::run_raw(root, &os_args)
+}
+
+pub fn parse_command_args(input: &str) -> Vec<String> {
+    let mut args = Vec::new();
+    let mut current = String::new();
+    let mut in_single = false;
+    let mut in_double = false;
+    let mut escape = false;
+
+    for ch in input.chars() {
+        if escape {
+            current.push(ch);
+            escape = false;
+        } else if ch == '\\' && !in_single {
+            escape = true;
+        } else if ch == '\'' && !in_double {
+            in_single = !in_single;
+        } else if ch == '"' && !in_single {
+            in_double = !in_double;
+        } else if ch.is_whitespace() && !in_single && !in_double {
+            if !current.is_empty() {
+                args.push(std::mem::take(&mut current));
+            }
+        } else {
+            current.push(ch);
+        }
+    }
+    if !current.is_empty() {
+        args.push(current);
+    }
+    if let Some(first) = args.first() {
+        if first == "git" {
+            args.remove(0);
+        }
+    }
+    args
+}

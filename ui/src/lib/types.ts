@@ -162,8 +162,18 @@ export type Operation =
   | 'rebaseAbort'
   | 'rebaseSkip'
   | 'openBrowser'
-  | 'restoreCommitFile';
+  | 'restoreCommitFile'
+  | 'gitCommand';
 export interface OperationResult { sessionId: string; requestId: number; message: string }
+
+export interface CommandLogEntry {
+  id: string;
+  command: string;
+  output?: string;
+  status: 'running' | 'success' | 'error';
+  timestamp: number;
+  isCustomCli?: boolean;
+}
 export type DiffMode = 'unified' | 'split';
 export type FileViewMode = 'flat' | 'tree';
 

@@ -52,6 +52,7 @@ export function ShortcutsModal({ onClose }: ShortcutsModalProps) {
     {
       title: t('shortcuts.helpAndInterface'),
       shortcuts: [
+        { desc: t('console.title'), keys: ['Ctrl', '`'] },
         { desc: t('shortcuts.viewShortcuts'), keys: ['Ctrl', '/'] },
         { desc: t('shortcuts.settingsShortcut'), keys: ['Ctrl', ','] },
         { desc: t('shortcuts.closeModals'), keys: ['Esc'] },

@@ -17,6 +17,7 @@ import {
   Tag,
   Upload,
   X,
+  SquareTerminal,
 } from 'lucide-react';
 import { Panel, PanelGroup, PanelResizeHandle, type ImperativePanelGroupHandle } from 'react-resizable-panels';
 import { CommitForm } from './components/CommitForm';
@@ -28,6 +29,7 @@ import { NewBranchModal } from './components/NewBranchModal';
 import { ShortcutsModal } from './components/ShortcutsModal';
 import { TabBar } from './components/TabBar';
 import { TerminalButton } from './components/TerminalButton';
+import { TerminalDrawer } from './components/TerminalDrawer';
 import { useI18n } from './i18n';
 import { useAppStore } from './store/app';
 import type { Operation } from './lib/types';
@@ -87,6 +89,9 @@ export default function App() {
   const closeReflog = useAppStore((s) => s.closeReflog);
   const remotesModalOpen = useAppStore((s) => s.remotesModalOpen);
   const closeRemotesModal = useAppStore((s) => s.closeRemotesModal);
+  const isConsoleOpen = useAppStore((s) => s.isConsoleOpen);
+  const toggleConsole = useAppStore((s) => s.toggleConsole);
+  const setConsoleOpen = useAppStore((s) => s.setConsoleOpen);
   const { t } = useI18n();
 
   const [showNewBranchModal, setShowNewBranchModal] = useState(false);
@@ -153,13 +158,26 @@ export default function App() {
         return;
       }
 
-      if (event.key === 'Escape' && expandedDiff) {
-        event.preventDefault();
-        setExpandedDiff(false);
-        return;
+      if (event.key === 'Escape') {
+        if (expandedDiff) {
+          event.preventDefault();
+          setExpandedDiff(false);
+          return;
+        }
+        if (isConsoleOpen) {
+          event.preventDefault();
+          setConsoleOpen(false);
+          return;
+        }
       }
 
       if (!(event.ctrlKey || event.metaKey)) return;
+
+      if (event.key === '`' || event.key === "'") {
+        event.preventDefault();
+        toggleConsole();
+        return;
+      }
 
       if (event.key.toLowerCase() === 'o') {
         event.preventDefault();
@@ -346,6 +364,16 @@ export default function App() {
                   <span>{t('toolbar.openInBrowser')}</span>
                 </button>
               )}
+              <button
+                type="button"
+                className={`sync-button ${isConsoleOpen ? 'active' : ''}`}
+                onClick={toggleConsole}
+                title={`${t('console.toggleTitle')} (Ctrl+\`)`}
+                aria-label={t('console.title')}
+              >
+                <SquareTerminal size={14} />
+                <span>{t('console.toggleButton')}</span>
+              </button>
               <TerminalButton />
             </div>
 
@@ -557,6 +585,8 @@ export default function App() {
               </Suspense>
             </Panel>
           </PanelGroup>
+
+          <TerminalDrawer />
         </>
       )}
 
@@ -570,6 +600,17 @@ export default function App() {
               ? t('app.updating')
               : t('app.ready')}
           </span>
+          {session && (
+            <button
+              type="button"
+              className="footer-help-btn"
+              onClick={toggleConsole}
+              title={`${t('console.toggleTitle')} (Ctrl+\`)`}
+              aria-label={t('console.title')}
+            >
+              <SquareTerminal size={13} />
+            </button>
+          )}
         </div>
 
         <div className="footer-right">

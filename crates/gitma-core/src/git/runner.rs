@@ -71,6 +71,119 @@ pub(crate) fn mutate_with_stdin(root: &Path, args: &[&str], input: &[u8]) -> Git
     )
 }
 
+pub(crate) fn run_raw(
+    root: &Path,
+    args: &[&OsStr],
+) -> GitResult<String> {
+    if CANCELLED.load(Ordering::SeqCst) {
+        return Err(cancelled_error());
+    }
+    let mut command = Command::new("git");
+    command.arg("-C").arg(root);
+    command
+        .args(args)
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GCM_INTERACTIVE", "Never")
+        .env("GIT_EDITOR", "true")
+        .env("LC_ALL", "C")
+        .env("GIT_OPTIONAL_LOCKS", "0")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    #[cfg(unix)]
+    command.env("GIT_ASKPASS", "/bin/false");
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+    let mut child = command
+        .spawn()
+        .map_err(|error| io_error("Não foi possível iniciar o Git", error))?;
+
+    let stdout = child.stdout.take().expect("stdout was piped");
+    let stderr = child.stderr.take().expect("stderr was piped");
+    let stdout_reader = thread::spawn(move || read_pipe(stdout, MAX_STDOUT_CAPTURE));
+    let stderr_reader = thread::spawn(move || read_pipe(stderr, MAX_STDERR_CAPTURE));
+
+    let deadline = Instant::now() + MUTATION_TIMEOUT;
+    let started = Instant::now();
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if Instant::now() < deadline && !CANCELLED.load(Ordering::SeqCst) => {
+                let interval = if started.elapsed() < Duration::from_millis(50) {
+                    Duration::from_millis(2)
+                } else {
+                    Duration::from_millis(10)
+                };
+                thread::sleep(interval)
+            }
+            Ok(None) if CANCELLED.load(Ordering::SeqCst) => {
+                stop_child(&mut child);
+                let _ = child.wait();
+                let _ = stdout_reader.join();
+                let _ = stderr_reader.join();
+                return Err(cancelled_error());
+            }
+            Ok(None) => {
+                stop_child(&mut child);
+                let _ = child.wait();
+                let _ = stdout_reader.join();
+                let _ = stderr_reader.join();
+                return Err(GitError {
+                    category: GitErrorCategory::Process,
+                    message: "O Git excedeu o tempo limite".into(),
+                    details: None,
+                });
+            }
+            Err(error) => {
+                stop_child(&mut child);
+                let _ = child.wait();
+                let _ = stdout_reader.join();
+                let _ = stderr_reader.join();
+                return Err(io_error("Não foi possível aguardar o Git", error));
+            }
+        }
+    };
+
+    let stdout_bytes = join_pipe(stdout_reader)?;
+    let stderr_bytes = join_pipe(stderr_reader)?;
+    let stdout_str = String::from_utf8_lossy(&stdout_bytes).trim_end().to_string();
+    let stderr_str = String::from_utf8_lossy(&stderr_bytes).trim_end().to_string();
+
+    if status.success() {
+        if !stdout_str.is_empty() && !stderr_str.is_empty() {
+            Ok(format!("{stdout_str}\n{stderr_str}"))
+        } else if !stdout_str.is_empty() {
+            Ok(stdout_str)
+        } else if !stderr_str.is_empty() {
+            Ok(stderr_str)
+        } else {
+            Ok("Comando executado com sucesso (sem saída).".to_string())
+        }
+    } else {
+        let err_output = if !stderr_str.is_empty() {
+            stderr_str
+        } else if !stdout_str.is_empty() {
+            stdout_str
+        } else {
+            format!("Código de saída: {}", status.code().unwrap_or(-1))
+        };
+        Err(GitError {
+            category: GitErrorCategory::Process,
+            message: err_output,
+            details: None,
+        })
+    }
+}
+
 fn run<'a>(
     root: &Path,
     args: impl IntoIterator<Item = &'a OsStr>,

@@ -183,8 +183,13 @@ export function createFixtureAdapter(name = 'local'): BridgeAdapter {
         },
       ],
     }),
-    applyOperation: async (_sessionId, requestId, operation, ids) => {
+    applyOperation: async (_sessionId, requestId, operation, ids, message) => {
       if ((operation === 'push' || operation === 'forcePushWithLease') && name === 'error') throw { category: 'diverged', message: 'O remoto contém commits novos. Faça fetch e revise o histórico.', details: 'Push rejected: non-fast-forward' };
+      if (operation === 'gitCommand') {
+        revision++;
+        listener?.({ sessionId, scope: 'all', paths: [] });
+        return { sessionId, requestId, message: message ? `Simulação Git: ${message}\n(modo demonstração)` : 'Comando executado na demonstração.' };
+      }
       if (operation === 'stage' || operation === 'stageAll') {
         const moved = unstaged.filter((entry) => operation === 'stageAll' || ids.includes(entry.id));
         unstaged = unstaged.filter((entry) => !moved.includes(entry));

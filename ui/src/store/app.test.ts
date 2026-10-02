@@ -623,4 +623,29 @@ describe('history pagination coordination', () => {
     await loading;
     expect(store.getState().history).toBe(replacement);
   });
+
+  it('toggles console state and executes gitCommand with command logging', async () => {
+    const { store, adapter } = await setup();
+    expect(store.getState().isConsoleOpen).toBe(false);
+    store.getState().toggleConsole();
+    expect(store.getState().isConsoleOpen).toBe(true);
+
+    const applySpy = vi.spyOn(adapter, 'applyOperation');
+    await store.getState().runGitCommand('status');
+
+    expect(applySpy).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.any(Number),
+      'gitCommand',
+      [],
+      'status'
+    );
+    expect(store.getState().commandLogs).toHaveLength(1);
+    expect(store.getState().commandLogs[0].command).toBe('git status');
+    expect(store.getState().commandLogs[0].status).toBe('success');
+
+    store.getState().clearCommandLogs();
+    expect(store.getState().commandLogs).toHaveLength(0);
+  });
 });
+

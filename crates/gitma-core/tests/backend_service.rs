@@ -386,3 +386,47 @@ fn hunk_operations_via_backend_service() {
 
     backend.close(&session.session_id).unwrap();
 }
+
+#[test]
+fn git_command_operation_via_backend_service() {
+    let dir = repo();
+    commit(dir.path(), "file.txt", "line1\n", "initial");
+
+    let backend = Backend::new();
+    let session = backend.open(dir.path(), |_| {}).unwrap();
+
+    // 1. Run git status
+    let res = backend.apply_operation(
+        &session.session_id,
+        1,
+        Operation::GitCommand,
+        &[],
+        "status",
+    );
+    assert!(res.is_ok());
+    let op_res = res.unwrap();
+    assert!(op_res.message.contains("nothing to commit") || op_res.message.contains("clean") || op_res.message.contains("branch"));
+
+    // 2. Run git branch test-cli
+    let res2 = backend.apply_operation(
+        &session.session_id,
+        2,
+        Operation::GitCommand,
+        &[],
+        "git branch test-cli",
+    );
+    assert!(res2.is_ok());
+
+    // 3. Verify branch exists via git branch command
+    let res3 = backend.apply_operation(
+        &session.session_id,
+        3,
+        Operation::GitCommand,
+        &[],
+        "branch",
+    ).unwrap();
+    assert!(res3.message.contains("test-cli"));
+
+    backend.close(&session.session_id).unwrap();
+}
+

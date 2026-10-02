@@ -559,6 +559,9 @@ impl GitRepository {
             Err(error) => Err(error),
         }
     }
+    pub fn run_raw_git_command(&self, raw_command: &str) -> GitResult<String> {
+        operations::run_raw_git_command(&self.context.root, raw_command)
+    }
     pub fn stage(&self, path: &Path) -> GitResult<()> {
         operations::stage(&self.context.root, path)
     }

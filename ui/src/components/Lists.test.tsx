@@ -105,6 +105,12 @@ function state(overrides: Partial<AppState> = {}): AppState {
     expandedDiff: false,
     setExpandedDiff: vi.fn(),
     dismissNotice: vi.fn(),
+    isConsoleOpen: false,
+    toggleConsole: vi.fn(),
+    setConsoleOpen: vi.fn(),
+    commandLogs: [],
+    clearCommandLogs: vi.fn(),
+    runGitCommand: vi.fn(async () => {}),
     ...overrides,
   };
 }

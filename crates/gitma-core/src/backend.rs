@@ -281,6 +281,7 @@ pub enum Operation {
     MergeSquash,
     OpenBrowser,
     RestoreCommitFile,
+    GitCommand,
 }
 
 type Emit = Arc<dyn Fn(RepoChanged) + Send + Sync + 'static>;
@@ -813,6 +814,7 @@ impl Backend {
             .write()
             .expect("coordinator lock poisoned");
         let files = resolve_files(&state, file_ids)?;
+        let mut custom_output: Option<String> = None;
         match operation {
             Operation::Stage => {
                 require_area(
@@ -1351,6 +1353,14 @@ impl Backend {
                 reject_files(file_ids)?;
                 state.repo.cherry_pick_continue()?;
             }
+            Operation::GitCommand => {
+                reject_files(file_ids)?;
+                let trimmed = message.trim();
+                if trimmed.is_empty() {
+                    return Err(invalid("O comando Git não pode ser vazio"));
+                }
+                custom_output = Some(state.repo.run_raw_git_command(trimmed)?);
+            }
         }
         (state.emit)(RepoChanged {
             session_id: state.id.clone(),
@@ -1406,6 +1416,9 @@ impl Backend {
             Operation::OpenBrowser => "Navegador aberto",
             Operation::RestoreCommitFile => {
                 "Arquivo restaurado com sucesso para a pasta de trabalho"
+            }
+            Operation::GitCommand => {
+                custom_output.as_deref().unwrap_or("Comando executado com sucesso")
             }
         };
         Ok(OperationResult {

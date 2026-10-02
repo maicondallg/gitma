@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { getBridge } from '../lib/bridge';
-import type { AppError, CommitDetails, CommitFiles, Context, DiffMode, DiffStat, FileEntry, FileViewMode, History, Operation, Preview, RecentRepo, RemoteEntry, RepoChanged, Session, Snapshot, TabItem } from '../lib/types';
+import type { AppError, CommandLogEntry, CommitDetails, CommitFiles, Context, DiffMode, DiffStat, FileEntry, FileViewMode, History, Operation, Preview, RecentRepo, RemoteEntry, RepoChanged, Session, Snapshot, TabItem } from '../lib/types';
 import { buildWebUrl } from '../lib/webUrl';
 
 type Notice = AppError | { message: string; category: 'success' };
@@ -220,6 +220,12 @@ export interface AppState {
   setCompactDiff(compact: boolean): void;
   setFileViewMode(mode: FileViewMode): void;
   dismissNotice(): void;
+  isConsoleOpen: boolean;
+  toggleConsole(): void;
+  setConsoleOpen(open: boolean): void;
+  commandLogs: CommandLogEntry[];
+  clearCommandLogs(): void;
+  runGitCommand(command: string): Promise<void>;
 }
 
 let nextRequestId = 0;
@@ -272,9 +278,10 @@ const NO_FILE_OPERATIONS = new Set<Operation>([
   'reset', 'revertCommit', 'createTag', 'deleteTag', 'pushTag',
   'rebase', 'rebaseContinue', 'rebaseAbort', 'rebaseSkip',
   'stageHunk', 'unstageHunk', 'discardHunk', 'ignorePath', 'openTerminal', 'openEditor', 'revealFile',
-  'openBrowser', 'restoreCommitFile'
+  'openBrowser', 'restoreCommitFile', 'gitCommand'
 ]);
 const NO_REFRESH_OPERATIONS = new Set<Operation>(['openTerminal', 'openEditor', 'revealFile', 'openBrowser']);
+const MAX_COMMAND_LOGS = 10;
 function mergeRefresh(current: typeof queuedRefresh, next: { reason: RefreshReason; event?: RepoChanged }) {
   if (!current) return next;
   const reason = priority[next.reason] >= priority[current.reason] ? next.reason : current.reason;
@@ -283,6 +290,70 @@ function mergeRefresh(current: typeof queuedRefresh, next: { reason: RefreshReas
   const paths = [...new Set([...(current.event?.paths ?? []), ...(next.event?.paths ?? [])])];
   const event = current.event || next.event ? { sessionId: next.event?.sessionId ?? current.event!.sessionId, scope, paths } : undefined;
   return { reason, event };
+}
+
+function formatGitLogCommand(operation: Operation, ids: string[], messageToSend: string): string {
+  if (operation === 'gitCommand') {
+    return messageToSend.startsWith('git ') ? messageToSend : `git ${messageToSend}`;
+  }
+  switch (operation) {
+    case 'pull':
+      return messageToSend ? `git pull --${messageToSend}` : 'git pull';
+    case 'push':
+      return 'git push';
+    case 'forcePushWithLease':
+      return 'git push --force-with-lease';
+    case 'fetch':
+      return 'git fetch';
+    case 'fetchPrune':
+      return messageToSend ? `git fetch --prune ${messageToSend}` : 'git fetch --prune';
+    case 'commit':
+      return `git commit -m "${messageToSend.replace(/"/g, '\\"')}"`;
+    case 'commitAmend':
+      return messageToSend ? `git commit --amend -m "${messageToSend.replace(/"/g, '\\"')}"` : 'git commit --amend';
+    case 'stage':
+      return ids.length === 1 ? 'git add <file>' : `git add (${ids.length} files)`;
+    case 'stageAll':
+      return 'git add -A';
+    case 'unstage':
+      return ids.length === 1 ? 'git restore --staged <file>' : `git restore --staged (${ids.length} files)`;
+    case 'unstageAll':
+      return 'git restore --staged .';
+    case 'discard':
+      return ids.length === 1 ? 'git checkout -- <file>' : `git checkout -- (${ids.length} files)`;
+    case 'discardAll':
+      return 'git checkout -- .';
+    case 'stashPush':
+      return messageToSend ? `git stash push -m "${messageToSend}"` : 'git stash';
+    case 'stashPop':
+      return 'git stash pop';
+    case 'stashApply':
+      return 'git stash apply';
+    case 'stashDrop':
+      return 'git stash drop';
+    case 'switchBranch':
+      return `git switch ${messageToSend}`;
+    case 'createBranch': {
+      try {
+        const parsed = JSON.parse(messageToSend);
+        return `git checkout -b ${parsed.name || messageToSend}`;
+      } catch {
+        return `git checkout -b ${messageToSend}`;
+      }
+    }
+    case 'mergeBranch':
+      return `git merge ${messageToSend}`;
+    case 'mergeAbort':
+      return 'git merge --abort';
+    case 'rebaseAbort':
+      return 'git rebase --abort';
+    case 'rebaseContinue':
+      return 'git rebase --continue';
+    case 'rebaseSkip':
+      return 'git rebase --skip';
+    default:
+      return `git ${operation}${ids.length ? ` (${ids.length})` : ''}${messageToSend ? ` ${messageToSend}` : ''}`;
+  }
 }
 
 let noticeTimer: ReturnType<typeof setTimeout> | null = null;
@@ -558,6 +629,22 @@ export const useAppStore = create<AppState>((set, get) => {
     },
     closeRemotesModal() {
       set({ remotesModalOpen: false });
+    },
+    isConsoleOpen: false,
+    toggleConsole() {
+      set((s) => ({ isConsoleOpen: !s.isConsoleOpen }));
+    },
+    setConsoleOpen(open) {
+      set({ isConsoleOpen: open });
+    },
+    commandLogs: [],
+    clearCommandLogs() {
+      set({ commandLogs: [] });
+    },
+    async runGitCommand(command) {
+      const trimmed = command.trim();
+      if (!trimmed) return;
+      await get().runOperation('gitCommand', [], trimmed);
     },
     async openInBrowser(options) {
       const state = get();
@@ -1290,11 +1377,27 @@ export const useAppStore = create<AppState>((set, get) => {
               ? state.pullStrategy
               : '';
         const requestId = ++nextRequestId;
+        const logCmd = formatGitLogCommand(operation, ids, messageToSend);
         try {
           const result = await getBridge().applyOperation(state.session.sessionId, requestId, operation, ids, messageToSend);
           if (get().session?.sessionId === state.session.sessionId) {
-            if (!NO_REFRESH_OPERATIONS.has(operation)) invalidateLocalPreviews(state.session.sessionId);
-            notify({ category: 'success', message: result.message }, set);
+            if (!NO_REFRESH_OPERATIONS.has(operation)) {
+              const entry: CommandLogEntry = {
+                id: String(requestId),
+                command: logCmd,
+                output: result.message,
+                status: 'success',
+                timestamp: Date.now(),
+                isCustomCli: operation === 'gitCommand',
+              };
+              set((s) => ({
+                commandLogs: [...s.commandLogs.slice(-(MAX_COMMAND_LOGS - 1)), entry],
+              }));
+              invalidateLocalPreviews(state.session.sessionId);
+            }
+            if (operation !== 'gitCommand') {
+              notify({ category: 'success', message: result.message }, set);
+            }
             if ((operation === 'commit' || operation === 'commitAmend') && get().commitMessage === state.commitMessage) {
               set((s) => ({
                 commitMessage: '',
@@ -1303,7 +1406,25 @@ export const useAppStore = create<AppState>((set, get) => {
             }
             if (!NO_REFRESH_OPERATIONS.has(operation)) await get().refresh('mutation');
           }
-        } catch (error) { if (get().session?.sessionId === state.session.sessionId) notify(asError(error), set); }
+        } catch (error) {
+          if (get().session?.sessionId === state.session.sessionId) {
+            const err = asError(error);
+            if (!NO_REFRESH_OPERATIONS.has(operation)) {
+              const entry: CommandLogEntry = {
+                id: String(requestId),
+                command: logCmd,
+                output: err.message + (err.details ? `\n${err.details}` : ''),
+                status: 'error',
+                timestamp: Date.now(),
+                isCustomCli: operation === 'gitCommand',
+              };
+              set((s) => ({
+                commandLogs: [...s.commandLogs.slice(-(MAX_COMMAND_LOGS - 1)), entry],
+              }));
+            }
+            notify(err, set);
+          }
+        }
         finally { writeReserved = false; if (get().session?.sessionId === state.session.sessionId) set({ operation: null }); }
       };
       writeChain = writeChain.then(execute, execute);
