@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 
 import {
@@ -77,6 +77,7 @@ interface FileTreeNode {
   isDir: boolean;
   file?: FileEntry;
   children?: FileTreeNode[];
+  descendantFiles?: FileEntry[];
 }
 
 export function buildTree(files: FileEntry[]): FileTreeNode[] {
@@ -93,7 +94,7 @@ export function buildTree(files: FileEntry[]): FileTreeNode[] {
   const root: Map<string, MutableNode> = new Map();
 
   for (const file of files) {
-    const parts = file.pathDisplay.split('/');
+    const parts = file.pathDisplay.replace(/\\/g, '/').split('/');
     let currentLevel = root;
     let accumulatedPath = '';
 
@@ -125,8 +126,9 @@ export function buildTree(files: FileEntry[]): FileTreeNode[] {
     });
   }
 
-  function convert(level: Map<string, MutableNode>, depth: number): FileTreeNode[] {
-    const result: FileTreeNode[] = [];
+  function convert(level: Map<string, MutableNode>, depth: number): { nodes: FileTreeNode[]; allFiles: FileEntry[] } {
+    const nodes: FileTreeNode[] = [];
+    const allFiles: FileEntry[] = [];
     const dirs: MutableNode[] = [];
     const leaves: MutableNode[] = [];
 
@@ -139,19 +141,22 @@ export function buildTree(files: FileEntry[]): FileTreeNode[] {
     leaves.sort((a, b) => a.name.localeCompare(b.name));
 
     for (const dir of dirs) {
-      result.push({
+      const converted = convert(dir.children!, depth + 1);
+      nodes.push({
         id: dir.id,
         name: dir.name,
         fullPath: dir.fullPath,
         depth,
         isDir: true,
-        children: convert(dir.children!, depth + 1),
+        children: converted.nodes,
+        descendantFiles: converted.allFiles,
       });
+      allFiles.push(...converted.allFiles);
     }
 
     for (const leaf of leaves) {
       const file = leaf.file!;
-      result.push({
+      nodes.push({
         id: file.id,
         name: file.name,
         fullPath: file.pathDisplay,
@@ -159,11 +164,12 @@ export function buildTree(files: FileEntry[]): FileTreeNode[] {
         isDir: false,
         file,
       });
+      allFiles.push(file);
     }
-    return result;
+    return { nodes, allFiles };
   }
 
-  return convert(root, 0);
+  return convert(root, 0).nodes;
 }
 
 export function flattenTree(nodes: FileTreeNode[], collapsed: Set<string>): FileTreeNode[] {
@@ -181,6 +187,7 @@ export function flattenTree(nodes: FileTreeNode[], collapsed: Set<string>): File
 }
 
 export function getDescendantFiles(node: FileTreeNode): FileEntry[] {
+  if (node.descendantFiles) return node.descendantFiles;
   const result: FileEntry[] = [];
   function traverse(n: FileTreeNode) {
     if (!n.isDir && n.file) {
@@ -807,7 +814,7 @@ function VirtualHistoryFiles({
   );
 }
 
-export function FilesPanel() {
+export const FilesPanel = memo(function FilesPanel() {
   const session = useAppStore((state) => state.session);
   const context = useAppStore((state) => state.context);
   const snapshot = useAppStore((state) => state.snapshot);
@@ -1327,4 +1334,4 @@ export function FilesPanel() {
       )}
     </section>
   );
-}
+});

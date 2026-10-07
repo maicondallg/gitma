@@ -159,14 +159,15 @@ export default function App() {
       }
 
       if (event.key === 'Escape') {
-        if (expandedDiff) {
+        const store = useAppStore.getState();
+        if (store.expandedDiff) {
           event.preventDefault();
-          setExpandedDiff(false);
+          store.setExpandedDiff(false);
           return;
         }
-        if (isConsoleOpen) {
+        if (store.isConsoleOpen) {
           event.preventDefault();
-          setConsoleOpen(false);
+          store.setConsoleOpen(false);
           return;
         }
       }
@@ -179,25 +180,26 @@ export default function App() {
         return;
       }
 
+      const store = useAppStore.getState();
       if (event.key.toLowerCase() === 'o') {
         event.preventDefault();
-        void openRepository();
+        void store.openRepository();
       } else if (event.key.toLowerCase() === 'n' || event.key.toLowerCase() === 't') {
         event.preventDefault();
-        void openRepositories();
+        void store.openRepositories();
       } else if (event.key.toLowerCase() === 'r') {
         event.preventDefault();
-        void refresh('manual');
+        void store.refresh('manual');
       } else if (event.key.toLowerCase() === 'b') {
         event.preventDefault();
-        if (session) setShowNewBranchModal(true);
+        if (store.session) setShowNewBranchModal(true);
       } else if (event.key.toLowerCase() === 'w') {
         event.preventDefault();
-        if (activeTabId !== 'home') {
+        if (store.activeTabId !== 'home') {
           if (event.shiftKey) {
-            void closeOtherTabs(activeTabId);
+            void store.closeOtherTabs(store.activeTabId);
           } else {
-            void closeTab(activeTabId);
+            void store.closeTab(store.activeTabId);
           }
         }
       } else if (event.key === '/' || event.key === '?') {
@@ -205,30 +207,30 @@ export default function App() {
         setShowShortcutsModal((v) => !v);
       } else if (event.key === ',') {
         event.preventDefault();
-        toggleSettings();
+        store.toggleSettings();
       } else if (event.key >= '1' && event.key <= '8') {
         event.preventDefault();
         const tabIdx = parseInt(event.key, 10) - 1;
-        if (tabIdx < tabs.length) {
-          void switchTab(tabs[tabIdx].id);
+        if (tabIdx < store.tabs.length) {
+          void store.switchTab(store.tabs[tabIdx].id);
         }
       } else if (event.key === '9') {
         event.preventDefault();
-        if (tabs.length > 0) {
-          void switchTab(tabs[tabs.length - 1].id);
+        if (store.tabs.length > 0) {
+          void store.switchTab(store.tabs[store.tabs.length - 1].id);
         }
       } else if (event.key === 'Tab') {
         // Alterna entre abas com Ctrl+Tab e Ctrl+Shift+Tab
         event.preventDefault();
-        if (tabs.length === 0) return;
-        const allTabIds = ['home', ...tabs.map((t) => t.id)];
-        const currentIndex = allTabIds.indexOf(activeTabId);
+        if (store.tabs.length === 0) return;
+        const allTabIds = ['home', ...store.tabs.map((t) => t.id)];
+        const currentIndex = allTabIds.indexOf(store.activeTabId);
         if (event.shiftKey) {
           const prevIndex = (currentIndex - 1 + allTabIds.length) % allTabIds.length;
-          void switchTab(allTabIds[prevIndex]);
+          void store.switchTab(allTabIds[prevIndex]);
         } else {
           const nextIndex = (currentIndex + 1) % allTabIds.length;
-          void switchTab(allTabIds[nextIndex]);
+          void store.switchTab(allTabIds[nextIndex]);
         }
       }
     };
@@ -239,7 +241,7 @@ export default function App() {
       window.removeEventListener('focus', onFocus);
       window.removeEventListener('keydown', onKey);
     };
-  }, [activeTabId, closeOtherTabs, closeTab, openRepositories, openRepository, refresh, session, switchTab, tabs]);
+  }, []);
 
   return (
     <main className="app-shell">

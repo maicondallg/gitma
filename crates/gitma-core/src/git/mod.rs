@@ -68,6 +68,7 @@ impl GitRepository {
                 runner::read(&self.context.root, &["diff", "--numstat", "-M", "-z"])
             {
                 let numstat_map = status::parse_numstat_z(&unstaged_numstat);
+                let mut untracked_inspected = 0;
                 for f in &mut unstaged {
                     if let Some(stat) = numstat_map
                         .get(&f.path)
@@ -76,7 +77,8 @@ impl GitRepository {
                         f.insertions = stat.insertions;
                         f.deletions = stat.deletions;
                         f.is_binary = stat.is_binary;
-                    } else if f.status == FileStatus::Untracked {
+                    } else if f.status == FileStatus::Untracked && untracked_inspected < 20 {
+                        untracked_inspected += 1;
                         let full_path = self.context.root.join(&f.path);
                         if let Ok(metadata) = std::fs::metadata(&full_path) {
                             if metadata.is_file()

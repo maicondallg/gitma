@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import {
   AlertTriangle,
   ChevronDown,
@@ -65,7 +65,7 @@ function hiddenAreaCount(codeEditor: monaco.editor.ICodeEditor): number {
   return (codeEditor as MonacoEditorWithViewModel)._getViewModel?.()?.getHiddenAreas()?.length ?? 0;
 }
 
-export function DiffPanel() {
+export const DiffPanel = memo(function DiffPanel() {
   const { t } = useI18n();
   const host = useRef<HTMLDivElement>(null);
   const editor = useRef<monaco.editor.IStandaloneDiffEditor | null>(null);
@@ -932,4 +932,4 @@ export function DiffPanel() {
       </div>
     </section>
   );
-}
+});

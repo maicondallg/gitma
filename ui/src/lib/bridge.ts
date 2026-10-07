@@ -4,7 +4,7 @@ import type {
 } from './types';
 import { invoke as invokeNative, isTauri } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import { open } from '@tauri-apps/plugin-dialog';
+import { confirm, open } from '@tauri-apps/plugin-dialog';
 
 export interface BridgeAdapter {
   openRepository(path: string): Promise<Session>;
@@ -93,7 +93,6 @@ export function isFixtureMode() {
 export async function confirmDialog(message: string, title = 'Gitma'): Promise<boolean> {
   if (isTauri()) {
     try {
-      const { confirm } = await import('@tauri-apps/plugin-dialog');
       return await confirm(message, { title, kind: 'warning' });
     } catch {
       // Fallback to window.confirm if plugin fails

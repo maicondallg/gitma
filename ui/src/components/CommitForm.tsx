@@ -2,6 +2,7 @@ import { FormEvent, KeyboardEvent, useState } from 'react'
 import { History } from 'lucide-react'
 import { useAppStore } from '../store/app'
 import { useI18n } from '../i18n'
+import { getBridge } from '../lib/bridge'
 import './Lists.css'
 
 export function CommitForm() {
@@ -27,10 +28,21 @@ export function CommitForm() {
     setIsAmend(nextAmend)
     if (nextAmend) {
       setDraftMessage(value)
-      // Se a mensagem atual estiver vazia, preenche com a mensagem do último commit
+      // Se a mensagem atual estiver vazia, preenche com a mensagem completa do último commit (subject + body)
       const lastCommit = history?.rows?.find((r) => r.row === 0 || r.commit)?.commit
-      if (lastCommit?.subject && !value.trim()) {
-        setMessage(lastCommit.subject)
+      if (lastCommit?.oid && !value.trim()) {
+        if (lastCommit.subject) {
+          setMessage(lastCommit.subject)
+        }
+        const session = useAppStore.getState().session
+        if (session) {
+          void getBridge().getCommitFiles(session.sessionId, Date.now(), lastCommit.oid).then((res) => {
+            if (res.details?.body?.trim()) {
+              const fullMsg = `${res.details.subject}\n\n${res.details.body.trim()}`
+              setMessage(fullMsg)
+            }
+          }).catch(() => {})
+        }
       }
     } else {
       if (draftMessage !== undefined) {

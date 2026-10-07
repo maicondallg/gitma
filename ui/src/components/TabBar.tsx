@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { memo, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import {
   ArrowDown,
@@ -75,7 +75,7 @@ function saveCollapsedColors(colors: Set<string>): void {
   }
 }
 
-export function TabBar() {
+export const TabBar = memo(function TabBar() {
   const tabs = useAppStore((s) => s.tabs);
   const activeTabId = useAppStore((s) => s.activeTabId);
   const snapshot = useAppStore((s) => s.snapshot);
@@ -1010,7 +1010,7 @@ export function TabBar() {
       )}
     </nav>
   );
-}
+});
 
 interface TabContextMenuProps {
   x: number;

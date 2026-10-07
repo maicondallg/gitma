@@ -1477,6 +1477,10 @@ fn register_files(
     files: Vec<ChangedFile>,
 ) -> Vec<FileEntry> {
     let mut registry = state.files.lock().expect("file registry lock poisoned");
+    if registry.entries.len() > 2000 {
+        registry.entries.retain(|_, entry| entry.context == NativeContext::Local);
+        registry.ids.retain(|key, _| key.context == NativeContext::Local);
+    }
     files
         .into_iter()
         .map(|file| {

@@ -547,8 +547,9 @@ export const useAppStore = create<AppState>((set, get) => {
         if (event.sessionId === state.session?.sessionId) {
           void state.refresh('watcher', event);
         } else {
-          const bgTab = state.tabs.find((t) => t.session.sessionId === event.sessionId);
-          if (bgTab) bgTab.snapshot = null;
+          set((s) => ({
+            tabs: s.tabs.map((t) => (t.session.sessionId === event.sessionId ? { ...t, snapshot: null } : t)),
+          }));
         }
       });
     }

@@ -1,4 +1,5 @@
-import { memo, useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type { VirtualItem } from '@tanstack/react-virtual';
 import { VirtualHistoryList, type HistoryListHandle } from './VirtualHistoryList';
 import { Archive, GitBranch, Search, Tag, User, X } from 'lucide-react';
 import { useAppStore } from '../store/app';
@@ -561,7 +562,7 @@ export const GraphPanel = memo(function GraphPanel() {
 
   const [copiedOid, setCopiedOid] = useState<string | null>(null);
 
-  const handleCopyHash = async (oid: string) => {
+  const handleCopyHash = useCallback(async (oid: string) => {
     try {
       await navigator.clipboard.writeText(oid);
       setCopiedOid(oid);
@@ -576,7 +577,7 @@ export const GraphPanel = memo(function GraphPanel() {
       setCopiedOid(oid);
       setTimeout(() => setCopiedOid((cur) => (cur === oid ? null : cur)), 1500);
     }
-  };
+  }, []);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -692,6 +693,356 @@ export const GraphPanel = memo(function GraphPanel() {
   const stagedCount = snapshot?.staged.length ?? 0;
   const unstagedCount = snapshot?.unstaged.length ?? 0;
   const totalLocalChanges = stagedCount + unstagedCount;
+
+  const renderHistoryRow = useCallback(
+    (item: VirtualItem) => {
+      // Row 0: Uncommitted changes
+      if (item.index === 0) {
+        const isLocalActive = context.kind === 'local';
+        return (
+          <button
+            type="button"
+            role="listitem"
+            aria-current={isLocalActive ? 'true' : undefined}
+            key="uncommitted-changes"
+            className={`lists-graph-row lists-uncommitted-row ${isLocalActive ? 'lists-row-selected' : ''}`}
+            style={{ transform: `translateY(${item.start}px)`, height: `${ROW_HEIGHT}px` }}
+            onClick={(e) => {
+              setActivePane('history');
+              void selectLocal();
+              (e.currentTarget as HTMLElement).blur();
+            }}
+            title={t('history.uncommittedTitle')}
+          >
+            <div className="lists-col-graph" style={{ width: `${effectiveGraphWidth}px` }}>
+              <UncommittedLane
+                targetLane={rows[0]?.lane ?? 0}
+                laneCount={history?.laneCount ?? 1}
+                width={effectiveGraphWidth}
+              />
+            </div>
+            <div className="lists-col-divider" />
+            <div className="lists-col-msg">
+              <div
+                className="lists-msg-container"
+                title={`${t('history.uncommittedTitle')} ${
+                  totalLocalChanges === 0
+                    ? t('history.clean')
+                    : `(${totalLocalChanges} ${totalLocalChanges === 1 ? t('history.modified') : t('history.modifiedPlural')})`
+                }`}
+              >
+                <span className="lists-uncommitted-title">{t('history.uncommittedTitle')}</span>
+                <span className="lists-uncommitted-sub">
+                  {totalLocalChanges === 0
+                    ? t('history.clean')
+                    : `(${totalLocalChanges} ${totalLocalChanges === 1 ? t('history.modified') : t('history.modifiedPlural')})`}
+                </span>
+              </div>
+            </div>
+            <div className="lists-col-divider" />
+            <div className="lists-col-hash">
+              <span className="lists-meta-dash">—</span>
+            </div>
+            <div className="lists-col-divider" />
+            <div className="lists-col-author" style={{ width: `${authorWidth}px` }} title={t('history.uncommittedWorkingTree')}>
+              <span className="lists-meta-dash">{t('history.uncommittedWorkingTree')}</span>
+            </div>
+            <div className="lists-col-divider" />
+            <div className="lists-col-date" style={{ width: `${dateWidth}px` }}>
+              <span className="lists-meta-dash">—</span>
+            </div>
+          </button>
+        );
+      }
+
+      // Historical commits
+      const rowIndex = item.index - 1;
+      const row = filteredRows[rowIndex];
+      if (!row) return null;
+      const geom = geometryList[rowIndex] ?? { upperLanes: [], passingLanes: [] };
+      const commit = row.commit;
+      const parsedRefs = parseRefs(commit.refs, snapshot?.branch ?? null);
+      const isSelected =
+        (context.kind === 'commit' && context.oid === commit.oid) ||
+        (context.kind === 'compare' && (context.baseOid === commit.oid || context.targetOid === commit.oid)) ||
+        compareBaseOid === commit.oid;
+      const visibleRefs = parsedRefs.slice(0, 2);
+      const overflowRefs = parsedRefs.slice(2);
+      const laneColor = colourFor(row.lane);
+      const isLight =
+        typeof document !== 'undefined' &&
+        document.documentElement.getAttribute('data-theme-type') === 'light';
+
+      return (
+        <button
+          type="button"
+          role="listitem"
+          aria-current={isSelected ? 'true' : undefined}
+          key={`${commit.oid}-${item.index}`}
+          className={`lists-graph-row ${isSelected ? 'lists-row-selected' : ''}`}
+          style={{ transform: `translateY(${item.start}px)`, height: `${ROW_HEIGHT}px` }}
+          onClick={(e) => {
+            setActivePane('history');
+            if (compareBaseOid && compareBaseOid !== commit.oid) {
+              void compareCommits(compareBaseOid, commit.oid);
+              setCompareBaseOid(null);
+            } else if (e.ctrlKey || e.metaKey) {
+              if (context.kind === 'commit' && context.oid !== commit.oid) {
+                void compareCommits(context.oid, commit.oid);
+              } else {
+                void selectCommit(commit.oid);
+              }
+            } else {
+              setCompareBaseOid(null);
+              void selectCommit(commit.oid);
+            }
+            (e.currentTarget as HTMLElement).blur();
+          }}
+          onContextMenu={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            setRefPopover(null);
+            const stashRef = parsedRefs.find((r) => r.isStash);
+            const tagRef = parsedRefs.find((r) => r.isTag);
+            const regularRef = parsedRefs.find((r) => !r.isTag && !r.isStash);
+            const targetRef = stashRef ?? regularRef;
+            setContextMenu({
+              x: e.clientX,
+              y: e.clientY,
+              branchName: targetRef?.name ?? null,
+              tagName: tagRef?.name ?? null,
+              isCurrentBranch: parsedRefs.some((r) => r.isHead),
+              isRemoteBranch: targetRef?.isRemote ?? false,
+              isStash: !!stashRef,
+              commitOid: commit.oid,
+              commitSubject: commit.subject,
+            });
+          }}
+          title={`${commit.subject} — ${commit.oid}`}
+        >
+          {/* Coluna 1: Grafo */}
+          <div className="lists-col-graph" style={{ width: `${effectiveGraphWidth}px` }}>
+            <GraphLanes
+              row={row}
+              geom={geom}
+              laneCount={history?.laneCount ?? 1}
+              width={effectiveGraphWidth}
+            />
+          </div>
+
+          <div className="lists-col-divider" />
+
+          {/* Coluna 2: Mensagem (Refs + Subject) */}
+          <div className="lists-col-msg">
+            <div className="lists-msg-container">
+              {commit.refs.length > 0 && (
+                <span className="lists-refs" title={commit.refs.join(', ')}>
+                  {visibleRefs.map((ref) => {
+                    const chipStyle: React.CSSProperties | undefined = ref.isTag
+                      ? undefined
+                      : ref.isStash
+                      ? {
+                          background: isLight ? 'rgba(245, 158, 11, 0.12)' : 'rgba(245, 158, 11, 0.15)',
+                          borderColor: isLight ? '#d97706' : '#f59e0b',
+                          color: isLight ? '#b45309' : '#fcd34d',
+                        }
+                      : ref.isHead
+                      ? {
+                          background: laneColor,
+                          borderColor: laneColor,
+                          color: '#ffffff',
+                          boxShadow: `0 1px 4px ${laneColor}66`,
+                        }
+                      : ref.isRemote
+                      ? {
+                          background: isLight
+                            ? `color-mix(in srgb, ${laneColor} 10%, transparent)`
+                            : `color-mix(in srgb, ${laneColor} 8%, transparent)`,
+                          borderColor: isLight
+                            ? `color-mix(in srgb, ${laneColor} 60%, transparent)`
+                            : `color-mix(in srgb, ${laneColor} 50%, transparent)`,
+                          color: isLight
+                            ? `color-mix(in srgb, ${laneColor} 80%, black)`
+                            : `color-mix(in srgb, ${laneColor} 70%, white)`,
+                        }
+                      : {
+                          background: isLight
+                            ? `color-mix(in srgb, ${laneColor} 12%, transparent)`
+                            : `color-mix(in srgb, ${laneColor} 14%, transparent)`,
+                          borderColor: laneColor,
+                          color: isLight
+                            ? `color-mix(in srgb, ${laneColor} 85%, black)`
+                            : `color-mix(in srgb, ${laneColor} 85%, white)`,
+                        };
+
+                    const iconColor = ref.isTag
+                      ? isLight
+                        ? '#b45309'
+                        : '#fbbf24'
+                      : ref.isStash
+                      ? isLight
+                        ? '#b45309'
+                        : '#f59e0b'
+                      : ref.isHead
+                      ? '#ffffff'
+                      : ref.isRemote
+                      ? isLight
+                        ? `color-mix(in srgb, ${laneColor} 80%, black)`
+                        : `color-mix(in srgb, ${laneColor} 70%, white)`
+                      : laneColor;
+
+                    return (
+                      <span
+                        key={ref.raw}
+                        style={chipStyle}
+                        className={`lists-ref ${ref.isHead ? 'lists-ref-head' : ref.isRemote ? 'lists-ref-remote' : ref.isTag ? 'lists-ref-tag' : ref.isStash ? 'lists-ref-stash' : 'lists-ref-local'}`}
+                        title={ref.raw}
+                        onClick={(e) => {
+                          if (!ref.isStash) {
+                            e.stopPropagation();
+                            if (!ref.isHead) {
+                              void runOperation('switchBranch', [], ref.name);
+                            }
+                          }
+                        }}
+                        onContextMenu={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          setRefPopover(null);
+                          setContextMenu({
+                            x: e.clientX,
+                            y: e.clientY,
+                            branchName: ref.isTag || ref.isStash ? null : ref.name,
+                            tagName: ref.isTag ? ref.name : null,
+                            isCurrentBranch: ref.isHead,
+                            isRemoteBranch: ref.isRemote,
+                            isStash: ref.isStash,
+                            commitOid: commit.oid,
+                          });
+                        }}
+                      >
+                        {ref.isTag ? (
+                          <Tag size={10} color={iconColor} />
+                        ) : ref.isStash ? (
+                          <Archive size={10} color={iconColor} />
+                        ) : (
+                          <GitBranch size={10} color={iconColor} />
+                        )}
+                        <span className="lists-ref-name">{ref.name}</span>
+                        {ref.isHead && <span className="lists-ref-dot">•</span>}
+                      </span>
+                    );
+                  })}
+
+                  {overflowRefs.length > 0 && (
+                    <span
+                      role="button"
+                      tabIndex={0}
+                      className="lists-ref-overflow"
+                      title={`${overflowRefs.length} ${t('history.moreRefs')}`}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setContextMenu(null);
+                        const rect = e.currentTarget.getBoundingClientRect();
+                        setRefPopover({
+                          x: rect.left,
+                          y: rect.bottom + 4,
+                          refs: parsedRefs,
+                          laneColor,
+                          commitOid: commit.oid,
+                        });
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' || e.key === ' ') {
+                          e.stopPropagation();
+                          setContextMenu(null);
+                          const rect = e.currentTarget.getBoundingClientRect();
+                          setRefPopover({
+                            x: rect.left,
+                            y: rect.bottom + 4,
+                            refs: parsedRefs,
+                            laneColor,
+                            commitOid: commit.oid,
+                          });
+                        }
+                      }}
+                    >
+                      +{overflowRefs.length}
+                    </span>
+                  )}
+                  <span className="lists-ref-dash">-</span>
+                </span>
+              )}
+
+              <span className="lists-graph-subject" title={commit.subject}>
+                {commit.subject}
+              </span>
+            </div>
+          </div>
+
+          <div className="lists-col-divider" />
+
+          {/* Coluna 3: Hash */}
+          <div className="lists-col-hash">
+            <code
+              className={`lists-commit-hash ${copiedOid === commit.oid ? 'is-copied' : ''}`}
+              onClick={(e) => {
+                e.stopPropagation();
+                void handleCopyHash(commit.oid);
+              }}
+              title={t('files.clickToCopy')}
+              role="button"
+              tabIndex={0}
+            >
+              {copiedOid === commit.oid ? t('history.copied') : shortHash(commit.oid)}
+            </code>
+          </div>
+
+          <div className="lists-col-divider" />
+
+          {/* Coluna 4: Autor */}
+          <div className="lists-col-author" style={{ width: `${authorWidth}px` }} title={`${t('history.colAuthor')}: ${commit.author}`}>
+            <User size={11} className="lists-author-icon" />
+            <span className="lists-graph-author">{commit.author}</span>
+          </div>
+
+          <div className="lists-col-divider" />
+
+          {/* Coluna 5: Data */}
+          <div className="lists-col-date" style={{ width: `${dateWidth}px` }}>
+            <time
+              className="lists-graph-date"
+              dateTime={new Date(commit.timestamp * 1000).toISOString()}
+              title={new Date(commit.timestamp * 1000).toLocaleString('pt-BR')}
+            >
+              {formatDateOnly(commit.timestamp)}
+            </time>
+          </div>
+        </button>
+      );
+    },
+    [
+      context,
+      rows,
+      totalLocalChanges,
+      effectiveGraphWidth,
+      authorWidth,
+      dateWidth,
+      history?.laneCount,
+      filteredRows,
+      geometryList,
+      snapshot?.branch,
+      compareBaseOid,
+      copiedOid,
+      setActivePane,
+      selectLocal,
+      compareCommits,
+      selectCommit,
+      runOperation,
+      handleCopyHash,
+      t,
+    ]
+  );
 
   return (
     <section
@@ -872,333 +1223,7 @@ export const GraphPanel = memo(function GraphPanel() {
         hasMore={!!history?.hasMore && !searchFilter.trim()}
         loadMore={loadMore}
       >
-          {(item) => {
-            // Row 0: Uncommitted changes
-            if (item.index === 0) {
-              const isLocalActive = context.kind === 'local';
-              return (
-                <button
-                  type="button"
-                  role="listitem"
-                  aria-current={isLocalActive ? 'true' : undefined}
-                  key="uncommitted-changes"
-                  className={`lists-graph-row lists-uncommitted-row ${isLocalActive ? 'lists-row-selected' : ''}`}
-                  style={{ transform: `translateY(${item.start}px)`, height: `${ROW_HEIGHT}px` }}
-                  onClick={(e) => {
-                    setActivePane('history');
-                    void selectLocal();
-                    (e.currentTarget as HTMLElement).blur();
-                  }}
-                  title={t('history.uncommittedTitle')}
-                >
-                  <div className="lists-col-graph" style={{ width: `${effectiveGraphWidth}px` }}>
-                    <UncommittedLane
-                      targetLane={rows[0]?.lane ?? 0}
-                      laneCount={history?.laneCount ?? 1}
-                      width={effectiveGraphWidth}
-                    />
-                  </div>
-                  <div className="lists-col-divider" />
-                  <div className="lists-col-msg">
-                    <div
-                      className="lists-msg-container"
-                      title={`${t('history.uncommittedTitle')} ${
-                        totalLocalChanges === 0
-                          ? t('history.clean')
-                          : `(${totalLocalChanges} ${totalLocalChanges === 1 ? t('history.modified') : t('history.modifiedPlural')})`
-                      }`}
-                    >
-                      <span className="lists-uncommitted-title">{t('history.uncommittedTitle')}</span>
-                      <span className="lists-uncommitted-sub">
-                        {totalLocalChanges === 0
-                          ? t('history.clean')
-                          : `(${totalLocalChanges} ${totalLocalChanges === 1 ? t('history.modified') : t('history.modifiedPlural')})`}
-                      </span>
-                    </div>
-                  </div>
-                  <div className="lists-col-divider" />
-                  <div className="lists-col-hash">
-                    <span className="lists-meta-dash">—</span>
-                  </div>
-                  <div className="lists-col-divider" />
-                  <div className="lists-col-author" style={{ width: `${authorWidth}px` }} title={t('history.uncommittedWorkingTree')}>
-                    <span className="lists-meta-dash">{t('history.uncommittedWorkingTree')}</span>
-                  </div>
-                  <div className="lists-col-divider" />
-                  <div className="lists-col-date" style={{ width: `${dateWidth}px` }}>
-                    <span className="lists-meta-dash">—</span>
-                  </div>
-                </button>
-              );
-            }
-
-            // Historical commits
-            const rowIndex = item.index - 1;
-            const row = filteredRows[rowIndex];
-            if (!row) return null;
-            const geom = geometryList[rowIndex] ?? { upperLanes: [], passingLanes: [] };
-            const commit = row.commit;
-            const parsedRefs = parseRefs(commit.refs, snapshot?.branch ?? null);
-            const isSelected =
-              (context.kind === 'commit' && context.oid === commit.oid) ||
-              (context.kind === 'compare' && (context.baseOid === commit.oid || context.targetOid === commit.oid)) ||
-              compareBaseOid === commit.oid;
-            const visibleRefs = parsedRefs.slice(0, 2);
-            const overflowRefs = parsedRefs.slice(2);
-            const laneColor = colourFor(row.lane);
-
-            return (
-              <button
-                type="button"
-                role="listitem"
-                aria-current={isSelected ? 'true' : undefined}
-                key={`${commit.oid}-${item.index}`}
-                className={`lists-graph-row ${isSelected ? 'lists-row-selected' : ''}`}
-                style={{ transform: `translateY(${item.start}px)`, height: `${ROW_HEIGHT}px` }}
-                onClick={(e) => {
-                  setActivePane('history');
-                  if (compareBaseOid && compareBaseOid !== commit.oid) {
-                    void compareCommits(compareBaseOid, commit.oid);
-                    setCompareBaseOid(null);
-                  } else if (e.ctrlKey || e.metaKey) {
-                    if (context.kind === 'commit' && context.oid !== commit.oid) {
-                      void compareCommits(context.oid, commit.oid);
-                    } else {
-                      void selectCommit(commit.oid);
-                    }
-                  } else {
-                    setCompareBaseOid(null);
-                    void selectCommit(commit.oid);
-                  }
-                  (e.currentTarget as HTMLElement).blur();
-                }}
-                onContextMenu={(e) => {
-                  e.preventDefault();
-                  e.stopPropagation();
-                  setRefPopover(null);
-                  const stashRef = parsedRefs.find((r) => r.isStash);
-                  const tagRef = parsedRefs.find((r) => r.isTag);
-                  const regularRef = parsedRefs.find((r) => !r.isTag && !r.isStash);
-                  const targetRef = stashRef ?? regularRef;
-                  setContextMenu({
-                    x: e.clientX,
-                    y: e.clientY,
-                    branchName: targetRef?.name ?? null,
-                    tagName: tagRef?.name ?? null,
-                    isCurrentBranch: parsedRefs.some((r) => r.isHead),
-                    isRemoteBranch: targetRef?.isRemote ?? false,
-                    isStash: !!stashRef,
-                    commitOid: commit.oid,
-                    commitSubject: commit.subject,
-                  });
-                }}
-                title={`${commit.subject} — ${commit.oid}`}
-              >
-                {/* Coluna 1: Grafo */}
-                <div className="lists-col-graph" style={{ width: `${effectiveGraphWidth}px` }}>
-                  <GraphLanes
-                    row={row}
-                    geom={geom}
-                    laneCount={history?.laneCount ?? 1}
-                    width={effectiveGraphWidth}
-                  />
-                </div>
-
-                <div className="lists-col-divider" />
-
-                {/* Coluna 2: Mensagem (Refs + Subject) */}
-                <div className="lists-col-msg">
-                  <div className="lists-msg-container">
-                    {commit.refs.length > 0 && (
-                      <span className="lists-refs" title={commit.refs.join(', ')}>
-                        {visibleRefs.map((ref) => {
-                          const isLight =
-                            typeof document !== 'undefined' &&
-                            document.documentElement.getAttribute('data-theme-type') === 'light';
-
-                          const chipStyle: React.CSSProperties | undefined = ref.isTag
-                            ? undefined
-                            : ref.isStash
-                            ? {
-                                background: isLight ? 'rgba(245, 158, 11, 0.12)' : 'rgba(245, 158, 11, 0.15)',
-                                borderColor: isLight ? '#d97706' : '#f59e0b',
-                                color: isLight ? '#b45309' : '#fcd34d',
-                              }
-                            : ref.isHead
-                            ? {
-                                background: laneColor,
-                                borderColor: laneColor,
-                                color: '#ffffff',
-                                boxShadow: `0 1px 4px ${laneColor}66`,
-                              }
-                            : ref.isRemote
-                            ? {
-                                background: isLight
-                                  ? `color-mix(in srgb, ${laneColor} 10%, transparent)`
-                                  : `color-mix(in srgb, ${laneColor} 8%, transparent)`,
-                                borderColor: isLight
-                                  ? `color-mix(in srgb, ${laneColor} 60%, transparent)`
-                                  : `color-mix(in srgb, ${laneColor} 50%, transparent)`,
-                                color: isLight
-                                  ? `color-mix(in srgb, ${laneColor} 80%, black)`
-                                  : `color-mix(in srgb, ${laneColor} 70%, white)`,
-                              }
-                            : {
-                                background: isLight
-                                  ? `color-mix(in srgb, ${laneColor} 12%, transparent)`
-                                  : `color-mix(in srgb, ${laneColor} 14%, transparent)`,
-                                borderColor: laneColor,
-                                color: isLight
-                                  ? `color-mix(in srgb, ${laneColor} 85%, black)`
-                                  : `color-mix(in srgb, ${laneColor} 85%, white)`,
-                              };
-
-                          const iconColor = ref.isTag
-                            ? isLight
-                              ? '#b45309'
-                              : '#fbbf24'
-                            : ref.isStash
-                            ? isLight
-                              ? '#b45309'
-                              : '#f59e0b'
-                            : ref.isHead
-                            ? '#ffffff'
-                            : ref.isRemote
-                            ? isLight
-                              ? `color-mix(in srgb, ${laneColor} 80%, black)`
-                              : `color-mix(in srgb, ${laneColor} 70%, white)`
-                            : laneColor;
-
-                          return (
-                            <span
-                              key={ref.raw}
-                              style={chipStyle}
-                              className={`lists-ref ${ref.isHead ? 'lists-ref-head' : ref.isRemote ? 'lists-ref-remote' : ref.isTag ? 'lists-ref-tag' : ref.isStash ? 'lists-ref-stash' : 'lists-ref-local'}`}
-                              title={ref.raw}
-                              onClick={(e) => {
-                                if (!ref.isStash) {
-                                  e.stopPropagation();
-                                  if (!ref.isHead) {
-                                    void runOperation('switchBranch', [], ref.name);
-                                  }
-                                }
-                              }}
-                              onContextMenu={(e) => {
-                                e.preventDefault();
-                                e.stopPropagation();
-                                setRefPopover(null);
-                                setContextMenu({
-                                  x: e.clientX,
-                                  y: e.clientY,
-                                  branchName: ref.isTag || ref.isStash ? null : ref.name,
-                                  tagName: ref.isTag ? ref.name : null,
-                                  isCurrentBranch: ref.isHead,
-                                  isRemoteBranch: ref.isRemote,
-                                  isStash: ref.isStash,
-                                  commitOid: commit.oid,
-                                });
-                              }}
-                            >
-                              {ref.isTag ? (
-                                <Tag size={10} color={iconColor} />
-                              ) : ref.isStash ? (
-                                <Archive size={10} color={iconColor} />
-                              ) : (
-                                <GitBranch size={10} color={iconColor} />
-                              )}
-                              <span className="lists-ref-name">{ref.name}</span>
-                              {ref.isHead && <span className="lists-ref-dot">•</span>}
-                            </span>
-                          );
-                        })}
-
-                        {overflowRefs.length > 0 && (
-                          <span
-                            role="button"
-                            tabIndex={0}
-                            className="lists-ref-overflow"
-                            title={`${overflowRefs.length} ${t('history.moreRefs')}`}
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setContextMenu(null);
-                              const rect = e.currentTarget.getBoundingClientRect();
-                              setRefPopover({
-                                x: rect.left,
-                                y: rect.bottom + 4,
-                                refs: parsedRefs,
-                                laneColor,
-                                commitOid: commit.oid,
-                              });
-                            }}
-                            onKeyDown={(e) => {
-                              if (e.key === 'Enter' || e.key === ' ') {
-                                e.stopPropagation();
-                                setContextMenu(null);
-                                const rect = e.currentTarget.getBoundingClientRect();
-                                setRefPopover({
-                                  x: rect.left,
-                                  y: rect.bottom + 4,
-                                  refs: parsedRefs,
-                                  laneColor,
-                                  commitOid: commit.oid,
-                                });
-                              }
-                            }}
-                          >
-                            +{overflowRefs.length}
-                          </span>
-                        )}
-                        <span className="lists-ref-dash">-</span>
-                      </span>
-                    )}
-
-                    <span className="lists-graph-subject" title={commit.subject}>
-                      {commit.subject}
-                    </span>
-                  </div>
-                </div>
-
-                <div className="lists-col-divider" />
-
-                {/* Coluna 3: Hash */}
-                <div className="lists-col-hash">
-                  <code
-                    className={`lists-commit-hash ${copiedOid === commit.oid ? 'is-copied' : ''}`}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      void handleCopyHash(commit.oid);
-                    }}
-                    title={t('files.clickToCopy')}
-                    role="button"
-                    tabIndex={0}
-                  >
-                    {copiedOid === commit.oid ? t('history.copied') : shortHash(commit.oid)}
-                  </code>
-                </div>
-
-                <div className="lists-col-divider" />
-
-                {/* Coluna 4: Autor */}
-                <div className="lists-col-author" style={{ width: `${authorWidth}px` }} title={`${t('history.colAuthor')}: ${commit.author}`}>
-                  <User size={11} className="lists-author-icon" />
-                  <span className="lists-graph-author">{commit.author}</span>
-                </div>
-
-                <div className="lists-col-divider" />
-
-                {/* Coluna 5: Data */}
-                <div className="lists-col-date" style={{ width: `${dateWidth}px` }}>
-                  <time
-                    className="lists-graph-date"
-                    dateTime={new Date(commit.timestamp * 1000).toISOString()}
-                    title={new Date(commit.timestamp * 1000).toLocaleString('pt-BR')}
-                  >
-                    {formatDateOnly(commit.timestamp)}
-                  </time>
-                </div>
-              </button>
-            );
-          }}
+        {renderHistoryRow}
       </VirtualHistoryList>
 
       {refPopover && (
