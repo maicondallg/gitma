@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { getBridge } from '../lib/bridge';
-import type { AppError, CommandLogEntry, CommitDetails, CommitFiles, Context, DiffMode, DiffStat, FileEntry, FileViewMode, History, Operation, Preview, RecentRepo, RemoteEntry, RepoChanged, Session, Snapshot, TabItem } from '../lib/types';
+import type { AppError, CommandLogEntry, CommitDetails, CommitFiles, Context, DiffMode, DiffStat, FileEntry, FileViewMode, History, Operation, Preview, RecentRepo, RemoteEntry, RepoAuthState, RepoChanged, Session, Snapshot, TabItem } from '../lib/types';
 import { buildWebUrl } from '../lib/webUrl';
 
 type Notice = AppError | { message: string; category: 'success' };
@@ -25,6 +25,23 @@ export function saveTerminal(terminal: string): void {
   try {
     if (typeof window === 'undefined') return;
     localStorage.setItem(PREFERRED_TERMINAL_KEY, terminal);
+  } catch {}
+}
+
+const PREFERRED_EDITOR_KEY = 'Gitma:preferred-editor-v1';
+
+export function loadSavedEditor(): string {
+  try {
+    return (typeof window !== 'undefined' ? localStorage.getItem(PREFERRED_EDITOR_KEY) : null) || 'default';
+  } catch {
+    return 'default';
+  }
+}
+
+export function saveEditor(editor: string): void {
+  try {
+    if (typeof window === 'undefined') return;
+    localStorage.setItem(PREFERRED_EDITOR_KEY, editor);
   } catch {}
 }
 
@@ -158,6 +175,9 @@ export interface AppState {
   reflogOpen: boolean;
   remotesModalOpen: boolean;
   remotes?: RemoteEntry[];
+  authState?: RepoAuthState | null;
+  loadAuthState?(forceRefresh?: boolean): Promise<void>;
+  setRepoAccount?(accountId: string): Promise<void>;
   historyScope: 'all' | 'current';
   compareOids: [string, string] | null;
   blameOpen: boolean;
@@ -199,6 +219,8 @@ export interface AppState {
   preferredTerminal: string;
   setPreferredTerminal(terminal: string): void;
   openTerminal(customTerminal?: string): Promise<void>;
+  preferredEditor: string;
+  setPreferredEditor(editor: string): void;
   openHome(): void;
   removeRecentRepo(path: string): void;
   clearRecentRepos(): void;
@@ -219,6 +241,8 @@ export interface AppState {
   setDiffMode(mode: DiffMode): void;
   setCompactDiff(compact: boolean): void;
   setFileViewMode(mode: FileViewMode): void;
+  filesTab: 'changes' | 'explorer';
+  setFilesTab(tab: 'changes' | 'explorer'): void;
   dismissNotice(): void;
   isConsoleOpen: boolean;
   toggleConsole(): void;
@@ -323,8 +347,17 @@ function formatGitLogCommand(operation: Operation, ids: string[], messageToSend:
       return ids.length === 1 ? 'git checkout -- <file>' : `git checkout -- (${ids.length} files)`;
     case 'discardAll':
       return 'git checkout -- .';
-    case 'stashPush':
-      return messageToSend ? `git stash push -m "${messageToSend}"` : 'git stash';
+    case 'stashPush': {
+      try {
+        const parsed = JSON.parse(messageToSend);
+        const parts = ['git stash push'];
+        if (parsed.include_untracked) parts.push('-u');
+        if (parsed.message) parts.push(`-m "${parsed.message.replace(/"/g, '\\"')}"`);
+        return parts.join(' ');
+      } catch {
+        return messageToSend ? `git stash push -m "${messageToSend.replace(/"/g, '\\"')}"` : 'git stash';
+      }
+    }
     case 'stashPop':
       return 'git stash pop';
     case 'stashApply':
@@ -369,16 +402,35 @@ function notify(notice: Notice | null, set: (fn: (s: AppState) => Partial<AppSta
 }
 
 export const useAppStore = create<AppState>((set, get) => {
+  function syncActiveTab(current: AppState): TabItem[] {
+    if (current.activeTabId === 'home') return current.tabs;
+    return current.tabs.map((t) =>
+      t.id === current.activeTabId
+        ? {
+            ...t,
+            snapshot: current.snapshot,
+            history: current.history,
+            context: current.context,
+            commitFiles: current.commitFiles,
+            commitStats: current.commitStats,
+            commitDetails: current.commitDetails,
+            selectedFile: current.selectedFile,
+            preview: current.preview,
+            commitMessage: current.commitMessage,
+            remotes: current.remotes,
+            authState: current.authState,
+            filesTab: current.filesTab,
+          }
+        : t
+    );
+  }
 
   async function previewFile(file: FileEntry | null, requestId: number) {
     const token = ++selectionToken;
     const context = contextToken;
     const state = get();
     if (!file || !state.session) {
-      set((s) => ({
-        preview: null,
-        tabs: s.tabs.map((t) => (t.id === s.activeTabId ? { ...t, preview: null } : t)),
-      }));
+      set({ preview: null });
       return;
     }
     try {
@@ -395,10 +447,7 @@ export const useAppStore = create<AppState>((set, get) => {
           remember(localPreviewCache, key, preview, 16);
         }
         if (current.preview?.version !== preview.version) {
-          set((s) => ({
-            preview,
-            tabs: s.tabs.map((t) => (t.id === s.activeTabId ? { ...t, preview } : t)),
-          }));
+          set({ preview });
         }
       }
     } catch (error) {
@@ -413,23 +462,34 @@ export const useAppStore = create<AppState>((set, get) => {
     const before = get();
     if (!before.session) return;
     const requestId = ++nextRequestId;
+    const initialScopeToken = historyScopeToken;
+    const initialAllBranches = before.historyScope !== 'current';
+    const pendingInitialHistory = !before.history
+      ? getBridge().getHistory(before.session.sessionId, requestId, 0, initialAllBranches)
+      : null;
+    pendingInitialHistory?.catch(() => undefined);
     set({ refreshing: true });
     try {
       const snapshot = await getBridge().getSnapshot(before.session.sessionId, requestId);
       const current = get();
       if (current.session?.sessionId !== before.session.sessionId || snapshot.requestId !== requestId) return;
-      const historyChanged = current.snapshot?.historyKey !== snapshot.historyKey || current.snapshot?.branch !== snapshot.branch;
+      const branchChanged = current.snapshot?.branch !== snapshot.branch;
+      const historyChanged = current.snapshot?.historyKey !== snapshot.historyKey || branchChanged;
+      const isRepoSelected = current.selectedFile?.area === 'repo';
       const files = current.context.kind === 'local' ? localFiles(snapshot) : current.commitFiles;
-      const selectedFile = (current.selectedFile && files.find((f) => sameFile(f, current.selectedFile))) || null;
-      const selectionLost = current.context.kind === 'local' && !!current.selectedFile && !selectedFile;
+      const selectedFile = isRepoSelected
+        ? current.selectedFile
+        : (current.selectedFile && files.find((f) => sameFile(f, current.selectedFile))) || null;
+      const selectionLost = !isRepoSelected && current.context.kind === 'local' && !!current.selectedFile && !selectedFile;
       const snapshotChanged = current.snapshot?.revision !== snapshot.revision;
       if (snapshotChanged) invalidateLocalPreviews(before.session.sessionId);
       if (snapshotChanged || current.snapshot?.historyKey !== snapshot.historyKey || !sameFile(current.selectedFile, selectedFile)) {
         const update = selectionLost ? { snapshot, selectedFile, preview: null } : { snapshot, selectedFile };
-        set((s) => ({
-          ...update,
-          tabs: s.tabs.map((t) => (t.id === s.activeTabId ? { ...t, ...update } : t)),
-        }));
+        set((s) =>
+          branchChanged
+            ? { ...update, tabs: s.tabs.map((t) => (t.id === s.activeTabId ? { ...t, ...update } : t)) }
+            : update
+        );
       }
       const selectedPath = current.selectedFile?.pathDisplay;
       const changedSelectedPath = !!selectedPath && !!event?.paths.some((path) => path === selectedPath || selectedPath.startsWith(`${path}/`) || path.startsWith(`${selectedPath}/`));
@@ -438,13 +498,15 @@ export const useAppStore = create<AppState>((set, get) => {
       if (historyChanged || !current.history) {
         const scopeToken = historyScopeToken;
         const allBranches = get().historyScope !== 'current';
-        const history = await getBridge().getHistory(before.session.sessionId, requestId, 0, allBranches);
+        const history = pendingInitialHistory && scopeToken === initialScopeToken && allBranches === initialAllBranches
+          ? await pendingInitialHistory
+          : await getBridge().getHistory(before.session.sessionId, requestId, 0, allBranches);
         if (scopeToken === historyScopeToken && get().session?.sessionId === before.session.sessionId && history.requestId === requestId && get().snapshot?.historyKey === snapshot.historyKey) {
-          set((s) => ({
-            history,
-            tabs: s.tabs.map((t) => (t.id === s.activeTabId ? { ...t, history } : t)),
-          }));
+          set({ history });
         }
+      }
+      if ((reason === 'manual' || reason === 'mutation' || !get().authState) && getBridge().getAuthState) {
+        void get().loadAuthState?.(false);
       }
     } catch (error) {
       if (get().session?.sessionId === before.session.sessionId) set({ notice: asError(error) });
@@ -461,24 +523,7 @@ export const useAppStore = create<AppState>((set, get) => {
 
     const current = get();
     // Preserva o estado da aba anterior se houver
-    const currentTabs = current.activeTabId !== 'home'
-      ? current.tabs.map((t) =>
-          t.id === current.activeTabId
-            ? {
-                ...t,
-                snapshot: current.snapshot,
-                history: current.history,
-                context: current.context,
-                commitFiles: current.commitFiles,
-                commitStats: current.commitStats,
-                selectedFile: current.selectedFile,
-                preview: current.preview,
-                commitMessage: current.commitMessage,
-                remotes: current.remotes,
-              }
-            : t
-        )
-      : current.tabs;
+    const currentTabs = syncActiveTab(current);
 
     const savedColors = loadSavedTabColors();
     let tabColor = savedColors[session.root] ?? savedColors[selectedPath];
@@ -509,6 +554,8 @@ export const useAppStore = create<AppState>((set, get) => {
       commitMessage: '',
       color: tabColor,
       remotes: [],
+      authState: null,
+      filesTab: 'changes',
     };
 
     const newTabs = [...currentTabs, newTab];
@@ -534,6 +581,8 @@ export const useAppStore = create<AppState>((set, get) => {
         preview: null,
         commitMessage: '',
         remotes: [],
+        authState: null,
+        filesTab: 'changes',
         notice: session.warning ?? null,
       });
     }
@@ -563,6 +612,7 @@ export const useAppStore = create<AppState>((set, get) => {
     recentRepos: loadRecentRepos(),
     groupNames: loadSavedGroupNames(),
     preferredTerminal: loadSavedTerminal(),
+    preferredEditor: loadSavedEditor(),
 
     session: null,
     snapshot: null,
@@ -576,11 +626,55 @@ export const useAppStore = create<AppState>((set, get) => {
     diffMode: 'unified',
     compactDiff: true,
     fileViewMode: 'tree',
+    filesTab: 'changes',
+    setFilesTab(tab) {
+      set({ filesTab: tab });
+    },
     commitMessage: '',
     fileHistoryPath: null,
     reflogOpen: false,
     remotesModalOpen: false,
     remotes: [],
+    authState: null,
+    async loadAuthState(forceRefresh = false) {
+      const session = get().session;
+      const bridge = getBridge();
+      if (!session || !bridge.getAuthState) return;
+      try {
+        const authState = await bridge.getAuthState(session.sessionId, forceRefresh);
+        if (get().session?.sessionId === session.sessionId) {
+          set((s) => ({
+            authState,
+            tabs: s.tabs.map((t) => (t.session.sessionId === session.sessionId ? { ...t, authState } : t)),
+          }));
+        }
+      } catch {
+        // Ignore if auth state lookup fails
+      }
+    },
+    async setRepoAccount(accountId: string) {
+      const session = get().session;
+      const bridge = getBridge();
+      if (!session || !bridge.setRepoAccount) return;
+      try {
+        const authState = await bridge.setRepoAccount(session.sessionId, accountId);
+        if (get().session?.sessionId === session.sessionId) {
+          set((s) => ({
+            authState,
+            tabs: s.tabs.map((t) => (t.session.sessionId === session.sessionId ? { ...t, authState } : t)),
+          }));
+          const label =
+            accountId === 'auto'
+              ? `Auto (${authState.resolvedLabel || 'padrão'})`
+              : accountId === 'system'
+              ? 'Padrão do sistema'
+              : authState.resolvedLabel || accountId;
+          notify({ category: 'success', message: `Conta do repositório alterada para: ${label}` }, set);
+        }
+      } catch (error) {
+        notify(asError(error), set);
+      }
+    },
     historyScope: 'all',
     compareOids: null,
     blameOpen: false,
@@ -658,18 +752,19 @@ export const useAppStore = create<AppState>((set, get) => {
           const res = await bridge.getRemotes(state.session.sessionId, Date.now());
           if (res?.remotes && res.remotes.length > 0) {
             remotes = res.remotes;
-            set((s) => ({
-              remotes: res.remotes,
-              tabs: s.tabs.map((t) => (t.id === s.activeTabId ? { ...t, remotes: res.remotes } : t)),
-            }));
+            set({ remotes: res.remotes });
           }
         } catch {}
       }
 
       // Fallback para remotes salvos na aba ativa caso bridge falhe
       if (remotes.length === 0) {
-        const currentTab = state.tabs.find((t) => t.id === state.activeTabId);
-        remotes = currentTab?.remotes ?? [];
+        if (state.remotes && state.remotes.length > 0) {
+          remotes = state.remotes;
+        } else {
+          const currentTab = state.tabs.find((t) => t.id === state.activeTabId);
+          remotes = currentTab?.remotes ?? [];
+        }
       }
 
       if (remotes.length === 0) {
@@ -920,6 +1015,7 @@ export const useAppStore = create<AppState>((set, get) => {
             preview: null,
             commitMessage: '',
             remotes: [],
+            authState: null,
           });
           saveOpenTabs([], 'home');
         } else {
@@ -939,6 +1035,7 @@ export const useAppStore = create<AppState>((set, get) => {
             preview: nextTab.preview,
             commitMessage: nextTab.commitMessage,
             remotes: nextTab.remotes ?? [],
+            authState: nextTab.authState ?? null,
           });
           saveOpenTabs(remainingTabs.map((t) => t.path), nextTab.id);
           if (!nextTab.snapshot) {
@@ -1036,6 +1133,11 @@ export const useAppStore = create<AppState>((set, get) => {
       await state.runOperation('openTerminal', [], termToSend);
     },
 
+    setPreferredEditor(editor) {
+      set({ preferredEditor: editor });
+      saveEditor(editor);
+    },
+
     async closeOtherTabs(tabId) {
       const current = get();
       const tabsToClose = current.tabs.filter((t) => t.id !== tabId);
@@ -1074,25 +1176,7 @@ export const useAppStore = create<AppState>((set, get) => {
       if (current.activeTabId === tabId) return;
 
       // Salva estado da aba atual em tabs
-      const updatedTabs = current.activeTabId !== 'home'
-        ? current.tabs.map((t) =>
-            t.id === current.activeTabId
-              ? {
-                  ...t,
-                  snapshot: current.snapshot,
-                  history: current.history,
-                  context: current.context,
-                  commitFiles: current.commitFiles,
-                  commitStats: current.commitStats,
-                  commitDetails: current.commitDetails,
-                  selectedFile: current.selectedFile,
-                  preview: current.preview,
-                  commitMessage: current.commitMessage,
-                  remotes: current.remotes,
-                }
-              : t
-          )
-        : current.tabs;
+      const updatedTabs = syncActiveTab(current);
 
       if (tabId === 'home') {
         set({
@@ -1109,6 +1193,8 @@ export const useAppStore = create<AppState>((set, get) => {
           preview: null,
           commitMessage: '',
           remotes: [],
+          authState: null,
+          filesTab: 'changes',
         });
         saveOpenTabs(updatedTabs.map((t) => t.path), 'home');
         return;
@@ -1137,6 +1223,8 @@ export const useAppStore = create<AppState>((set, get) => {
         preview: targetTab.preview,
         commitMessage: targetTab.commitMessage,
         remotes: targetTab.remotes ?? [],
+        authState: targetTab.authState ?? null,
+        filesTab: targetTab.filesTab ?? 'changes',
         notice: null,
       });
 
@@ -1199,15 +1287,16 @@ export const useAppStore = create<AppState>((set, get) => {
       const current = get();
       const selected = current.selectedFile;
       const local = current.snapshot ? localFiles(current.snapshot) : [];
-      const selectedFile = selected ? local.find((f) => sameFile(f, selected)) ?? null : null;
-      set((s) => ({
+      const selectedFile = selected?.area === 'repo'
+        ? selected
+        : (selected ? local.find((f) => sameFile(f, selected)) ?? null : null);
+      set({
         context: { kind: 'local' },
         commitFiles: [],
         commitStats: null,
         commitDetails: null,
         selectedFile,
-        tabs: s.tabs.map((t) => (t.id === s.activeTabId ? { ...t, context: { kind: 'local' }, commitFiles: [], commitStats: null, commitDetails: null, selectedFile } : t)),
-      }));
+      });
       const file = get().selectedFile;
       if (file) await previewFile(file, ++nextRequestId); else set({ preview: null });
     },
@@ -1218,15 +1307,14 @@ export const useAppStore = create<AppState>((set, get) => {
       const cached = commitFilesCache.get(key);
       if (current.context.kind === 'commit' && current.context.oid === oid && cached) return;
       selectionToken++; const token = ++contextToken;
-      set((s) => ({
+      set({
         context: { kind: 'commit', oid },
         commitFiles: cached?.files ?? [],
         commitStats: cached?.stats ?? null,
         commitDetails: cached?.details ?? null,
         selectedFile: null,
         preview: null,
-        tabs: s.tabs.map((t) => (t.id === s.activeTabId ? { ...t, context: { kind: 'commit', oid }, commitFiles: cached?.files ?? [], commitStats: cached?.stats ?? null, commitDetails: cached?.details ?? null, selectedFile: null, preview: null } : t)),
-      }));
+      });
       if (cached) return;
       const requestId = ++nextRequestId;
       try {
@@ -1234,12 +1322,11 @@ export const useAppStore = create<AppState>((set, get) => {
         const current = get();
         if (token === contextToken && current.session?.sessionId === session.sessionId && current.context.kind === 'commit' && current.context.oid === oid && result.requestId === requestId) {
           remember(commitFilesCache, key, result, 64);
-          set((s) => ({
+          set({
             commitFiles: result.files,
             commitStats: result.stats ?? null,
             commitDetails: result.details ?? null,
-            tabs: s.tabs.map((t) => (t.id === s.activeTabId ? { ...t, commitFiles: result.files, commitStats: result.stats ?? null, commitDetails: result.details ?? null } : t)),
-          }));
+          });
         }
       } catch (error) { if (token === contextToken && get().session?.sessionId === session.sessionId) set({ notice: asError(error) }); }
     },
@@ -1249,7 +1336,7 @@ export const useAppStore = create<AppState>((set, get) => {
       if (!bridge.compareCommits) return;
       const requestId = ++nextRequestId;
       selectionToken++; const token = ++contextToken;
-      set((s) => ({
+      set({
         context: { kind: 'compare', baseOid, targetOid },
         compareOids: [baseOid, targetOid],
         commitFiles: [],
@@ -1257,20 +1344,18 @@ export const useAppStore = create<AppState>((set, get) => {
         commitDetails: null,
         selectedFile: null,
         preview: null,
-        tabs: s.tabs.map((t) => (t.id === s.activeTabId ? { ...t, context: { kind: 'compare', baseOid, targetOid }, commitFiles: [], commitStats: null, commitDetails: null, selectedFile: null, preview: null } : t)),
-      }));
+      });
       try {
         const result: CommitFiles = await bridge.compareCommits(session.sessionId, requestId, baseOid, targetOid);
         const current = get();
         if (token === contextToken && current.session?.sessionId === session.sessionId && current.context.kind === 'compare' && current.context.baseOid === baseOid && current.context.targetOid === targetOid && result.requestId === requestId) {
           const firstFile = result.files[0] ?? null;
-          set((s) => ({
+          set({
             commitFiles: result.files,
             commitStats: result.stats ?? null,
             commitDetails: null,
             selectedFile: firstFile,
-            tabs: s.tabs.map((t) => (t.id === s.activeTabId ? { ...t, commitFiles: result.files, commitStats: result.stats ?? null, commitDetails: null, selectedFile: firstFile } : t)),
-          }));
+          });
           if (firstFile) {
             void previewFile(firstFile, ++nextRequestId);
           }
@@ -1296,11 +1381,10 @@ export const useAppStore = create<AppState>((set, get) => {
             : null
         : null;
       selectionToken++;
-      set((s) => ({
+      set({
         selectedFile: file,
         preview: options?.deferPreview ? null : cachedPreview,
-        tabs: s.tabs.map((t) => (t.id === s.activeTabId ? { ...t, selectedFile: file, preview: options?.deferPreview ? null : cachedPreview } : t)),
-      }));
+      });
       if (file && !options?.deferPreview && (current.context.kind === 'local' || !cachedPreview)) await previewFile(file, ++nextRequestId);
     },
     prefetchFile(file) {
@@ -1338,10 +1422,7 @@ export const useAppStore = create<AppState>((set, get) => {
         const current = get();
         if (token === historyScopeToken && current.session?.sessionId === state.session.sessionId && current.history === state.history && more.requestId === requestId && current.history?.historyKey === more.historyKey && current.snapshot?.historyKey === more.historyKey && current.history.page + 1 === more.page) {
           const updatedHistory = { ...more, rows: [...current.history.rows, ...more.rows] };
-          set((s) => ({
-            history: updatedHistory,
-            tabs: s.tabs.map((t) => (t.id === s.activeTabId ? { ...t, history: updatedHistory } : t)),
-          }));
+          set({ history: updatedHistory });
         }
       } catch (error) { if (token === historyScopeToken && get().session?.sessionId === state.session.sessionId) set({ notice: asError(error) }); }
       finally { if (loadingMore?.sessionId === state.session.sessionId && loadingMore.page === requestedPage && loadingMore.token === token) loadingMore = null; }
@@ -1371,12 +1452,16 @@ export const useAppStore = create<AppState>((set, get) => {
         const messageToSend = customMessage !== undefined
           ? (operation === 'mergeBranch' && state.mergeStrategy !== 'default' && !customMessage.startsWith('{'))
             ? JSON.stringify({ branch: customMessage, strategy: state.mergeStrategy })
-            : customMessage
+            : (operation === 'openEditor' && !customMessage.startsWith('{'))
+              ? JSON.stringify({ path: customMessage, editor: state.preferredEditor })
+              : customMessage
           : (operation === 'commit' || operation === 'commitAmend')
             ? state.commitMessage
             : operation === 'pull'
               ? state.pullStrategy
-              : '';
+              : operation === 'openEditor'
+                ? JSON.stringify({ path: '', editor: state.preferredEditor })
+                : '';
         const requestId = ++nextRequestId;
         const logCmd = formatGitLogCommand(operation, ids, messageToSend);
         try {
@@ -1400,10 +1485,7 @@ export const useAppStore = create<AppState>((set, get) => {
               notify({ category: 'success', message: result.message }, set);
             }
             if ((operation === 'commit' || operation === 'commitAmend') && get().commitMessage === state.commitMessage) {
-              set((s) => ({
-                commitMessage: '',
-                tabs: s.tabs.map((t) => (t.id === s.activeTabId ? { ...t, commitMessage: '' } : t)),
-              }));
+              set({ commitMessage: '' });
             }
             if (!NO_REFRESH_OPERATIONS.has(operation)) await get().refresh('mutation');
           }
@@ -1431,11 +1513,7 @@ export const useAppStore = create<AppState>((set, get) => {
       writeChain = writeChain.then(execute, execute);
       await writeChain;
     },
-    setCommitMessage: (commitMessage) =>
-      set((s) => ({
-        commitMessage,
-        tabs: s.tabs.map((t) => (t.id === s.activeTabId ? { ...t, commitMessage } : t)),
-      })),
+    setCommitMessage: (commitMessage) => set({ commitMessage }),
     setDiffMode: (diffMode) => set({ diffMode }),
     setCompactDiff: (compactDiff) => set({ compactDiff }),
     setFileViewMode: (fileViewMode) => set({ fileViewMode }),

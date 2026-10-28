@@ -215,6 +215,37 @@ async fn get_remotes(
     run(move || state.get_remotes(&session_id, request_id)).await
 }
 
+#[tauri::command]
+async fn get_repo_files(
+    state: State<'_, BackendState>,
+    session_id: String,
+    request_id: u64,
+    commit_oid: Option<String>,
+) -> RpcResult<RepoTreeResult> {
+    let state = state.inner().clone();
+    run(move || state.repo_files(&session_id, request_id, commit_oid.as_deref())).await
+}
+
+#[tauri::command]
+async fn get_auth_state(
+    state: State<'_, BackendState>,
+    session_id: String,
+    force_refresh: Option<bool>,
+) -> RpcResult<RepoAuthState> {
+    let state = state.inner().clone();
+    run(move || state.get_auth_state(&session_id, force_refresh.unwrap_or(false))).await
+}
+
+#[tauri::command]
+async fn set_repo_account(
+    state: State<'_, BackendState>,
+    session_id: String,
+    account_id: String,
+) -> RpcResult<RepoAuthState> {
+    let state = state.inner().clone();
+    run(move || state.set_repo_account(&session_id, &account_id)).await
+}
+
 fn main() {
     tauri::Builder::default()
         .manage(Arc::new(Backend::default()))
@@ -240,6 +271,9 @@ fn main() {
             get_reflog,
             compare_commits,
             get_remotes,
+            get_repo_files,
+            get_auth_state,
+            set_repo_account,
             startup_options
         ])
         .run(tauri::generate_context!())

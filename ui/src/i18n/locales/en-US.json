@@ -53,6 +53,8 @@
   },
   "toolbar": {
     "remoteSync": "Remote sync",
+    "fileExplorer": "Explorer",
+    "fileExplorerTitle": "File Explorer (Ctrl+Shift+E)",
     "fetch": "Fetch",
     "fetchTitle": "Fetch remote references",
     "pull": "Pull",
@@ -168,6 +170,19 @@
   "files": {
     "localChanges": "Local changes",
     "commitFiles": "Commit files",
+    "explorer": "Explorer",
+    "explorerTitle": "Repository File Explorer",
+    "searchPlaceholder": "Search file by name or path...",
+    "noFiles": "No files found",
+    "scopeWorktree": "Worktree (HEAD)",
+    "scopeCommit": "Commit",
+    "expandAll": "Expand all",
+    "collapseAll": "Collapse all",
+    "openInEditor": "Open in editor",
+    "openEditor": "Open in editor",
+    "viewHistory": "View history",
+    "repoFilesCount": "{{count}} files",
+    "filteredFilesCount": "{{filtered}} of {{total}} files",
     "flatList": "Flat list",
     "treeList": "Folder tree",
     "staged": "Staged changes",
@@ -351,6 +366,14 @@
     "errorRequired": "Branch name is required.",
     "errorInvalid": "Branch name contains invalid characters."
   },
+  "stashModal": {
+    "title": "Save to Stash",
+    "messageLabel": "Message for stash (optional)",
+    "messagePlaceholder": "e.g. partial login changes...",
+    "includeUntrackedLabel": "Include untracked files (-u)",
+    "submit": "Save to Stash",
+    "cancel": "Cancel"
+  },
   "createTag": {
     "title": "Create Tag",
     "description": "Creating tag on commit {{oid}}",
@@ -528,12 +551,24 @@
     "confirmCommit": "Confirm commit",
     "amendLastCommit": "Amend last commit",
     "viewShortcuts": "View keyboard shortcuts",
+    "toggleFileExplorer": "Toggle File Explorer",
     "closeModals": "Close modals / menus",
     "middleClick": "Middle click",
     "rightClick": "Right click",
     "doubleClick": "Double click",
     "space": "Space",
-    "markAmend": "Check Amend"
+    "markAmend": "Check Amend",
+    "diffNavigation": "Document / Diff Navigation (Tig style)",
+    "scrollDiffLines": "Scroll document (diff) down / up",
+    "scrollDiffHalfPage": "Scroll half-page down / up",
+    "scrollDiffTopBottom": "Jump to top / bottom of document",
+    "navigateHunks": "Next hunk / previous hunk",
+    "stageUnstageHunk": "Stage / unstage current hunk",
+    "switchPanes": "Switch between History and Files",
+    "toggleBlameShortcut": "Toggle Git Blame",
+    "toggleCompactDiff": "Toggle Only changes mode",
+    "toggleDiffViewMode": "Toggle Unified / Split view",
+    "toggleExpandDiff": "Expand / restore fullscreen diff"
   },
   "refPopover": {
     "dialogLabel": "Commit references",
@@ -681,6 +716,20 @@
     "testTerminal": "Test Terminal",
     "testOpened": "Terminal opened successfully",
     "noSession": "Open a repository to test",
+    "save": "Save"
+  },
+  "editor": {
+    "title": "Code Editor",
+    "settingsTitle": "Code Editor",
+    "settingsDesc": "Choose which editor should open when clicking 'Open in editor'. 'Default' automatically detects VS Code or uses the system association.",
+    "defaultSystem": "Auto-detect / VS Code",
+    "custom": "Custom",
+    "customCommand": "Custom command or path:",
+    "customPrompt": "Enter the binary name or command (e.g. nvim, subl, emacs, webstorm)",
+    "customPlaceholder": "e.g. cursor, zed, subl, nvim...",
+    "editorChanged": "Editor set to {{name}}",
+    "testEditor": "Test Editor",
+    "testOpened": "Editor opened successfully",
     "save": "Save"
   },
   "console": {

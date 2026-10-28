@@ -1,34 +1,33 @@
-import { FormEvent, KeyboardEvent, useState } from 'react'
+import { FormEvent, KeyboardEvent, memo, useState } from 'react'
 import { History } from 'lucide-react'
 import { useAppStore } from '../store/app'
 import { useI18n } from '../i18n'
 import { getBridge } from '../lib/bridge'
 import './Lists.css'
 
-export function CommitForm() {
+export const CommitForm = memo(function CommitForm() {
   const { t } = useI18n()
   const message = useAppStore((state) => state.commitMessage)
   const setMessage = useAppStore((state) => state.setCommitMessage)
   const runOperation = useAppStore((state) => state.runOperation)
-  const snapshot = useAppStore((state) => state.snapshot)
-  const history = useAppStore((state) => state.history)
-  const context = useAppStore((state) => state.context)
+  const stagedCount = useAppStore((state) => state.snapshot?.staged?.length ?? 0)
+  const conflicted = useAppStore((state) => Boolean(state.snapshot?.conflicted))
+  const isLocal = useAppStore((state) => state.context.kind === 'local')
   const operation = useAppStore((state) => state.operation)
 
   const [isAmend, setIsAmend] = useState(false)
   const [draftMessage, setDraftMessage] = useState('')
 
-  if (context.kind !== 'local') return null
+  if (!isLocal) return null
 
   const value = message ?? ''
-  const stagedCount = snapshot?.staged?.length ?? 0
-  const conflicted = Boolean(snapshot?.conflicted)
 
   const handleToggleAmend = (nextAmend: boolean) => {
     setIsAmend(nextAmend)
     if (nextAmend) {
       setDraftMessage(value)
       // Se a mensagem atual estiver vazia, preenche com a mensagem completa do último commit (subject + body)
+      const history = useAppStore.getState().history
       const lastCommit = history?.rows?.find((r) => r.row === 0 || r.commit)?.commit
       if (lastCommit?.oid && !value.trim()) {
         if (lastCommit.subject) {
@@ -132,5 +131,5 @@ export function CommitForm() {
       </div>
     </form>
   )
-}
+})
 

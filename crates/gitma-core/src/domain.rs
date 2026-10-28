@@ -205,6 +205,40 @@ pub struct RemoteEntry {
     pub push_url: String,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitAccountOption {
+    pub id: String,
+    pub label: String,
+    pub kind: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub username: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ssh_key_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ssh_key_name: Option<String>,
+    pub is_gh_active: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RepoAuthState {
+    pub selected_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resolved_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resolved_label: Option<String>,
+    pub resolution_reason: String,
+    pub accounts: Vec<GitAccountOption>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RepoFileEntry {
+    pub path: String,
+    pub is_tracked: bool,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum GitErrorCategory {
     NotRepository,

@@ -1,7 +1,17 @@
 export type Context = { kind: 'local' } | { kind: 'commit'; oid: string } | { kind: 'compare'; baseOid: string; targetOid: string };
-export type Area = 'staged' | 'unstaged' | 'commit';
+export type Area = 'staged' | 'unstaged' | 'commit' | 'repo';
 export type Status = 'added' | 'modified' | 'deleted' | 'renamed' | 'copied' | 'untracked' | 'conflicted';
 export interface DiffStat { filesChanged: number; insertions: number; deletions: number }
+export interface RepoFileEntry {
+  path: string;
+  isTracked: boolean;
+}
+export interface RepoTreeResult {
+  sessionId: string;
+  requestId: number;
+  commitOid: string | null;
+  files: RepoFileEntry[];
+}
 export interface FileEntry {
   id: string;
   name: string;
@@ -41,6 +51,22 @@ export interface RemotesResult {
   sessionId: string;
   requestId: number;
   remotes: RemoteEntry[];
+}
+export interface GitAccountOption {
+  id: string;
+  label: string;
+  kind: 'github' | 'ssh' | string;
+  username?: string | null;
+  sshKeyPath?: string | null;
+  sshKeyName?: string | null;
+  isGhActive: boolean;
+}
+export interface RepoAuthState {
+  selectedId: string;
+  resolvedId?: string | null;
+  resolvedLabel?: string | null;
+  resolutionReason: string;
+  accounts: GitAccountOption[];
 }
 export interface CommitDetails {
   oid: string;
@@ -193,6 +219,8 @@ export interface TabItem {
   commitMessage: string;
   color?: string | null;
   remotes?: RemoteEntry[];
+  authState?: RepoAuthState | null;
+  filesTab?: 'changes' | 'explorer';
 }
 
 export interface RecentRepo {

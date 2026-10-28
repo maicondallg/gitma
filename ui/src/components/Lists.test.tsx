@@ -40,6 +40,8 @@ function state(overrides: Partial<AppState> = {}): AppState {
     preferredTerminal: 'default',
     setPreferredTerminal: vi.fn(),
     openTerminal: vi.fn(async () => {}),
+    preferredEditor: 'default',
+    setPreferredEditor: vi.fn(),
     openHome: vi.fn(),
     removeRecentRepo: vi.fn(),
     clearRecentRepos: vi.fn(),
@@ -100,6 +102,8 @@ function state(overrides: Partial<AppState> = {}): AppState {
     setDiffMode: vi.fn(),
     setCompactDiff: vi.fn(),
     setFileViewMode: vi.fn(),
+    filesTab: 'changes',
+    setFilesTab: vi.fn(),
     activePane: 'history',
     setActivePane: vi.fn(),
     expandedDiff: false,
@@ -578,6 +582,27 @@ describe('Stash, Cherry-pick e RefPopover no GraphPanel', () => {
     expect(screen.queryByRole('dialog', { name: 'Configurações' })).not.toBeInTheDocument()
     act(() => useAppStore.setState({ settingsOpen: true }))
     expect(await screen.findByRole('dialog', { name: 'Configurações' })).toBeInTheDocument()
+  })
+
+  it('abre o modal estilizado de stash ao clicar em Guardar com mensagem no menu', async () => {
+    useAppStore.setState(
+      state({
+        session: { sessionId: 's1', root: '/home/user/projects/repo-test', name: 'repo-test' },
+        snapshot: { sessionId: 's1', requestId: 1, revision: 1, branch: 'develop', upstream: null, conflicted: false, staged: [], unstaged: [], historyKey: 'h1' },
+      })
+    )
+
+    render(<App />)
+
+    const stashBtn = screen.getByRole('button', { name: /stash/i })
+    fireEvent.click(stashBtn)
+
+    const stashMsgBtn = await screen.findByText('Guardar com mensagem...')
+    fireEvent.click(stashMsgBtn)
+
+    expect(await screen.findByRole('dialog')).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Guardar no Stash' })).toBeInTheDocument()
+    expect(screen.getByLabelText(/Mensagem para o stash/i)).toBeInTheDocument()
   })
 
   it('permite navegar entre commits usando as setas para cima e para baixo', async () => {

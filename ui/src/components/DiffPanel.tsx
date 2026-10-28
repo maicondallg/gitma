@@ -5,6 +5,7 @@ import {
   ChevronUp,
   Clock,
   Columns2,
+  Code2,
   FoldVertical,
   History,
   Maximize2,
@@ -63,6 +64,18 @@ interface DiffViewModelWithUnchangedRegions extends monaco.editor.IDiffEditorVie
 
 function hiddenAreaCount(codeEditor: monaco.editor.ICodeEditor): number {
   return (codeEditor as MonacoEditorWithViewModel)._getViewModel?.()?.getHiddenAreas()?.length ?? 0;
+}
+
+export function isEditableElement(el: Element | null): boolean {
+  if (!el) return false;
+  if (el.closest?.('.monaco-editor') && !el.closest?.('.find-widget')) {
+    return false;
+  }
+  const tagName = el.tagName?.toLowerCase();
+  if (tagName === 'input' || tagName === 'textarea' || tagName === 'select') {
+    return true;
+  }
+  return el.getAttribute?.('contenteditable') === 'true';
 }
 
 export const DiffPanel = memo(function DiffPanel() {
@@ -175,6 +188,178 @@ export const DiffPanel = memo(function DiffPanel() {
     await runOperation('discardHunk', [], hunks[currentHunkIndex].patch);
   }, [currentHunkIndex, runOperation]);
 
+  // Tig / Vim-style keyboard navigation for scrolling the diff document and jumping between hunks
+  useEffect(() => {
+    const handleDiffKeyDown = (e: KeyboardEvent) => {
+      if (e.defaultPrevented) return;
+      if (isEditableElement(document.activeElement)) return;
+      if (document.querySelector('.modal-backdrop')) return;
+
+      // Ctrl+Alt+S / Ctrl+Alt+U for staging/unstaging current hunk
+      if ((e.ctrlKey || e.metaKey) && e.altKey && !e.shiftKey) {
+        const lower = e.key.toLowerCase();
+        if (lower === 's' && selectedFile?.area === 'unstaged') {
+          e.preventDefault();
+          void handleStageCurrentHunk();
+          return;
+        }
+        if (lower === 'u' && selectedFile?.area === 'staged') {
+          e.preventDefault();
+          void handleUnstageCurrentHunk();
+          return;
+        }
+      }
+
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+      if (!selectedFile) return;
+
+      const modEditor = editor.current?.getModifiedEditor?.() as
+        | (monaco.editor.ICodeEditor & {
+            getScrollHeight?: () => number;
+            setScrollTop?: (top: number) => void;
+          })
+        | undefined;
+
+      const scrollBy = (deltaY: number) => {
+        if (!modEditor) return;
+        const currentTop = modEditor.getScrollTop?.() ?? 0;
+        modEditor.setScrollTop?.(Math.max(0, currentTop + deltaY));
+      };
+
+      const halfPage = Math.max(160, Math.floor((host.current?.clientHeight || 520) / 2));
+
+      switch (e.key) {
+        case 'j': {
+          e.preventDefault();
+          scrollBy(60);
+          break;
+        }
+        case 'k': {
+          e.preventDefault();
+          scrollBy(-60);
+          break;
+        }
+        case 'J':
+        case 'd':
+        case 'PageDown': {
+          e.preventDefault();
+          scrollBy(halfPage);
+          break;
+        }
+        case 'K':
+        case 'u':
+        case 'PageUp': {
+          e.preventDefault();
+          scrollBy(-halfPage);
+          break;
+        }
+        case 'g': {
+          e.preventDefault();
+          modEditor?.setScrollTop?.(0);
+          break;
+        }
+        case 'G': {
+          e.preventDefault();
+          if (modEditor) {
+            const scrollHeight =
+              modEditor.getScrollHeight?.() ??
+              (modEditor.getModel?.()?.getLineCount?.() ?? 1000) * 20;
+            modEditor.setScrollTop?.(Math.max(0, scrollHeight));
+          }
+          break;
+        }
+        case 'n':
+        case ']': {
+          const hunks = previewRef.current?.hunks;
+          if (hunks && hunks.length > 0) {
+            e.preventDefault();
+            handleNextHunk();
+          } else {
+            const changes = editor.current?.getLineChanges?.();
+            if (changes && changes.length > 0 && modEditor) {
+              e.preventDefault();
+              const nextIdx = Math.min(changes.length - 1, currentHunkIndex + 1);
+              setCurrentHunkIndex(nextIdx);
+              const line =
+                changes[nextIdx].modifiedStartLineNumber ||
+                changes[nextIdx].originalStartLineNumber ||
+                1;
+              modEditor.revealLineInCenter?.(line);
+            }
+          }
+          break;
+        }
+        case 'p':
+        case '[': {
+          const hunks = previewRef.current?.hunks;
+          if (hunks && hunks.length > 0) {
+            e.preventDefault();
+            handlePrevHunk();
+          } else {
+            const changes = editor.current?.getLineChanges?.();
+            if (changes && changes.length > 0 && modEditor) {
+              e.preventDefault();
+              const prevIdx = Math.max(0, currentHunkIndex - 1);
+              setCurrentHunkIndex(prevIdx);
+              const line =
+                changes[prevIdx].modifiedStartLineNumber ||
+                changes[prevIdx].originalStartLineNumber ||
+                1;
+              modEditor.revealLineInCenter?.(line);
+            }
+          }
+          break;
+        }
+        case 'b': {
+          e.preventDefault();
+          setBlameOpen(!blameOpen);
+          break;
+        }
+        case 'c': {
+          const isRepo =
+            selectedFile.area === 'repo' || Boolean(selectedFile.id?.startsWith('repo:'));
+          if (!isRepo) {
+            e.preventDefault();
+            setCompactDiff(!compactDiff);
+          }
+          break;
+        }
+        case 'v': {
+          const isRepo =
+            selectedFile.area === 'repo' || Boolean(selectedFile.id?.startsWith('repo:'));
+          if (!isRepo) {
+            e.preventDefault();
+            setDiffMode(diffMode === 'unified' ? 'split' : 'unified');
+          }
+          break;
+        }
+        case 'f':
+        case 'z': {
+          e.preventDefault();
+          setExpandedDiff((prev) => !prev);
+          break;
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleDiffKeyDown);
+    return () => window.removeEventListener('keydown', handleDiffKeyDown);
+  }, [
+    selectedFile,
+    currentHunkIndex,
+    blameOpen,
+    compactDiff,
+    diffMode,
+    handleNextHunk,
+    handlePrevHunk,
+    handleStageCurrentHunk,
+    handleUnstageCurrentHunk,
+    setBlameOpen,
+    setCompactDiff,
+    setDiffMode,
+    setExpandedDiff,
+  ]);
+
   useEffect(() => {
     setCurrentHunkIndex(0);
   }, [preview?.fileId, preview?.version]);
@@ -251,18 +436,20 @@ export const DiffPanel = memo(function DiffPanel() {
   }, [diffMode]);
 
   useLayoutEffect(() => {
+    const isRepo = selectedFile?.area === 'repo' || Boolean(selectedFile?.id.startsWith('repo:'));
+    const compactEnabled = compactDiff && !isRepo;
     editor.current?.updateOptions({
       hideUnchangedRegions: {
-        enabled: compactDiff,
+        enabled: compactEnabled,
         minimumLineCount: 3,
         contextLineCount: 3,
       },
     });
-    if (!compactDiff) {
+    if (!compactEnabled) {
       if (host.current) host.current.style.visibility = '';
       setDiffPreparing(false);
     }
-  }, [compactDiff]);
+  }, [compactDiff, selectedFile?.area, selectedFile?.id]);
 
   useEffect(() => {
     const hunk = preview?.hunks?.[currentHunkIndex];
@@ -509,7 +696,8 @@ export const DiffPanel = memo(function DiffPanel() {
       setDiffPreparing(false);
       return;
     }
-    const shouldCompact = compactDiff;
+    const isRepoFile = requestedFile?.area === 'repo' || Boolean(requestedFile?.id.startsWith('repo:'));
+    const shouldCompact = compactDiff && !isRepoFile;
     // Keep the current file visible while the next diff is calculated. The
     // compact model is attached only after its unchanged regions are ready.
     setDiffPreparing(shouldCompact && !currentDisplay);
@@ -597,7 +785,7 @@ export const DiffPanel = memo(function DiffPanel() {
         nextModels.modified.dispose();
       }
     };
-  }, [session?.sessionId, requestedPreview?.version, requestedPreview?.kind, requestedFile?.id, compactDiff]);
+  }, [session?.sessionId, requestedPreview?.version, requestedPreview?.kind, requestedFile?.id, requestedFile?.area, compactDiff]);
 
   const label = selectedFile
     ? selectedFile.oldPathDisplay
@@ -606,6 +794,7 @@ export const DiffPanel = memo(function DiffPanel() {
     : t('diff.selectFile');
   const isConflict = preview?.kind === 'conflict';
   const unavailable = preview && preview.kind !== 'text' && !isConflict;
+  const isRepoFile = selectedFile?.area === 'repo' || Boolean(selectedFile?.id?.startsWith('repo:'));
   const editorPreview = preview ?? requestedPreview;
   const loadingFile = Boolean(
     selectedFile && (!preview || (diffPreparing && (preview.kind === 'text' || isConflict)))
@@ -621,6 +810,10 @@ export const DiffPanel = memo(function DiffPanel() {
           onClick={() => openFileHistory(selectedFile.pathDisplay)} title={t('fileHistory.title')}>
           <History size={14} /><span>{t('fileHistory.button')}</span>
         </button>}
+        {selectedFile && <button type="button" className="diff-file-history-button"
+          onClick={() => void runOperation('openEditor', [], selectedFile.pathDisplay)} title={t('fileMenu.openEditor')}>
+          <Code2 size={14} /><span>{t('files.openEditor')}</span>
+        </button>}
         <div className="mode-switch" role="group" aria-label="Layout do diff">
           <button
             type="button"
@@ -632,36 +825,40 @@ export const DiffPanel = memo(function DiffPanel() {
             <History size={14} />
             <span>{t('diff.toggleBlame')}</span>
           </button>
-          <button
-            type="button"
-            className={compactDiff ? 'active' : ''}
-            onClick={() => setCompactDiff(!compactDiff)}
-            title={compactDiff ? t('diff.compactDiffActive') : t('diff.compactDiffInactive')}
-            aria-pressed={compactDiff}
-          >
-            <FoldVertical size={14} />
-            <span>{t('diff.onlyChanges')}</span>
-          </button>
-          <button
-            type="button"
-            className={diffMode === 'unified' ? 'active' : ''}
-            onClick={() => setDiffMode('unified')}
-            title={t('diff.unified')}
-            aria-pressed={diffMode === 'unified'}
-          >
-            <Rows3 size={14} />
-            <span>{t('diff.unified')}</span>
-          </button>
-          <button
-            type="button"
-            className={diffMode === 'split' ? 'active' : ''}
-            onClick={() => setDiffMode('split')}
-            title={t('diff.split')}
-            aria-pressed={diffMode === 'split'}
-          >
-            <Columns2 size={14} />
-            <span>{t('diff.split')}</span>
-          </button>
+          {!isRepoFile && (
+            <>
+              <button
+                type="button"
+                className={compactDiff ? 'active' : ''}
+                onClick={() => setCompactDiff(!compactDiff)}
+                title={compactDiff ? t('diff.compactDiffActive') : t('diff.compactDiffInactive')}
+                aria-pressed={compactDiff}
+              >
+                <FoldVertical size={14} />
+                <span>{t('diff.onlyChanges')}</span>
+              </button>
+              <button
+                type="button"
+                className={diffMode === 'unified' ? 'active' : ''}
+                onClick={() => setDiffMode('unified')}
+                title={t('diff.unified')}
+                aria-pressed={diffMode === 'unified'}
+              >
+                <Rows3 size={14} />
+                <span>{t('diff.unified')}</span>
+              </button>
+              <button
+                type="button"
+                className={diffMode === 'split' ? 'active' : ''}
+                onClick={() => setDiffMode('split')}
+                title={t('diff.split')}
+                aria-pressed={diffMode === 'split'}
+              >
+                <Columns2 size={14} />
+                <span>{t('diff.split')}</span>
+              </button>
+            </>
+          )}
           <div className="diff-toolbar-separator" />
           <button
             type="button"

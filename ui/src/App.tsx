@@ -27,6 +27,7 @@ import { HomeTab } from './components/HomeTab';
 import { InProgressBanner } from './components/InProgressBanner';
 import { NewBranchModal } from './components/NewBranchModal';
 import { ShortcutsModal } from './components/ShortcutsModal';
+import { StashModal } from './components/StashModal';
 import { TabBar } from './components/TabBar';
 import { TerminalButton } from './components/TerminalButton';
 import { TerminalDrawer } from './components/TerminalDrawer';
@@ -61,25 +62,20 @@ function savedLayout(): number[] | null {
 
 
 export default function App() {
-  const tabs = useAppStore((s) => s.tabs);
+  const tabCount = useAppStore((s) => s.tabs.length);
   const activeTabId = useAppStore((s) => s.activeTabId);
   const session = useAppStore((s) => s.session);
-  const snapshot = useAppStore((s) => s.snapshot);
+  const hasSnapshot = useAppStore((s) => s.snapshot !== null);
+  const branch = useAppStore((s) => s.snapshot?.branch ?? null);
+  const upstream = useAppStore((s) => s.snapshot?.upstream ?? null);
   const notice = useAppStore((s) => s.notice);
   const refreshing = useAppStore((s) => s.refreshing);
-  const opening = useAppStore((s) => s.opening);
-  const openRepository = useAppStore((s) => s.openRepository);
-  const openRepositories = useAppStore((s) => s.openRepositories);
-  const closeTab = useAppStore((s) => s.closeTab);
-  const closeOtherTabs = useAppStore((s) => s.closeOtherTabs);
-  const switchTab = useAppStore((s) => s.switchTab);
   const refresh = useAppStore((s) => s.refresh);
   const dismissNotice = useAppStore((s) => s.dismissNotice);
   const runOperation = useAppStore((s) => s.runOperation);
   const openInBrowser = useAppStore((s) => s.openInBrowser);
   const operation = useAppStore((s) => s.operation);
   const expandedDiff = useAppStore((s) => s.expandedDiff);
-  const setExpandedDiff = useAppStore((s) => s.setExpandedDiff);
   const settingsOpen = useAppStore((s) => s.settingsOpen);
   const closeSettings = useAppStore((s) => s.closeSettings);
   const toggleSettings = useAppStore((s) => s.toggleSettings);
@@ -91,11 +87,13 @@ export default function App() {
   const closeRemotesModal = useAppStore((s) => s.closeRemotesModal);
   const isConsoleOpen = useAppStore((s) => s.isConsoleOpen);
   const toggleConsole = useAppStore((s) => s.toggleConsole);
-  const setConsoleOpen = useAppStore((s) => s.setConsoleOpen);
+  const filesTab = useAppStore((s) => s.filesTab);
   const { t } = useI18n();
 
+  const [initialLayout] = useState(savedLayout);
   const [showNewBranchModal, setShowNewBranchModal] = useState(false);
   const [showShortcutsModal, setShowShortcutsModal] = useState(false);
+  const [showStashModal, setShowStashModal] = useState(false);
   const [pushMenu, setPushMenu] = useState<{ x: number; y: number } | null>(null);
   const [stashMenu, setStashMenu] = useState<{ x: number; y: number } | null>(null);
   const workspaceRef = useRef<ImperativePanelGroupHandle>(null);
@@ -193,6 +191,9 @@ export default function App() {
       } else if (event.key.toLowerCase() === 'b') {
         event.preventDefault();
         if (store.session) setShowNewBranchModal(true);
+      } else if (event.key.toLowerCase() === 'e' && event.shiftKey) {
+        event.preventDefault();
+        store.setFilesTab(store.filesTab === 'explorer' ? 'changes' : 'explorer');
       } else if (event.key.toLowerCase() === 'w') {
         event.preventDefault();
         if (store.activeTabId !== 'home') {
@@ -255,13 +256,13 @@ export default function App() {
           <header className="app-toolbar">
             <div className="toolbar-left">
               <strong className="repo-name">{session.name}</strong>
-              {snapshot?.branch ? (
+              {branch ? (
                 <span className="branch-badge" title={t('toolbar.currentBranchCheckedOut')}>
                   <GitBranch size={13} />
-                  <span>{snapshot.branch}</span>
+                  <span>{branch}</span>
                   <span className="branch-badge-dot">•</span>
                 </span>
-              ) : snapshot ? (
+              ) : hasSnapshot ? (
                 <span className="branch-badge branch-badge-detached" title={t('toolbar.detachedHead')}>
                   <GitBranch size={13} />
                   <span>HEAD ({t('toolbar.detached')})</span>
@@ -357,9 +358,9 @@ export default function App() {
                 <button
                   type="button"
                   className="sync-button"
-                  onClick={() => void openInBrowser({ branch: snapshot?.branch })}
+                  onClick={() => void openInBrowser({ branch })}
                   disabled={!!operation}
-                  title={t('toolbar.openInBrowserTitle', { branch: snapshot?.branch ?? 'HEAD' })}
+                  title={t('toolbar.openInBrowserTitle', { branch: branch ?? 'HEAD' })}
                   aria-label={t('toolbar.openInBrowser')}
                 >
                   <Globe size={14} />
@@ -414,10 +415,7 @@ export default function App() {
                   className="menu-action-item"
                   onClick={() => {
                     setStashMenu(null);
-                    const msg = window.prompt(t('toolbar.stashSaveMsgPrompt'));
-                    if (msg !== null) {
-                      void runOperation('stashPush', [], JSON.stringify({ message: msg, include_untracked: false }));
-                    }
+                    setShowStashModal(true);
                   }}
                   disabled={!!operation}
                   title={t('toolbar.stashSaveMsgDesc')}
@@ -566,29 +564,29 @@ export default function App() {
             }}
             className="workspace"
           >
-            <Panel defaultSize={savedLayout()?.[0] ?? 45} minSize={20} collapsible={expandedDiff}>
+            <Panel defaultSize={initialLayout?.[0] ?? 45} minSize={20} collapsible={expandedDiff}>
               <GraphPanel />
             </Panel>
             <PanelResizeHandle className={`resize-handle ${expandedDiff ? 'is-hidden' : ''}`} />
             <Panel
-              defaultSize={savedLayout()?.[1] ?? 20}
+              defaultSize={initialLayout?.[1] ?? 20}
               minSize={12}
               maxSize={expandedDiff ? 35 : undefined}
             >
               <aside className="files-column">
                 <FilesPanel />
-                <CommitForm />
+                {filesTab !== 'explorer' && <CommitForm />}
               </aside>
             </Panel>
             <PanelResizeHandle className="resize-handle" />
-            <Panel defaultSize={savedLayout()?.[2] ?? 35} minSize={26}>
+            <Panel defaultSize={initialLayout?.[2] ?? 35} minSize={26}>
               <Suspense fallback={<div className="diff-panel-loading" aria-busy="true" />}>
                 <DiffPanel />
               </Suspense>
             </Panel>
           </PanelGroup>
 
-          <TerminalDrawer />
+          {isConsoleOpen && <TerminalDrawer />}
         </>
       )}
 
@@ -617,12 +615,12 @@ export default function App() {
 
         <div className="footer-right">
           <span>
-            {session && snapshot?.upstream
-              ? t('app.tracking', { upstream: snapshot.upstream })
+            {session && upstream
+              ? t('app.tracking', { upstream })
               : session
               ? t('app.noUpstream')
-              : tabs.length > 0
-              ? t('app.tabsOpen', { count: tabs.length })
+              : tabCount > 0
+              ? t('app.tabsOpen', { count: tabCount })
               : t('app.home')}
           </span>
 
@@ -676,12 +674,28 @@ export default function App() {
         </div>
       )}
 
-      <NewBranchModal
-        isOpen={showNewBranchModal}
-        startPoint={snapshot?.branch ?? undefined}
-        onClose={() => setShowNewBranchModal(false)}
-        onSubmit={(params) => void runOperation('createBranch', [], JSON.stringify(params))}
-      />
+      {showNewBranchModal && (
+        <NewBranchModal
+          isOpen={showNewBranchModal}
+          startPoint={branch ?? undefined}
+          onClose={() => setShowNewBranchModal(false)}
+          onSubmit={(params) => void runOperation('createBranch', [], JSON.stringify(params))}
+        />
+      )}
+
+      {showStashModal && (
+        <StashModal
+          isOpen={showStashModal}
+          onClose={() => setShowStashModal(false)}
+          onSubmit={({ message, includeUntracked }) => {
+            void runOperation(
+              'stashPush',
+              [],
+              JSON.stringify({ message, include_untracked: includeUntracked })
+            );
+          }}
+        />
+      )}
 
       {showShortcutsModal && (
         <ShortcutsModal onClose={() => setShowShortcutsModal(false)} />

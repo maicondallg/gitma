@@ -4,8 +4,15 @@ default-members = ["crates/gitma-core"]
 resolver = "2"
 
 [workspace.package]
-version = "0.1.9"
+version = "0.1.11"
 edition = "2021"
 license = "MIT"
 authors = ["Maicon Dall'Agnol <maicon.dallagnol@unesp.br>"]
 repository = "https://github.com/maicondallg/Gitma"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
+panic = "abort"
+

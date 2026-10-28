@@ -30,6 +30,42 @@ export function createFixtureAdapter(name = 'local'): BridgeAdapter {
   let unstaged = name === 'clean' ? [] : [file('work-app', 'src/app.ts', 'unstaged'), file('work-schema', 'backend/prisma/schema.prisma', 'unstaged'), file('work-readme', 'README.md', 'unstaged'), file('work-tests', 'tests/workflows.ts', 'unstaged', 'untracked')];
   const historyFiles = [file('commit-app', 'src/app.ts', 'commit'), file('commit-theme', 'src/theme.css', 'commit', 'added')];
   let listener: ((event: RepoChanged) => void) | null = null;
+  let selectedAccountId = 'auto';
+  const fixtureAccounts = [
+    {
+      id: 'gh:maicondallg',
+      label: 'maicondallg',
+      kind: 'github',
+      username: 'maicondallg',
+      sshKeyPath: '/home/demo/.ssh/id_ed25519',
+      sshKeyName: 'id_ed25519',
+      isGhActive: false,
+    },
+    {
+      id: 'gh:maicon-dallagnol-prestserv_petro',
+      label: 'maicon-dallagnol-prestserv_petro',
+      kind: 'github',
+      username: 'maicon-dallagnol-prestserv_petro',
+      sshKeyPath: '/home/demo/.ssh/id_petro',
+      sshKeyName: 'id_petro',
+      isGhActive: true,
+    },
+  ];
+  const buildFixtureAuthState = () => {
+    const resolved =
+      selectedAccountId === 'system'
+        ? undefined
+        : selectedAccountId === 'auto'
+        ? fixtureAccounts[0]
+        : fixtureAccounts.find((a) => a.id === selectedAccountId) ?? fixtureAccounts[0];
+    return {
+      selectedId: selectedAccountId,
+      resolvedId: resolved?.id ?? null,
+      resolvedLabel: resolved?.label ?? null,
+      resolutionReason: selectedAccountId === 'auto' ? 'owner-match' : selectedAccountId === 'system' ? 'system' : 'manual',
+      accounts: fixtureAccounts,
+    };
+  };
   return {
     chooseFolder: async () => '/home/demo/projects/Gitma',
     startupOptions: async () => ({ repo: null, fixture: name }),
@@ -81,6 +117,24 @@ export function createFixtureAdapter(name = 'local'): BridgeAdapter {
       requestId,
       remotes: [
         { name: 'origin', fetchUrl: `https://github.com/maicondallg/${activeRepoName}.git`, pushUrl: `https://github.com/maicondallg/${activeRepoName}.git` },
+      ],
+    }),
+    getAuthState: async () => buildFixtureAuthState(),
+    setRepoAccount: async (_sessionId, accountId) => {
+      selectedAccountId = accountId || 'auto';
+      return buildFixtureAuthState();
+    },
+    getRepoFiles: async (_sessionId, requestId, commitOid) => ({
+      sessionId,
+      requestId,
+      commitOid: commitOid ?? null,
+      files: [
+        { path: 'Cargo.toml', isTracked: true },
+        { path: 'README.md', isTracked: true },
+        { path: 'backend/prisma/schema.prisma', isTracked: true },
+        { path: 'src/app.ts', isTracked: true },
+        { path: 'src/theme.css', isTracked: true },
+        { path: 'tests/workflows.ts', isTracked: false },
       ],
     }),
     getCommitFiles: async (_sessionId, requestId, oid) => ({

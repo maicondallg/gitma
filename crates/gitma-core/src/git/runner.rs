@@ -71,15 +71,42 @@ pub(crate) fn mutate_with_stdin(root: &Path, args: &[&str], input: &[u8]) -> Git
     )
 }
 
-pub(crate) fn run_raw(
+pub(crate) fn run_raw(root: &Path, args: &[&OsStr]) -> GitResult<String> {
+    if is_network_git_command(args) {
+        let extra_urls = extract_url_args(args);
+        let (primary_auth, fallback_auths) =
+            super::auth::resolve_network_auth_plan(root, &extra_urls);
+        match run_raw_once(root, args, primary_auth.as_ref()) {
+            Ok(out) => return Ok(out),
+            Err(err) if !fallback_auths.is_empty() && is_auth_or_access_error(&err.message) => {
+                for alt in &fallback_auths {
+                    if CANCELLED.load(Ordering::SeqCst) {
+                        break;
+                    }
+                    if let Ok(out) = run_raw_once(root, args, Some(alt)) {
+                        super::auth::save_auto_resolved_account(root, &alt.account_id);
+                        return Ok(out);
+                    }
+                }
+                return Err(err);
+            }
+            Err(err) => return Err(err),
+        }
+    }
+    run_raw_once(root, args, None)
+}
+
+fn run_raw_once(
     root: &Path,
     args: &[&OsStr],
+    auth: Option<&super::auth::ExecutionAuth>,
 ) -> GitResult<String> {
     if CANCELLED.load(Ordering::SeqCst) {
         return Err(cancelled_error());
     }
     let mut command = Command::new("git");
     command.arg("-C").arg(root);
+    apply_execution_auth(&mut command, auth);
     command
         .args(args)
         .env("GIT_TERMINAL_PROMPT", "0")
@@ -118,8 +145,11 @@ pub(crate) fn run_raw(
         match child.try_wait() {
             Ok(Some(status)) => break status,
             Ok(None) if Instant::now() < deadline && !CANCELLED.load(Ordering::SeqCst) => {
-                let interval = if started.elapsed() < Duration::from_millis(50) {
-                    Duration::from_millis(2)
+                let elapsed = started.elapsed();
+                let interval = if elapsed < Duration::from_millis(5) {
+                    Duration::from_micros(150)
+                } else if elapsed < Duration::from_millis(50) {
+                    Duration::from_millis(1)
                 } else {
                     Duration::from_millis(10)
                 };
@@ -155,8 +185,12 @@ pub(crate) fn run_raw(
 
     let stdout_bytes = join_pipe(stdout_reader)?;
     let stderr_bytes = join_pipe(stderr_reader)?;
-    let stdout_str = String::from_utf8_lossy(&stdout_bytes).trim_end().to_string();
-    let stderr_str = String::from_utf8_lossy(&stderr_bytes).trim_end().to_string();
+    let stdout_str = String::from_utf8_lossy(&stdout_bytes)
+        .trim_end()
+        .to_string();
+    let stderr_str = String::from_utf8_lossy(&stderr_bytes)
+        .trim_end()
+        .to_string();
 
     if status.success() {
         if !stdout_str.is_empty() && !stderr_str.is_empty() {
@@ -202,11 +236,76 @@ fn run_with_input<'a>(
     literal_pathspecs: bool,
     input: Option<&[u8]>,
 ) -> GitResult<Vec<u8>> {
+    let arg_vec: Vec<&'a OsStr> = args.into_iter().collect();
+    if !read_only && is_network_git_command(&arg_vec) {
+        let extra_urls = extract_url_args(&arg_vec);
+        let (primary_auth, fallback_auths) =
+            super::auth::resolve_network_auth_plan(root, &extra_urls);
+        match run_once_with_input(
+            root,
+            &arg_vec,
+            timeout,
+            read_only,
+            literal_pathspecs,
+            input,
+            primary_auth.as_ref(),
+        ) {
+            Ok(out) => return Ok(out),
+            Err(err)
+                if !fallback_auths.is_empty()
+                    && (err.category == GitErrorCategory::Authentication
+                        || is_auth_or_access_error(
+                            err.details.as_deref().unwrap_or(&err.message),
+                        )) =>
+            {
+                for alt in &fallback_auths {
+                    if CANCELLED.load(Ordering::SeqCst) {
+                        break;
+                    }
+                    if let Ok(out) = run_once_with_input(
+                        root,
+                        &arg_vec,
+                        timeout,
+                        read_only,
+                        literal_pathspecs,
+                        input,
+                        Some(alt),
+                    ) {
+                        super::auth::save_auto_resolved_account(root, &alt.account_id);
+                        return Ok(out);
+                    }
+                }
+                return Err(err);
+            }
+            Err(err) => return Err(err),
+        }
+    }
+    run_once_with_input(
+        root,
+        &arg_vec,
+        timeout,
+        read_only,
+        literal_pathspecs,
+        input,
+        None,
+    )
+}
+
+fn run_once_with_input(
+    root: &Path,
+    args: &[&OsStr],
+    timeout: Duration,
+    read_only: bool,
+    literal_pathspecs: bool,
+    input: Option<&[u8]>,
+    auth: Option<&super::auth::ExecutionAuth>,
+) -> GitResult<Vec<u8>> {
     if CANCELLED.load(Ordering::SeqCst) {
         return Err(cancelled_error());
     }
     let mut command = Command::new("git");
     command.arg("-C").arg(root);
+    apply_execution_auth(&mut command, auth);
     if literal_pathspecs {
         command.arg("--literal-pathspecs");
     }
@@ -272,10 +371,13 @@ fn run_with_input<'a>(
         match child.try_wait() {
             Ok(Some(status)) => break status,
             Ok(None) if Instant::now() < deadline && !CANCELLED.load(Ordering::SeqCst) => {
-                // Most local Git commands finish in a few milliseconds. Poll
+                // Most local Git commands finish in under a millisecond. Poll
                 // them promptly, then back off for slower network operations.
-                let interval = if started.elapsed() < Duration::from_millis(50) {
-                    Duration::from_millis(2)
+                let elapsed = started.elapsed();
+                let interval = if elapsed < Duration::from_millis(5) {
+                    Duration::from_micros(150)
+                } else if elapsed < Duration::from_millis(50) {
+                    Duration::from_millis(1)
                 } else {
                     Duration::from_millis(10)
                 };
@@ -319,11 +421,7 @@ fn run_with_input<'a>(
     let lower = detail.to_lowercase();
     let category = if lower.contains("not a git repository") {
         GitErrorCategory::NotRepository
-    } else if lower.contains("authentication")
-        || lower.contains("could not read username")
-        || lower.contains("permission denied")
-        || lower.contains("terminal prompts disabled")
-    {
+    } else if is_auth_or_access_error(&lower) {
         GitErrorCategory::Authentication
     } else if lower.contains("conflict")
         || lower.contains("unmerged")
@@ -345,7 +443,7 @@ fn run_with_input<'a>(
     };
     let message = match category {
         GitErrorCategory::NotRepository => "O caminho não é um repositório Git",
-        GitErrorCategory::Authentication => "Falha de autenticação do Git",
+        GitErrorCategory::Authentication => "Falha de autenticação ou permissão no repositório remoto",
         GitErrorCategory::Conflict => "A operação encontrou conflitos",
         GitErrorCategory::Diverged => "O histórico remoto divergiu",
         GitErrorCategory::RemoteRefNotFound => "A branch remota vinculada não existe mais no servidor (pode ter sido excluída após o merge)",
@@ -357,6 +455,51 @@ fn run_with_input<'a>(
         message,
         details: (!detail.is_empty()).then_some(detail),
     })
+}
+
+fn apply_execution_auth(command: &mut Command, auth: Option<&super::auth::ExecutionAuth>) {
+    if let Some(auth) = auth {
+        for arg in &auth.git_config_args {
+            command.arg(arg);
+        }
+        if let Some(ssh_cmd) = &auth.ssh_command {
+            command.env("GIT_SSH_COMMAND", ssh_cmd);
+        }
+        if let Some(token) = &auth.gh_token {
+            command.env("GH_TOKEN", token);
+            command.env("GITHUB_TOKEN", token);
+        }
+    }
+}
+
+fn is_network_git_command(args: &[&OsStr]) -> bool {
+    args.iter().any(|arg| {
+        matches!(
+            arg.to_str(),
+            Some("push" | "fetch" | "pull" | "clone" | "ls-remote" | "submodule")
+        )
+    })
+}
+
+fn extract_url_args(args: &[&OsStr]) -> Vec<String> {
+    args.iter()
+        .filter_map(|a| a.to_str())
+        .filter(|s| super::auth::is_network_remote_url(s))
+        .map(str::to_string)
+        .collect()
+}
+
+fn is_auth_or_access_error(text: &str) -> bool {
+    let lower = text.to_lowercase();
+    lower.contains("authentication")
+        || lower.contains("could not read username")
+        || lower.contains("permission denied")
+        || lower.contains("permission to ")
+        || lower.contains("terminal prompts disabled")
+        || lower.contains("repository not found")
+        || lower.contains("could not read from remote repository")
+        || lower.contains("returned error: 403")
+        || lower.contains("returned error: 401")
 }
 
 fn stop_child(child: &mut std::process::Child) {

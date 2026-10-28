@@ -1,5 +1,18 @@
 import * as monaco from 'monaco-editor/esm/vs/editor/editor.api';
-import 'monaco-editor/esm/vs/editor/edcore.main';
+import 'monaco-editor/esm/vs/editor/browser/coreCommands';
+import 'monaco-editor/esm/vs/editor/browser/widget/codeEditor/codeEditorWidget';
+import 'monaco-editor/esm/vs/editor/browser/widget/diffEditor/diffEditor.contribution';
+import 'monaco-editor/esm/vs/editor/contrib/bracketMatching/browser/bracketMatching';
+import 'monaco-editor/esm/vs/editor/contrib/clipboard/browser/clipboard';
+import 'monaco-editor/esm/vs/editor/contrib/find/browser/findController';
+import 'monaco-editor/esm/vs/editor/contrib/folding/browser/folding';
+import 'monaco-editor/esm/vs/editor/contrib/lineSelection/browser/lineSelection';
+import 'monaco-editor/esm/vs/editor/contrib/multicursor/browser/multicursor';
+import 'monaco-editor/esm/vs/editor/contrib/tokenization/browser/tokenization';
+import 'monaco-editor/esm/vs/editor/contrib/wordHighlighter/browser/wordHighlighter';
+import 'monaco-editor/esm/vs/editor/contrib/wordOperations/browser/wordOperations';
+import 'monaco-editor/esm/vs/editor/contrib/diffEditorBreadcrumbs/browser/contribution';
+import 'monaco-editor/esm/vs/base/browser/ui/codicons/codiconStyles';
 import 'monaco-editor/esm/vs/basic-languages/css/css.contribution';
 import 'monaco-editor/esm/vs/basic-languages/go/go.contribution';
 import 'monaco-editor/esm/vs/basic-languages/html/html.contribution';
@@ -13,11 +26,22 @@ import 'monaco-editor/esm/vs/basic-languages/sql/sql.contribution';
 import 'monaco-editor/esm/vs/basic-languages/typescript/typescript.contribution';
 import 'monaco-editor/esm/vs/basic-languages/xml/xml.contribution';
 import 'monaco-editor/esm/vs/basic-languages/yaml/yaml.contribution';
-import 'monaco-editor/esm/vs/language/json/monaco.contribution';
 import EditorWorker from 'monaco-editor/esm/vs/editor/editor.worker?worker';
-import JsonWorker from 'monaco-editor/esm/vs/language/json/json.worker?worker';
 
-self.MonacoEnvironment = { getWorker: (_moduleId, label) => label === 'json' ? new JsonWorker() : new EditorWorker() };
+self.MonacoEnvironment = { getWorker: () => new EditorWorker() };
+
+monaco.languages.register({ id: 'json', extensions: ['.json', '.jsonc'] });
+monaco.languages.setMonarchTokensProvider('json', {
+  tokenizer: {
+    root: [
+      [/"(?:[^"\\]|\\.)*"(?=\s*:)/, 'type.identifier'],
+      [/"(?:[^"\\]|\\.)*"/, 'string'],
+      [/-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?/, 'number'],
+      [/\b(?:true|false|null)\b/, 'keyword'],
+      [/[{}[\],:]/, 'delimiter'],
+    ],
+  },
+});
 
 monaco.editor.defineTheme('Gitma-dark', {
   base: 'vs-dark',

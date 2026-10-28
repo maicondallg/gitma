@@ -32,12 +32,33 @@ import {
   validateThemeJson,
 } from '../lib/theme';
 
+export interface EditorPreset {
+  id: string;
+  name: string;
+  command: string;
+}
+
+export const EDITOR_PRESETS: EditorPreset[] = [
+  { id: 'default', name: 'Auto-detectar / VS Code', command: 'code' },
+  { id: 'code', name: 'Visual Studio Code', command: 'code' },
+  { id: 'code-insiders', name: 'VS Code Insiders', command: 'code-insiders' },
+  { id: 'cursor', name: 'Cursor', command: 'cursor' },
+  { id: 'zed', name: 'Zed', command: 'zed' },
+  { id: 'subl', name: 'Sublime Text', command: 'subl' },
+  { id: 'idea', name: 'IntelliJ IDEA', command: 'idea' },
+  { id: 'pycharm', name: 'PyCharm', command: 'pycharm' },
+  { id: 'webstorm', name: 'WebStorm', command: 'webstorm' },
+  { id: 'clion', name: 'CLion', command: 'clion' },
+  { id: 'fleet', name: 'Fleet', command: 'fleet' },
+  { id: 'custom', name: 'Personalizado', command: '' },
+];
+
 export interface SettingsModalProps {
   isOpen: boolean;
   onClose: () => void;
 }
 
-type SettingsSection = 'appearance' | 'language' | 'git' | 'terminal' | 'about';
+type SettingsSection = 'appearance' | 'language' | 'git' | 'terminal' | 'editor' | 'about';
 
 export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
   const { t, language, setLanguage, supportedLocales } = useI18n();
@@ -62,12 +83,16 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
   const preferredTerminal = useAppStore((s) => s.preferredTerminal);
   const setPreferredTerminal = useAppStore((s) => s.setPreferredTerminal);
   const openTerminal = useAppStore((s) => s.openTerminal);
+  const preferredEditor = useAppStore((s) => s.preferredEditor);
+  const setPreferredEditor = useAppStore((s) => s.setPreferredEditor);
+  const runOperation = useAppStore((s) => s.runOperation);
   const session = useAppStore((s) => s.session);
   const pullStrategy = useAppStore((s) => s.pullStrategy);
   const setPullStrategy = useAppStore((s) => s.setPullStrategy);
   const mergeStrategy = useAppStore((s) => s.mergeStrategy);
   const setMergeStrategy = useAppStore((s) => s.setMergeStrategy);
   const [customTerminalInput, setCustomTerminalInput] = useState('');
+  const [customEditorInput, setCustomEditorInput] = useState('');
 
   const refreshThemes = () => {
     setThemes(getAllThemes());
@@ -85,11 +110,13 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
       }
       const isPreset = TERMINAL_PRESETS.some((p) => p.id === preferredTerminal && p.id !== 'custom');
       setCustomTerminalInput(isPreset ? '' : (preferredTerminal === 'custom' ? '' : preferredTerminal));
+      const isEditorPreset = EDITOR_PRESETS.some((p) => p.id === preferredEditor && p.id !== 'custom');
+      setCustomEditorInput(isEditorPreset ? '' : (preferredEditor === 'custom' ? '' : preferredEditor));
       setFeedbackNotice(null);
       setEditingTheme(null);
       setShowImportDialog(false);
     }
-  }, [isOpen, preferredTerminal]);
+  }, [isOpen, preferredTerminal, preferredEditor]);
 
   useEffect(() => {
     const handleKey = (e: KeyboardEvent) => {
@@ -267,6 +294,14 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
             >
               <Terminal size={16} />
               <span>{t('terminal.title')}</span>
+            </button>
+            <button
+              type="button"
+              className={`settings-nav-item ${activeSection === 'editor' ? 'active' : ''}`}
+              onClick={() => setActiveSection('editor')}
+            >
+              <Code size={16} />
+              <span>{t('editor.title')}</span>
             </button>
             <button
               type="button"
@@ -617,6 +652,121 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
                   </div>
                   <small className="form-help-text">
                     {t('terminal.customPrompt')}
+                  </small>
+                </div>
+              </div>
+            )}
+
+            {/* SEÇÃO: EDITOR DE CÓDIGO */}
+            {activeSection === 'editor' && (
+              <div className="settings-section">
+                <div className="section-title-row">
+                  <div className="section-title-info">
+                    <h4 className="settings-section-title">{t('editor.settingsTitle')}</h4>
+                    <p className="settings-section-desc">{t('editor.settingsDesc')}</p>
+                  </div>
+                  {session && (
+                    <div className="section-actions-row">
+                      <button
+                        type="button"
+                        className="btn btn-secondary btn-sm"
+                        onClick={() => {
+                          void runOperation('openEditor', [], session.root);
+                          showToast(t('editor.testOpened'));
+                        }}
+                        title={t('editor.testEditor')}
+                      >
+                        <Code size={13} />
+                        <span>{t('editor.testEditor')}</span>
+                      </button>
+                    </div>
+                  )}
+                </div>
+
+                <div className="terminal-settings-grid">
+                  {EDITOR_PRESETS.map((preset) => {
+                    const isSelected =
+                      preset.id === 'custom'
+                        ? preferredEditor === 'custom' || !EDITOR_PRESETS.some((p) => p.id !== 'custom' && p.id === preferredEditor)
+                        : preferredEditor === preset.id;
+                    const label =
+                      preset.id === 'default'
+                        ? t('editor.defaultSystem')
+                        : preset.id === 'custom'
+                        ? t('editor.custom')
+                        : preset.name;
+
+                    const handleSelect = () => {
+                      if (preset.id === 'custom') {
+                        const val = customEditorInput.trim() || 'custom';
+                        setPreferredEditor(val);
+                        document.getElementById('settings-custom-editor')?.focus();
+                        showToast(t('editor.editorChanged', { name: label }));
+                      } else {
+                        setPreferredEditor(preset.id);
+                        showToast(t('editor.editorChanged', { name: label }));
+                      }
+                    };
+
+                    return (
+                      <div
+                        key={preset.id}
+                        className={`terminal-preset-card ${isSelected ? 'is-selected' : ''}`}
+                        onClick={handleSelect}
+                        role="button"
+                        tabIndex={0}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' || e.key === ' ') {
+                            handleSelect();
+                          }
+                        }}
+                      >
+                        <div className="terminal-card-info">
+                          <Code size={15} className="terminal-card-icon" />
+                          <strong className="terminal-card-name">{label}</strong>
+                        </div>
+                        {isSelected && <Check size={16} className="terminal-check-icon" />}
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {/* Opção / Comando personalizado */}
+                <div className="form-group settings-form-group" style={{ marginTop: '20px' }}>
+                  <label htmlFor="settings-custom-editor">
+                    {t('editor.customCommand')}
+                  </label>
+                  <div style={{ display: 'flex', gap: '8px' }}>
+                    <input
+                      id="settings-custom-editor"
+                      type="text"
+                      className="modal-input"
+                      value={customEditorInput}
+                      onChange={(e) => setCustomEditorInput(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' && customEditorInput.trim()) {
+                          setPreferredEditor(customEditorInput.trim());
+                          showToast(t('editor.editorChanged', { name: customEditorInput.trim() }));
+                        }
+                      }}
+                      placeholder={t('editor.customPlaceholder')}
+                    />
+                    <button
+                      type="button"
+                      className="btn btn-primary btn-sm"
+                      disabled={!customEditorInput.trim() || customEditorInput.trim() === preferredEditor}
+                      onClick={() => {
+                        if (customEditorInput.trim()) {
+                          setPreferredEditor(customEditorInput.trim());
+                          showToast(t('editor.editorChanged', { name: customEditorInput.trim() }));
+                        }
+                      }}
+                    >
+                      {t('editor.save')}
+                    </button>
+                  </div>
+                  <small className="form-help-text">
+                    {t('editor.customPrompt')}
                   </small>
                 </div>
               </div>

@@ -56,6 +56,14 @@ export function setLanguage(lang: SupportedLocale): void {
   listeners.forEach((fn) => fn(lang));
 }
 
+const resolvedKeyCache: Record<SupportedLocale, Map<string, string>> = {
+  'pt-BR': new Map(),
+  'en-US': new Map(),
+  es: new Map(),
+};
+
+const PARAM_REGEX = /\{\{(\w+)\}\}|\{(\w+)\}/g;
+
 function resolveNestedKey(obj: unknown, keyPath: string): string | null {
   if (!obj || typeof obj !== 'object') return null;
   const parts = keyPath.split('.');
@@ -71,15 +79,19 @@ function resolveNestedKey(obj: unknown, keyPath: string): string | null {
 }
 
 export function t(key: string, params?: Record<string, string | number>): string {
-  const activeDict = LOCALES_DATA[currentLanguage] ?? LOCALES_DATA['pt-BR'];
-  const fallbackDict = LOCALES_DATA['pt-BR'];
-
-  let text = resolveNestedKey(activeDict, key) ?? resolveNestedKey(fallbackDict, key) ?? key;
+  const cache = resolvedKeyCache[currentLanguage];
+  let text = cache?.get(key);
+  if (text === undefined) {
+    const activeDict = LOCALES_DATA[currentLanguage] ?? LOCALES_DATA['pt-BR'];
+    const fallbackDict = LOCALES_DATA['pt-BR'];
+    text = resolveNestedKey(activeDict, key) ?? resolveNestedKey(fallbackDict, key) ?? key;
+    cache?.set(key, text);
+  }
 
   if (params) {
-    Object.entries(params).forEach(([k, v]) => {
-      text = text.replace(new RegExp(`\\{\\{${k}\\}\\}`, 'g'), String(v));
-      text = text.replace(new RegExp(`\\{${k}\\}`, 'g'), String(v));
+    return text.replace(PARAM_REGEX, (match, k1, k2) => {
+      const k = k1 ?? k2;
+      return Object.prototype.hasOwnProperty.call(params, k) ? String(params[k]) : match;
     });
   }
 

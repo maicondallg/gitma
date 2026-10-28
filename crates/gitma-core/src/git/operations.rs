@@ -110,11 +110,42 @@ pub fn pull_with_strategy(root: &Path, strategy: Option<&str>) -> GitResult<()> 
         _ => mutate(root, &["pull", "--ff-only"]).map(|_| ()),
     }
 }
+fn is_no_upstream_error(err: &GitError) -> bool {
+    let details = err
+        .details
+        .as_deref()
+        .unwrap_or(&err.message)
+        .to_lowercase();
+    details.contains("has no upstream branch")
+        || details.contains("no configured push destination")
+        || details.contains("--set-upstream")
+}
+
 pub fn push(root: &Path) -> GitResult<()> {
-    mutate(root, &["push"]).map(|_| ())
+    match mutate(root, &["push"]) {
+        Ok(_) => Ok(()),
+        Err(err) if is_no_upstream_error(&err) => {
+            mutate(root, &["push", "--set-upstream", "origin", "HEAD"]).map(|_| ())
+        }
+        Err(err) => Err(err),
+    }
 }
 pub fn push_force_with_lease(root: &Path) -> GitResult<()> {
-    mutate(root, &["push", "--force-with-lease"]).map(|_| ())
+    match mutate(root, &["push", "--force-with-lease"]) {
+        Ok(_) => Ok(()),
+        Err(err) if is_no_upstream_error(&err) => mutate(
+            root,
+            &[
+                "push",
+                "--force-with-lease",
+                "--set-upstream",
+                "origin",
+                "HEAD",
+            ],
+        )
+        .map(|_| ()),
+        Err(err) => Err(err),
+    }
 }
 pub fn checkout_branch(root: &Path, branch: &str) -> GitResult<()> {
     let mut trimmed = branch.trim();
@@ -785,10 +816,9 @@ pub fn open_terminal(root: &Path, custom_terminal: Option<&str>) -> GitResult<()
                 if bin == "gnome-terminal" && extra_args.is_empty() {
                     cmd.arg(format!("--working-directory={}", root.display()));
                 }
-                if cmd.spawn().is_ok() {
-                    return Ok(());
-                }
+                let _ = cmd.spawn();
             }
+            return Ok(());
         }
 
         let terminals = [
@@ -828,24 +858,99 @@ pub fn open_terminal(root: &Path, custom_terminal: Option<&str>) -> GitResult<()
     Ok(())
 }
 
-pub fn open_editor(root: &Path, rel_path: Option<&str>) -> GitResult<()> {
+pub fn open_editor(
+    root: &Path,
+    rel_path: Option<&str>,
+    custom_editor: Option<&str>,
+) -> GitResult<()> {
     let target = match rel_path {
-        Some(p) => root.join(p),
-        None => root.to_path_buf(),
+        Some(p) if !p.trim().is_empty() => root.join(p.trim()),
+        _ => root.to_path_buf(),
     };
+    let custom = custom_editor
+        .map(str::trim)
+        .filter(|s| !s.is_empty() && *s != "default");
+
     #[cfg(target_os = "windows")]
     {
+        if let Some(editor) = custom {
+            let _ = std::process::Command::new("cmd")
+                .args(["/c", editor, target.to_str().unwrap_or(".")])
+                .current_dir(root)
+                .spawn();
+            return Ok(());
+        }
         let _ = std::process::Command::new("cmd")
             .args(["/c", "code", target.to_str().unwrap_or(".")])
             .current_dir(root)
-            .spawn();
+            .spawn()
+            .or_else(|_| {
+                std::process::Command::new("cmd")
+                    .args(["/c", "cursor", target.to_str().unwrap_or(".")])
+                    .current_dir(root)
+                    .spawn()
+            });
     }
-    #[cfg(not(target_os = "windows"))]
+
+    #[cfg(target_os = "macos")]
     {
+        if let Some(editor) = custom {
+            let _ = std::process::Command::new("open")
+                .args(["-a", editor])
+                .arg(&target)
+                .spawn();
+            return Ok(());
+        }
         let _ = std::process::Command::new("code")
             .arg(&target)
             .current_dir(root)
-            .spawn();
+            .spawn()
+            .or_else(|_| {
+                std::process::Command::new("cursor")
+                    .arg(&target)
+                    .current_dir(root)
+                    .spawn()
+            });
+    }
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        if let Some(editor) = custom {
+            let parts: Vec<&str> = editor.split_whitespace().collect();
+            if !parts.is_empty() {
+                let bin = parts[0];
+                let extra_args = &parts[1..];
+                let mut cmd = std::process::Command::new(bin);
+                cmd.args(extra_args).arg(&target).current_dir(root);
+                let _ = cmd.spawn();
+            }
+            return Ok(());
+        }
+
+        let mut spawned = false;
+        if let Ok(editor) = std::env::var("VISUAL").or_else(|_| std::env::var("EDITOR")) {
+            if std::process::Command::new(&editor)
+                .arg(&target)
+                .current_dir(root)
+                .spawn()
+                .is_ok()
+            {
+                spawned = true;
+            }
+        }
+        if !spawned {
+            let editors = ["code", "cursor", "zed", "subl", "idea", "gedit", "kate"];
+            for ed in editors {
+                if std::process::Command::new(ed)
+                    .arg(&target)
+                    .current_dir(root)
+                    .spawn()
+                    .is_ok()
+                {
+                    break;
+                }
+            }
+        }
     }
     Ok(())
 }

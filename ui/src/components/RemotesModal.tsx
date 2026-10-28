@@ -7,6 +7,7 @@ import {
   Plus,
   RefreshCw,
   Trash2,
+  UserCheck,
   X,
 } from 'lucide-react';
 import { confirmDialog, getBridge } from '../lib/bridge';
@@ -24,6 +25,9 @@ export function RemotesModal({ isOpen, onClose }: RemotesModalProps) {
   const session = useAppStore((s) => s.session);
   const runOperation = useAppStore((s) => s.runOperation);
   const refresh = useAppStore((s) => s.refresh);
+  const authState = useAppStore((s) => s.authState);
+  const loadAuthState = useAppStore((s) => s.loadAuthState);
+  const setRepoAccount = useAppStore((s) => s.setRepoAccount);
 
   const [remotes, setRemotes] = useState<RemoteEntry[]>([]);
   const [loading, setLoading] = useState(false);
@@ -52,6 +56,7 @@ export function RemotesModal({ isOpen, onClose }: RemotesModalProps) {
     try {
       const res = await bridge.getRemotes(session.sessionId, Date.now());
       setRemotes(res.remotes);
+      void loadAuthState?.(false);
     } catch (err) {
       setError(String(err));
     } finally {
@@ -172,6 +177,58 @@ export function RemotesModal({ isOpen, onClose }: RemotesModalProps) {
         </header>
 
         <div className="remotes-modal-body">
+          {authState && (
+            <div
+              style={{
+                background: 'var(--surface)',
+                border: '1px solid var(--border)',
+                borderRadius: '6px',
+                padding: '10px 12px',
+                marginBottom: '14px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: '12px',
+                flexWrap: 'wrap',
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0 }}>
+                <UserCheck size={15} style={{ color: 'var(--accent)', flexShrink: 0 }} />
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                  <span style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text)' }}>
+                    Conta / Credencial para Push & Fetch
+                  </span>
+                  <span style={{ fontSize: '11px', color: 'var(--muted)' }}>
+                    {authState.selectedId === 'auto'
+                      ? `Automático (Em uso: ${authState.resolvedLabel || 'padrão'})`
+                      : authState.selectedId === 'system'
+                      ? 'Padrão global do sistema'
+                      : `Manual (${authState.resolvedLabel || authState.selectedId})`}
+                  </span>
+                </div>
+              </div>
+              <select
+                className="input"
+                value={authState.selectedId}
+                onChange={(e) => void setRepoAccount?.(e.target.value)}
+                style={{ fontSize: '12px', padding: '4px 8px', minWidth: '190px' }}
+                aria-label="Selecionar conta para este repositório"
+              >
+                <option value="auto">
+                  Automático ({authState.resolvedLabel || 'Detectar'})
+                </option>
+                {authState.accounts.map((acc) => (
+                  <option key={acc.id} value={acc.id}>
+                    {acc.kind === 'github'
+                      ? `GitHub: ${acc.label}${acc.sshKeyName ? ` (SSH: ${acc.sshKeyName})` : ''}`
+                      : `SSH: ${acc.sshKeyName || acc.label}`}
+                  </option>
+                ))}
+                <option value="system">Padrão do Sistema</option>
+              </select>
+            </div>
+          )}
+
           <div className="remotes-toolbar">
             <span className="remotes-count-badge">
               {remotes.length} {remotes.length === 1 ? 'remote configurado' : 'remotes configurados'}

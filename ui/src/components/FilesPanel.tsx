@@ -29,21 +29,29 @@ import { useI18n } from '../i18n';
 import type { Area, FileEntry } from '../lib/types';
 import { FileContextMenu } from './FileContextMenu';
 import { DirContextMenu } from './DirContextMenu';
+import { FileExplorer } from './FileExplorer';
 import './Lists.css';
 
+const fullDateFormatter = new Intl.DateTimeFormat('pt-BR', {
+  day: '2-digit',
+  month: 'long',
+  year: 'numeric',
+});
+const fullTimeFormatter = new Intl.DateTimeFormat('pt-BR', {
+  hour: '2-digit',
+  minute: '2-digit',
+  second: '2-digit',
+});
+const fullDateCache = new Map<number, string>();
+
 export function formatFullDate(timestamp: number): string {
+  const cached = fullDateCache.get(timestamp);
+  if (cached !== undefined) return cached;
   const d = new Date(timestamp * 1000);
-  const dateStr = d.toLocaleDateString('pt-BR', {
-    day: '2-digit',
-    month: 'long',
-    year: 'numeric',
-  });
-  const timeStr = d.toLocaleTimeString('pt-BR', {
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-  });
-  return `${dateStr} às ${timeStr}`;
+  const formatted = `${fullDateFormatter.format(d)} às ${fullTimeFormatter.format(d)}`;
+  if (fullDateCache.size > 500) fullDateCache.clear();
+  fullDateCache.set(timestamp, formatted);
+  return formatted;
 }
 
 const FLAT_ROW_HEIGHT = 36;
@@ -137,8 +145,8 @@ export function buildTree(files: FileEntry[]): FileTreeNode[] {
       else leaves.push(node);
     }
 
-    dirs.sort((a, b) => a.name.localeCompare(b.name));
-    leaves.sort((a, b) => a.name.localeCompare(b.name));
+    dirs.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+    leaves.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
 
     for (const dir of dirs) {
       const converted = convert(dir.children!, depth + 1);
@@ -151,7 +159,9 @@ export function buildTree(files: FileEntry[]): FileTreeNode[] {
         children: converted.nodes,
         descendantFiles: converted.allFiles,
       });
-      allFiles.push(...converted.allFiles);
+      for (let i = 0; i < converted.allFiles.length; i++) {
+        allFiles.push(converted.allFiles[i]);
+      }
     }
 
     for (const leaf of leaves) {
@@ -513,7 +523,7 @@ function FileGroup({
   onContextMenu?: (e: React.MouseEvent, file: FileEntry) => void;
   onDirContextMenu?: (e: React.MouseEvent, node: FileTreeNode, descendantFiles: FileEntry[], area: Area) => void;
 }) {
-  const treeNodes = useMemo(() => buildTree(files), [files]);
+  const treeNodes = useMemo(() => (isTree ? buildTree(files) : []), [isTree, files]);
   const visibleItems = useMemo(
     () => (isTree ? flattenTree(treeNodes, collapsed) : []),
     [isTree, treeNodes, collapsed]
@@ -705,7 +715,7 @@ function VirtualHistoryFiles({
   onContextMenu?: (e: React.MouseEvent, file: FileEntry) => void;
   onDirContextMenu?: (e: React.MouseEvent, node: FileTreeNode, descendantFiles: FileEntry[], area: Area) => void;
 }) {
-  const treeNodes = useMemo(() => buildTree(files), [files]);
+  const treeNodes = useMemo(() => (isTree ? buildTree(files) : []), [isTree, files]);
   const visibleItems = useMemo(
     () => (isTree ? flattenTree(treeNodes, collapsed) : []),
     [isTree, treeNodes, collapsed]
@@ -834,6 +844,8 @@ export const FilesPanel = memo(function FilesPanel() {
   const setFileViewMode = useAppStore((state) => state.setFileViewMode);
   const activePane = useAppStore((state) => state.activePane);
   const setActivePane = useAppStore((state) => state.setActivePane);
+  const filesTab = useAppStore((state) => state.filesTab);
+  const setFilesTab = useAppStore((state) => state.setFilesTab);
   const openInBrowser = useAppStore((state) => state.openInBrowser);
   const restoreCommitFile = useAppStore((state) => state.restoreCommitFile);
   const setBlameOpen = useAppStore((state) => state.setBlameOpen);
@@ -970,20 +982,33 @@ export const FilesPanel = memo(function FilesPanel() {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.defaultPrevented || e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
       if (activePane !== 'files') return;
+      if (document.querySelector('.modal-backdrop')) return;
 
       const activeElement = document.activeElement;
-      const tagName = activeElement?.tagName?.toLowerCase();
-      if (tagName === 'input' || tagName === 'textarea' || tagName === 'select') return;
-      if (activeElement?.getAttribute('contenteditable') === 'true') return;
+      if (
+        activeElement &&
+        !(activeElement.closest?.('.monaco-editor') && !activeElement.closest?.('.find-widget'))
+      ) {
+        const tagName = activeElement.tagName?.toLowerCase();
+        if (tagName === 'input' || tagName === 'textarea' || tagName === 'select') return;
+        if (activeElement.getAttribute?.('contenteditable') === 'true') return;
+      }
+
+      if (e.key === 'ArrowLeft' || e.key === 'h') {
+        e.preventDefault();
+        setActivePane('history');
+        return;
+      }
+
+      const currentTab = useAppStore.getState().filesTab;
+      if (currentTab === 'explorer') return;
+
       if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
         if (e.repeat && !pressedArrows.has(e.key)) return;
         pressedArrows.add(e.key);
       }
 
-      if (e.key === 'ArrowLeft') {
-        e.preventDefault();
-        setActivePane('history');
-      } else if (e.key === 'ArrowDown') {
+      if (e.key === 'ArrowDown') {
         e.preventDefault();
         if (document.activeElement instanceof HTMLElement) {
           document.activeElement.blur();
@@ -1058,7 +1083,7 @@ export const FilesPanel = memo(function FilesPanel() {
       previewDeferred = false;
       if (previewTimer !== null) clearTimeout(previewTimer);
     };
-  }, [activePane, visibleFiles, selectFile, setActivePane, local, runOperation]);
+  }, [activePane, filesTab, visibleFiles, selectFile, setActivePane, local, runOperation]);
 
   const handleFileContextMenu = useCallback((e: React.MouseEvent, file: FileEntry) => {
     e.preventDefault();
@@ -1098,15 +1123,38 @@ export const FilesPanel = memo(function FilesPanel() {
   return (
     <section
       className={`lists-panel lists-files-panel ${activePane === 'files' ? 'is-pane-active' : ''}`}
-      aria-label={t('files.localChanges')}
+      aria-label={filesTab === 'explorer' ? t('files.explorer') : (local ? t('files.localChanges') : t('files.commitFiles'))}
       onClick={() => setActivePane('files')}
     >
-      <header className="lists-panel-header">
-        <h2>{local ? t('files.localChanges') : t('files.commitFiles')}</h2>
-        {local && <span className="lists-header-count">{totalCount}</span>}
+      <header className="lists-panel-header files-panel-header-with-tabs">
+        <div className="files-mode-tabs" role="tablist" aria-label="Abas de arquivos">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={filesTab !== 'explorer'}
+            className={`files-mode-tab ${filesTab !== 'explorer' ? 'active' : ''}`}
+            onClick={() => setFilesTab('changes')}
+          >
+            <span>{local ? t('files.localChanges') : t('files.commitFiles')}</span>
+            {local && totalCount > 0 && <span className="lists-header-count">{totalCount}</span>}
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={filesTab === 'explorer'}
+            className={`files-mode-tab ${filesTab === 'explorer' ? 'active' : ''}`}
+            onClick={() => setFilesTab('explorer')}
+          >
+            <span>{t('files.explorer')}</span>
+          </button>
+        </div>
       </header>
 
-      {context.kind === 'compare' && (
+      {filesTab === 'explorer' ? (
+        <FileExplorer />
+      ) : (
+        <>
+          {context.kind === 'compare' && (
         <div className="commit-info-card compare-info-card" aria-label="Detalhes da comparação">
           <div className="commit-info-header">
             <div className="commit-info-subject" style={{ fontWeight: 600, display: 'flex', alignItems: 'center', gap: '6px' }}>
@@ -1331,6 +1379,8 @@ export const FilesPanel = memo(function FilesPanel() {
           onOpenEditor={(p) => void runOperation('openEditor', [], p)}
           onRevealFile={(p) => void runOperation('revealFile', [], p)}
         />
+      )}
+        </>
       )}
     </section>
   );

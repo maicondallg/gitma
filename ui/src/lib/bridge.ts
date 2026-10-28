@@ -1,6 +1,6 @@
 import type {
   BlameResult, CommitFiles, Context, FileEntry, FileHistoryResult, History, Operation, OperationResult, Preview,
-  ReflogResult, RemotesResult, RepoChanged, Session, Snapshot,
+  ReflogResult, RemotesResult, RepoAuthState, RepoChanged, RepoTreeResult, Session, Snapshot,
 } from './types';
 import { invoke as invokeNative, isTauri } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
@@ -25,6 +25,9 @@ export interface BridgeAdapter {
   getFileHistoryPreview(sessionId: string, requestId: number, oid: string, path: string): Promise<Preview>;
   getReflog(sessionId: string, requestId: number, limit?: number): Promise<ReflogResult>;
   getRemotes?(sessionId: string, requestId: number): Promise<RemotesResult>;
+  getRepoFiles?(sessionId: string, requestId: number, commitOid?: string | null): Promise<RepoTreeResult>;
+  getAuthState?(sessionId: string, forceRefresh?: boolean): Promise<RepoAuthState>;
+  setRepoAccount?(sessionId: string, accountId: string): Promise<RepoAuthState>;
   onRepoChanged(listener: (event: RepoChanged) => void): Promise<() => void>;
 }
 
@@ -69,6 +72,12 @@ const nativeBridge: BridgeAdapter = {
     invoke('get_reflog', { sessionId, requestId, limit: limit ?? null }),
   getRemotes: (sessionId, requestId) =>
     invoke('get_remotes', { sessionId, requestId }),
+  getRepoFiles: (sessionId, requestId, commitOid) =>
+    invoke('get_repo_files', { sessionId, requestId, commitOid: commitOid ?? null }),
+  getAuthState: (sessionId, forceRefresh) =>
+    invoke('get_auth_state', { sessionId, forceRefresh: forceRefresh ?? false }),
+  setRepoAccount: (sessionId, accountId) =>
+    invoke('set_repo_account', { sessionId, accountId }),
   async onRepoChanged(listener) {
     if (!isTauri()) return () => undefined;
     return listen<RepoChanged>('repo-changed', (event) => listener(event.payload));

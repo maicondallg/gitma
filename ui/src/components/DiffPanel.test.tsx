@@ -33,6 +33,8 @@ const { monacoMock } = vi.hoisted(() => {
           getVisibleRanges: vi.fn(() => [{ startLineNumber: 1, endLineNumber: 2 }]),
           getTopForLineNumber: vi.fn((line: number) => line * 20),
           getScrollTop: vi.fn(() => 0),
+          setScrollTop: vi.fn(),
+          getScrollHeight: vi.fn(() => 1200),
           getOption: vi.fn(() => 20),
           onDidScrollChange: vi.fn(() => ({ dispose: vi.fn() })),
           onDidLayoutChange: vi.fn(() => ({ dispose: vi.fn() })),
@@ -385,5 +387,123 @@ describe('DiffPanel header e botões de ação', () => {
     expect(row).toBeInTheDocument();
     expect(row.style.position).toBe('absolute');
     expect(row.style.top).toBe('20px');
+  });
+
+  it('suporta atalhos estilo tig (j/k, d/u, g/G, n/p, c, v, f, Ctrl+Alt+S) para rolar e navegar no documento', () => {
+    const runOperationMock = vi.fn().mockResolvedValue(undefined);
+    let scrollPos = 100;
+    const setScrollTopSpy = vi.fn((val: number) => {
+      scrollPos = val;
+    });
+    const revealLineSpy = vi.fn();
+
+    const createDiffEditor = monacoMock.editor.createDiffEditor.getMockImplementation()!;
+    monacoMock.editor.createDiffEditor.mockImplementationOnce(() => {
+      const instance = createDiffEditor();
+      const mod = instance.getModifiedEditor();
+      mod.getScrollTop = vi.fn(() => scrollPos);
+      mod.setScrollTop = setScrollTopSpy;
+      mod.getScrollHeight = vi.fn(() => 1500);
+      mod.revealLineInCenter = revealLineSpy;
+      instance.getModifiedEditor.mockReturnValue(mod);
+      return instance;
+    });
+
+    useAppStore.setState({
+      selectedFile: {
+        id: 'f1',
+        name: 'test.rs',
+        directory: 'src',
+        pathDisplay: 'src/test.rs',
+        oldPathDisplay: null,
+        status: 'modified',
+        area: 'unstaged',
+      },
+      preview: {
+        sessionId: 's1',
+        requestId: 1,
+        fileId: 'f1',
+        version: 'v1',
+        kind: 'text',
+        original: 'fn a() {}\n',
+        modified: 'fn a() {}\nfn b() {}\n',
+        message: null,
+        hunks: [
+          {
+            id: 'hunk-0',
+            header: '@@ -1,1 +1,2 @@',
+            oldStart: 1,
+            oldLines: 1,
+            newStart: 1,
+            newLines: 2,
+            patch: 'patch-0',
+          },
+          {
+            id: 'hunk-1',
+            header: '@@ -20,1 +21,2 @@',
+            oldStart: 20,
+            oldLines: 1,
+            newStart: 21,
+            newLines: 2,
+            patch: 'patch-1',
+          },
+        ],
+      },
+      runOperation: runOperationMock,
+      compactDiff: false,
+      diffMode: 'unified',
+      expandedDiff: false,
+    });
+
+    render(<DiffPanel />);
+
+    // j: desce 60px (100 -> 160)
+    fireEvent.keyDown(window, { key: 'j' });
+    expect(setScrollTopSpy).toHaveBeenLastCalledWith(160);
+
+    // k: sobe 60px (160 -> 100)
+    fireEvent.keyDown(window, { key: 'k' });
+    expect(setScrollTopSpy).toHaveBeenLastCalledWith(100);
+
+    // d: desce meia página
+    fireEvent.keyDown(window, { key: 'd' });
+    expect(scrollPos).toBeGreaterThan(160);
+
+    // u: sobe meia página
+    const beforeUp = scrollPos;
+    fireEvent.keyDown(window, { key: 'u' });
+    expect(scrollPos).toBeLessThan(beforeUp);
+
+    // G: vai para o final (1500)
+    fireEvent.keyDown(window, { key: 'G', shiftKey: true });
+    expect(setScrollTopSpy).toHaveBeenLastCalledWith(1500);
+
+    // g: vai para o topo (0)
+    fireEvent.keyDown(window, { key: 'g' });
+    expect(setScrollTopSpy).toHaveBeenLastCalledWith(0);
+
+    // n: próximo hunk (hunk-1 -> linha 21)
+    fireEvent.keyDown(window, { key: 'n' });
+    expect(revealLineSpy).toHaveBeenLastCalledWith(21);
+
+    // p: hunk anterior (hunk-0 -> linha 1)
+    fireEvent.keyDown(window, { key: 'p' });
+    expect(revealLineSpy).toHaveBeenLastCalledWith(1);
+
+    // Ctrl+Alt+S: prepara o hunk atual (patch-0)
+    fireEvent.keyDown(window, { key: 's', ctrlKey: true, altKey: true });
+    expect(runOperationMock).toHaveBeenCalledWith('stageHunk', [], 'patch-0');
+
+    // c: alterna compactDiff
+    fireEvent.keyDown(window, { key: 'c' });
+    expect(useAppStore.getState().compactDiff).toBe(true);
+
+    // v: alterna diffMode (unified -> split)
+    fireEvent.keyDown(window, { key: 'v' });
+    expect(useAppStore.getState().diffMode).toBe('split');
+
+    // f: alterna tela cheia (expandedDiff)
+    fireEvent.keyDown(window, { key: 'f' });
+    expect(useAppStore.getState().expandedDiff).toBe(true);
   });
 });

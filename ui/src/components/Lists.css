@@ -1898,3 +1898,248 @@
 .dir-context-menu {
   min-width: 220px;
 }
+
+/* Files Mode Tabs (Alterações / Explorador) */
+.files-panel-header-with-tabs {
+  padding: 0 8px;
+}
+
+.files-mode-tabs {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  background: var(--bg);
+  padding: 2px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  width: 100%;
+}
+
+.files-mode-tab {
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-size: 11.5px;
+  font-weight: 550;
+  color: var(--muted);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  user-select: none;
+  white-space: nowrap;
+}
+
+.files-mode-tab:hover {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.files-mode-tab.active {
+  background: var(--raised);
+  color: var(--text);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+}
+
+.files-mode-tab .lists-header-count {
+  font-size: 10px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  line-height: 1.2;
+}
+
+/* File Explorer */
+.file-explorer {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--surface);
+}
+
+.file-explorer-search {
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+  flex-shrink: 0;
+}
+
+.file-explorer-search-input-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+  width: 100%;
+}
+
+.file-explorer-search-icon {
+  position: absolute;
+  left: 8px;
+  color: var(--muted);
+  pointer-events: none;
+}
+
+.file-explorer-search-input {
+  width: 100%;
+  height: 27px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0 24px 0 26px;
+  font-size: 11.5px;
+  color: var(--text);
+  outline: none;
+  box-sizing: border-box;
+  transition: border-color 0.15s ease;
+}
+
+.file-explorer-search-input:focus {
+  border-color: var(--accent, #3b82f6);
+}
+
+.file-explorer-clear-btn {
+  position: absolute;
+  right: 6px;
+  background: none;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  padding: 2px;
+  border-radius: 2px;
+}
+
+.file-explorer-clear-btn:hover {
+  color: var(--text);
+}
+
+.file-explorer-toolbar {
+  min-height: 30px;
+  padding: 3px 10px;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  border-bottom: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 11px;
+  background: var(--surface);
+  flex-shrink: 0;
+}
+
+.file-explorer-count {
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.file-explorer-actions {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex-shrink: 0;
+}
+
+.file-explorer-btn {
+  width: 22px;
+  height: 20px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  padding: 0;
+  transition: all 0.15s ease;
+}
+
+.file-explorer-btn:hover {
+  background: var(--raised);
+  color: var(--text);
+}
+
+.file-explorer-scope-selector {
+  display: flex;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.file-explorer-scope-btn {
+  padding: 1px 6px;
+  height: 20px;
+  font-size: 10px;
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  transition: all 0.15s ease;
+}
+
+.file-explorer-scope-btn + .file-explorer-scope-btn {
+  border-left: 1px solid var(--border);
+}
+
+.file-explorer-scope-btn:hover,
+.file-explorer-scope-btn.active {
+  background: var(--raised);
+  color: var(--text);
+}
+
+.file-explorer-scope-btn code {
+  font-family: monospace;
+  font-size: 9.5px;
+}
+
+.file-explorer-scroll {
+  overflow-y: auto;
+  overflow-x: hidden !important;
+  scrollbar-gutter: stable;
+  min-height: 0;
+  flex: 1;
+  outline: none;
+  contain: layout;
+}
+
+.file-explorer-item-actions {
+  display: none;
+  align-items: center;
+  gap: 2px;
+  margin-left: auto;
+  padding-left: 6px;
+  flex-shrink: 0;
+}
+
+.lists-file-row:hover .file-explorer-item-actions {
+  display: flex;
+}
+
+.file-explorer-action-btn {
+  width: 20px;
+  height: 20px;
+  display: grid;
+  place-items: center;
+  border: none;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  padding: 0;
+  transition: all 0.15s ease;
+}
+
+.file-explorer-action-btn:hover {
+  background: var(--raised);
+  color: var(--text);
+}
+

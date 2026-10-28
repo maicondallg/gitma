@@ -24,6 +24,7 @@ import {
   XCircle,
 } from 'lucide-react';
 import { useAppStore, loadSavedGroupNames } from '../store/app';
+import { AccountSelector } from './AccountSelector';
 import { useI18n } from '../i18n';
 import type { TabItem } from '../lib/types';
 import logoSvg from '../../logo.svg';
@@ -78,7 +79,9 @@ function saveCollapsedColors(colors: Set<string>): void {
 export const TabBar = memo(function TabBar() {
   const tabs = useAppStore((s) => s.tabs);
   const activeTabId = useAppStore((s) => s.activeTabId);
-  const snapshot = useAppStore((s) => s.snapshot);
+  const activeBranch = useAppStore((s) => s.snapshot?.branch ?? null);
+  const ahead = useAppStore((s) => s.snapshot?.ahead ?? 0);
+  const behind = useAppStore((s) => s.snapshot?.behind ?? 0);
   const openHome = useAppStore((s) => s.openHome);
   const switchTab = useAppStore((s) => s.switchTab);
   const closeTab = useAppStore((s) => s.closeTab);
@@ -725,7 +728,7 @@ export const TabBar = memo(function TabBar() {
 
               {group.tabs.map(({ tab, index }) => {
                 const isActive = tab.id === activeTabId;
-                const branch = isActive ? snapshot?.branch : tab.snapshot?.branch;
+                const branch = isActive ? activeBranch : tab.snapshot?.branch;
                 const isSliding = slidingIndex === index;
 
                 return (
@@ -899,13 +902,13 @@ export const TabBar = memo(function TabBar() {
       <div className="tab-bar-right-actions">
         {activeTabId !== 'home' && (
           <>
-            {snapshot && (snapshot.ahead ?? 0) > 0 && (
+            {ahead > 0 && (
               <button
                 type="button"
                 className="tab-bar-badge-btn ahead-badge"
                 onClick={() => void runOperation('push')}
-                title={t('sync.pushAhead', { count: snapshot.ahead ?? 0 })}
-                aria-label={t('sync.pushAhead', { count: snapshot.ahead ?? 0 })}
+                title={t('sync.pushAhead', { count: ahead })}
+                aria-label={t('sync.pushAhead', { count: ahead })}
                 style={{
                   display: 'inline-flex',
                   alignItems: 'center',
@@ -921,16 +924,16 @@ export const TabBar = memo(function TabBar() {
                 }}
               >
                 <ArrowUp size={12} />
-                <span>{snapshot.ahead}</span>
+                <span>{ahead}</span>
               </button>
             )}
-            {snapshot && (snapshot.behind ?? 0) > 0 && (
+            {behind > 0 && (
               <button
                 type="button"
                 className="tab-bar-badge-btn behind-badge"
                 onClick={() => void runOperation('pull')}
-                title={t('sync.pullBehind', { count: snapshot.behind ?? 0 })}
-                aria-label={t('sync.pullBehind', { count: snapshot.behind ?? 0 })}
+                title={t('sync.pullBehind', { count: behind })}
+                aria-label={t('sync.pullBehind', { count: behind })}
                 style={{
                   display: 'inline-flex',
                   alignItems: 'center',
@@ -946,9 +949,10 @@ export const TabBar = memo(function TabBar() {
                 }}
               >
                 <ArrowDown size={12} />
-                <span>{snapshot.behind}</span>
+                <span>{behind}</span>
               </button>
             )}
+            <AccountSelector />
             <button
               type="button"
               className="tab-bar-action-btn"

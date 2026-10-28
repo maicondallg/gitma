@@ -301,7 +301,10 @@ const GraphLanes = memo(function GraphLanes({
 
 export const GraphPanel = memo(function GraphPanel() {
   const history = useAppStore((state) => state.history);
-  const snapshot = useAppStore((state) => state.snapshot);
+  const currentBranch = useAppStore((state) => state.snapshot?.branch ?? null);
+  const totalLocalChanges = useAppStore((state) =>
+    state.snapshot ? state.snapshot.staged.length + state.snapshot.unstaged.length : 0
+  );
   const context = useAppStore((state) => state.context);
   const selectLocal = useAppStore((state) => state.selectLocal);
   const selectCommit = useAppStore((state) => state.selectCommit);
@@ -309,10 +312,6 @@ export const GraphPanel = memo(function GraphPanel() {
   const runOperation = useAppStore((state) => state.runOperation);
   const activePane = useAppStore((state) => state.activePane);
   const setActivePane = useAppStore((state) => state.setActivePane);
-  const commitFiles = useAppStore((state) => state.commitFiles);
-  const selectedFile = useAppStore((state) => state.selectedFile);
-  const selectFile = useAppStore((state) => state.selectFile);
-  const fileViewMode = useAppStore((state) => state.fileViewMode);
   const setCommitMessage = useAppStore((state) => state.setCommitMessage);
   const historyScope = useAppStore((state) => state.historyScope);
   const setHistoryScope = useAppStore((state) => state.setHistoryScope);
@@ -595,11 +594,17 @@ export const GraphPanel = memo(function GraphPanel() {
 
       if (e.defaultPrevented || e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
       if (activePane !== 'history') return;
+      if (document.querySelector('.modal-backdrop')) return;
 
       const activeElement = document.activeElement;
-      const tagName = activeElement?.tagName?.toLowerCase();
-      if (tagName === 'input' || tagName === 'textarea' || tagName === 'select') return;
-      if (activeElement?.getAttribute('contenteditable') === 'true') return;
+      if (
+        activeElement &&
+        !(activeElement.closest?.('.monaco-editor') && !activeElement.closest?.('.find-widget'))
+      ) {
+        const tagName = activeElement.tagName?.toLowerCase();
+        if (tagName === 'input' || tagName === 'textarea' || tagName === 'select') return;
+        if (activeElement.getAttribute?.('contenteditable') === 'true') return;
+      }
       if (contextMenu || refPopover || newBranchModal.isOpen || resetModal || createTagModal.isOpen) return;
 
       const currentIndex =
@@ -648,19 +653,21 @@ export const GraphPanel = memo(function GraphPanel() {
             }
           }
         }
-      } else if (e.key === 'ArrowRight') {
+      } else if (e.key === 'ArrowRight' || e.key === 'l') {
         e.preventDefault();
         setActivePane('files');
+        const store = useAppStore.getState();
+        if (store.filesTab === 'explorer') return;
         const rawFiles =
           context.kind === 'commit'
-            ? commitFiles
-            : [...(snapshot?.staged ?? []), ...(snapshot?.unstaged ?? [])];
+            ? store.commitFiles
+            : [...(store.snapshot?.staged ?? []), ...(store.snapshot?.unstaged ?? [])];
         const filesToPick =
-          fileViewMode === 'tree'
+          store.fileViewMode === 'tree'
             ? flattenTree(buildTree(rawFiles), new Set()).filter((n) => !n.isDir && n.file).map((n) => n.file!)
             : rawFiles;
-        if (filesToPick.length > 0 && (!selectedFile || !filesToPick.some((f) => f.id === selectedFile.id))) {
-          void selectFile(filesToPick[0]);
+        if (filesToPick.length > 0 && (!store.selectedFile || !filesToPick.some((f) => f.id === store.selectedFile!.id))) {
+          void store.selectFile(filesToPick[0]);
         }
       }
     };
@@ -683,16 +690,11 @@ export const GraphPanel = memo(function GraphPanel() {
     resetModal,
     createTagModal.isOpen,
     setActivePane,
-    commitFiles,
-    snapshot,
-    selectedFile,
-    selectFile,
-    fileViewMode,
   ]);
 
-  const stagedCount = snapshot?.staged.length ?? 0;
-  const unstagedCount = snapshot?.unstaged.length ?? 0;
-  const totalLocalChanges = stagedCount + unstagedCount;
+  const isLightTheme =
+    typeof document !== 'undefined' &&
+    document.documentElement.getAttribute('data-theme-type') === 'light';
 
   const renderHistoryRow = useCallback(
     (item: VirtualItem) => {
@@ -761,7 +763,7 @@ export const GraphPanel = memo(function GraphPanel() {
       if (!row) return null;
       const geom = geometryList[rowIndex] ?? { upperLanes: [], passingLanes: [] };
       const commit = row.commit;
-      const parsedRefs = parseRefs(commit.refs, snapshot?.branch ?? null);
+      const parsedRefs = commit.refs.length > 0 ? parseRefs(commit.refs, currentBranch) : [];
       const isSelected =
         (context.kind === 'commit' && context.oid === commit.oid) ||
         (context.kind === 'compare' && (context.baseOid === commit.oid || context.targetOid === commit.oid)) ||
@@ -769,9 +771,7 @@ export const GraphPanel = memo(function GraphPanel() {
       const visibleRefs = parsedRefs.slice(0, 2);
       const overflowRefs = parsedRefs.slice(2);
       const laneColor = colourFor(row.lane);
-      const isLight =
-        typeof document !== 'undefined' &&
-        document.documentElement.getAttribute('data-theme-type') === 'light';
+      const isLight = isLightTheme;
 
       return (
         <button
@@ -1012,8 +1012,7 @@ export const GraphPanel = memo(function GraphPanel() {
           <div className="lists-col-date" style={{ width: `${dateWidth}px` }}>
             <time
               className="lists-graph-date"
-              dateTime={new Date(commit.timestamp * 1000).toISOString()}
-              title={new Date(commit.timestamp * 1000).toLocaleString('pt-BR')}
+              title={formatCompactDate(commit.timestamp)}
             >
               {formatDateOnly(commit.timestamp)}
             </time>
@@ -1031,7 +1030,8 @@ export const GraphPanel = memo(function GraphPanel() {
       history?.laneCount,
       filteredRows,
       geometryList,
-      snapshot?.branch,
+      currentBranch,
+      isLightTheme,
       compareBaseOid,
       copiedOid,
       setActivePane,
@@ -1232,7 +1232,7 @@ export const GraphPanel = memo(function GraphPanel() {
           y={refPopover.y}
           refs={refPopover.refs}
           laneColor={refPopover.laneColor}
-          currentBranch={snapshot?.branch}
+          currentBranch={currentBranch}
           activeRefName={
             contextMenu && contextMenu.commitOid === refPopover.commitOid
               ? (contextMenu.tagName ?? contextMenu.branchName)
@@ -1271,7 +1271,7 @@ export const GraphPanel = memo(function GraphPanel() {
           isCurrentBranch={contextMenu.isCurrentBranch}
           isRemoteBranch={contextMenu.isRemoteBranch}
           isStash={contextMenu.isStash}
-          currentBranchName={snapshot?.branch}
+          currentBranchName={currentBranch}
           commitOid={contextMenu.commitOid}
           onClose={() => setContextMenu(null)}
           onCompareWith={(oid) => {
@@ -1302,7 +1302,7 @@ export const GraphPanel = memo(function GraphPanel() {
           }}
           onMergeSquash={(branch) => {
             setRefPopover(null);
-            if (window.confirm(t('history.squashConfirm', { branch, target: snapshot?.branch ?? 'HEAD' }))) {
+            if (window.confirm(t('history.squashConfirm', { branch, target: currentBranch ?? 'HEAD' }))) {
               void runOperation('mergeSquash', [], branch);
             }
           }}
@@ -1311,7 +1311,7 @@ export const GraphPanel = memo(function GraphPanel() {
             if (
               window.confirm(
                 t('history.rebaseConfirm', {
-                  branch: snapshot?.branch ?? 'HEAD',
+                  branch: currentBranch ?? 'HEAD',
                   target: target.length === 40 ? target.slice(0, 7) : target,
                 })
               )
@@ -1447,28 +1447,32 @@ export const GraphPanel = memo(function GraphPanel() {
         />
       )}
 
-      <CreateTagModal
-        isOpen={createTagModal.isOpen}
-        commitOid={createTagModal.commitOid}
-        onClose={() => setCreateTagModal({ isOpen: false, commitOid: '' })}
-        onSubmit={(params) =>
-          void runOperation('createTag', [], JSON.stringify(params))
-        }
-      />
+      {createTagModal.isOpen && (
+        <CreateTagModal
+          isOpen={createTagModal.isOpen}
+          commitOid={createTagModal.commitOid}
+          onClose={() => setCreateTagModal({ isOpen: false, commitOid: '' })}
+          onSubmit={(params) =>
+            void runOperation('createTag', [], JSON.stringify(params))
+          }
+        />
+      )}
 
-      <NewBranchModal
-        isOpen={newBranchModal.isOpen}
-        startPoint={newBranchModal.startPoint}
-        onClose={() => setNewBranchModal({ isOpen: false })}
-        onSubmit={(params) => void runOperation('createBranch', [], JSON.stringify(params))}
-      />
+      {newBranchModal.isOpen && (
+        <NewBranchModal
+          isOpen={newBranchModal.isOpen}
+          startPoint={newBranchModal.startPoint}
+          onClose={() => setNewBranchModal({ isOpen: false })}
+          onSubmit={(params) => void runOperation('createBranch', [], JSON.stringify(params))}
+        />
+      )}
 
       {resetModal?.isOpen && (
         <ResetModal
           isOpen={resetModal.isOpen}
           commitOid={resetModal.commitOid}
           commitSubject={resetModal.commitSubject}
-          currentBranchName={snapshot?.branch}
+          currentBranchName={currentBranch}
           onClose={() => setResetModal(null)}
           onConfirm={(mode) => {
             void runOperation('reset', [], JSON.stringify({ commitOid: resetModal.commitOid, mode }));

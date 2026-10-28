@@ -1,5 +1,4 @@
 import { getBridge } from './lib/bridge';
-import { installFixtureAdapter } from './lib/fixtures';
 import { applyTheme, getActiveThemeId, getThemeById } from './lib/theme';
 import { getLanguage, setLanguage } from './i18n';
 import { useAppStore } from './store/app';
@@ -10,6 +9,15 @@ export async function initializeApplication() {
     applyTheme(getThemeById(getActiveThemeId()));
     setLanguage(getLanguage());
   } catch {}
+  // Preload DiffPanel/Monaco chunk in idle time so it is warm when needed
+  if (typeof window !== 'undefined') {
+    const preload = () => { void import('./components/DiffPanel').catch(() => {}); };
+    if ('requestIdleCallback' in window) {
+      window.requestIdleCallback(preload, { timeout: 1500 });
+    } else {
+      setTimeout(preload, 200);
+    }
+  }
   const params = new URLSearchParams(window.location.search);
   let repo = params.get('repo');
   let fixture = params.get('fixture');
@@ -19,6 +27,7 @@ export async function initializeApplication() {
     fixture = options?.fixture ?? null;
   }
   if (fixture) {
+    const { installFixtureAdapter } = await import('./lib/fixtures');
     installFixtureAdapter(fixture);
     if (fixture === 'welcome') return;
     await useAppStore.getState().openRepository('/home/demo/projects/Gitma');

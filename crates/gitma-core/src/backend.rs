@@ -5,8 +5,9 @@
 
 use crate::domain::{
     BlameLine, ChangedFile, CommitDetails, DiffHunk, FileArea, FileHistoryEntry, FileStatus,
-    GitError, GitResult, GitService, ReflogEntry, RemoteEntry, RepoSnapshot,
+    GitError, GitResult, GitService, ReflogEntry, RemoteEntry, RepoFileEntry, RepoSnapshot,
 };
+pub use crate::domain::{GitAccountOption, RepoAuthState};
 use crate::git::{diff::DEFAULT_MAX_BYTES, operations::PatchTarget, GitRepository};
 use crate::graph::layout::{layout_page, GraphLayout, LaneState};
 use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
@@ -200,6 +201,14 @@ pub struct RemotesResult {
     pub session_id: String,
     pub request_id: u64,
     pub remotes: Vec<RemoteEntry>,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RepoTreeResult {
+    pub session_id: String,
+    pub request_id: u64,
+    pub commit_oid: Option<String>,
+    pub files: Vec<RepoFileEntry>,
 }
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -419,8 +428,16 @@ impl Backend {
     pub fn snapshot(&self, session_id: &str, request_id: u64) -> Result<Snapshot, AppError> {
         let state = self.session(session_id)?;
         let _read = state.coordinator.read().expect("coordinator lock poisoned");
-        let raw = state.repo.snapshot()?;
-        let history_key = state.repo.history_key()?;
+        let (raw, history_key) = thread::scope(|scope| {
+            let key_task = scope.spawn(|| state.repo.history_key());
+            let snap_res = state.repo.snapshot();
+            (
+                snap_res,
+                key_task.join().expect("history_key reader panicked"),
+            )
+        });
+        let raw = raw?;
+        let history_key = history_key?;
         let revision = update_snapshot_revision(&state, &raw, &history_key);
         let staged = register_files(&state, NativeContext::Local, raw.staged);
         let unstaged = register_files(&state, NativeContext::Local, raw.unstaged);
@@ -643,6 +660,29 @@ impl Backend {
         })
     }
 
+    pub fn get_auth_state(
+        &self,
+        session_id: &str,
+        force_refresh: bool,
+    ) -> Result<RepoAuthState, AppError> {
+        let state = self.session(session_id)?;
+        let _read = state.coordinator.read().expect("coordinator lock poisoned");
+        Ok(state.repo.get_auth_state(force_refresh))
+    }
+
+    pub fn set_repo_account(
+        &self,
+        session_id: &str,
+        account_id: &str,
+    ) -> Result<RepoAuthState, AppError> {
+        let state = self.session(session_id)?;
+        let _write = state
+            .coordinator
+            .write()
+            .expect("coordinator lock poisoned");
+        Ok(state.repo.set_repo_account(account_id)?)
+    }
+
     pub fn file_preview(
         &self,
         session_id: &str,
@@ -651,6 +691,59 @@ impl Backend {
     ) -> Result<Preview, AppError> {
         let state = self.session(session_id)?;
         let _read = state.coordinator.read().expect("coordinator lock poisoned");
+        if let Some(stripped) = file_id.strip_prefix("repo:") {
+            let (commit_oid, path_str) = if let Some((oid, path)) = stripped.split_once(':') {
+                if oid.is_empty() || oid == "HEAD" || oid == "worktree" {
+                    (None, path)
+                } else {
+                    (Some(oid), path)
+                }
+            } else {
+                (None, stripped)
+            };
+
+            let path = PathBuf::from(path_str);
+            let (original_bytes, modified_bytes) = if let Some(oid) = commit_oid {
+                validate_oid(oid)?;
+                let (original, modified) = read_preview_sides(
+                    || {
+                        let parent = state.repo.first_parent(oid).unwrap_or(None);
+                        Ok(match parent.as_deref() {
+                            Some(p) => state.repo.revision_content(p, &path).unwrap_or(None),
+                            None => None,
+                        })
+                    },
+                    || state.repo.revision_content(oid, &path),
+                )?;
+                (original.or_else(|| modified.clone()), modified)
+            } else {
+                let (original, modified) = read_preview_sides(
+                    || Ok(state.repo.revision_content("HEAD", &path).unwrap_or(None)),
+                    || state.repo.worktree_content(&path),
+                )?;
+                (original.or_else(|| modified.clone()), modified)
+            };
+
+            let version = preview_version(
+                file_id,
+                original_bytes.as_deref(),
+                modified_bytes.as_deref(),
+            );
+            let (kind, original, modified, message) =
+                classify_preview(original_bytes, modified_bytes, FileStatus::Modified);
+
+            return Ok(Preview {
+                session_id: state.id.clone(),
+                request_id,
+                file_id: file_id.into(),
+                version,
+                kind: kind.into(),
+                original,
+                modified,
+                message,
+                hunks: Vec::new(),
+            });
+        }
         let selected = state
             .files
             .lock()
@@ -727,6 +820,26 @@ impl Backend {
         let _read = state.coordinator.read().expect("coordinator lock poisoned");
         let lines = state.repo.file_blame(path, commit_oid)?;
         Ok(BlameResult { lines })
+    }
+
+    pub fn repo_files(
+        &self,
+        session_id: &str,
+        request_id: u64,
+        commit_oid: Option<&str>,
+    ) -> Result<RepoTreeResult, AppError> {
+        let state = self.session(session_id)?;
+        let _read = state.coordinator.read().expect("coordinator lock poisoned");
+        if let Some(oid) = commit_oid {
+            validate_oid(oid)?;
+        }
+        let files = state.repo.repo_files(commit_oid)?;
+        Ok(RepoTreeResult {
+            session_id: state.id.clone(),
+            request_id,
+            commit_oid: commit_oid.map(str::to_owned),
+            files,
+        })
     }
 
     pub fn file_history(
@@ -897,12 +1010,24 @@ impl Backend {
                 state.repo.open_terminal(term)?;
             }
             Operation::OpenEditor => {
-                let path = if !message.trim().is_empty() {
-                    Some(message.trim())
+                let (path, editor) = if !message.trim().is_empty() {
+                    if let Ok(val) = serde_json::from_str::<serde_json::Value>(message.trim()) {
+                        let path = val
+                            .get("path")
+                            .and_then(|v| v.as_str())
+                            .map(|s| s.to_string());
+                        let editor = val
+                            .get("editor")
+                            .and_then(|v| v.as_str())
+                            .map(|s| s.to_string());
+                        (path, editor)
+                    } else {
+                        (Some(message.trim().to_string()), None)
+                    }
                 } else {
-                    None
+                    (None, None)
                 };
-                state.repo.open_editor(path)?;
+                state.repo.open_editor(path.as_deref(), editor.as_deref())?;
             }
             Operation::RevealFile => {
                 let path = message.trim();
@@ -1417,9 +1542,9 @@ impl Backend {
             Operation::RestoreCommitFile => {
                 "Arquivo restaurado com sucesso para a pasta de trabalho"
             }
-            Operation::GitCommand => {
-                custom_output.as_deref().unwrap_or("Comando executado com sucesso")
-            }
+            Operation::GitCommand => custom_output
+                .as_deref()
+                .unwrap_or("Comando executado com sucesso"),
         };
         Ok(OperationResult {
             session_id: state.id.clone(),
@@ -1478,8 +1603,12 @@ fn register_files(
 ) -> Vec<FileEntry> {
     let mut registry = state.files.lock().expect("file registry lock poisoned");
     if registry.entries.len() > 2000 {
-        registry.entries.retain(|_, entry| entry.context == NativeContext::Local);
-        registry.ids.retain(|key, _| key.context == NativeContext::Local);
+        registry
+            .entries
+            .retain(|_, entry| entry.context == NativeContext::Local);
+        registry
+            .ids
+            .retain(|key, _| key.context == NativeContext::Local);
     }
     files
         .into_iter()

@@ -53,6 +53,8 @@
   },
   "toolbar": {
     "remoteSync": "Sincronização remota",
+    "fileExplorer": "Explorador",
+    "fileExplorerTitle": "Explorador de Arquivos (Ctrl+Shift+E)",
     "fetch": "Fetch",
     "fetchTitle": "Buscar referências remotas (Fetch)",
     "pull": "Pull",
@@ -168,6 +170,19 @@
   "files": {
     "localChanges": "Alterações locais",
     "commitFiles": "Arquivos do commit",
+    "explorer": "Explorador",
+    "explorerTitle": "Explorador de Arquivos do Repositório",
+    "searchPlaceholder": "Buscar arquivo por nome ou caminho...",
+    "noFiles": "Nenhum arquivo encontrado",
+    "scopeWorktree": "Trabalho (HEAD)",
+    "scopeCommit": "Commit",
+    "expandAll": "Expandir tudo",
+    "collapseAll": "Recolher tudo",
+    "openInEditor": "Abrir no editor",
+    "openEditor": "Abrir no editor",
+    "viewHistory": "Ver histórico",
+    "repoFilesCount": "{{count}} arquivos",
+    "filteredFilesCount": "{{filtered}} de {{total}} arquivos",
     "flatList": "Lista plana",
     "treeList": "Árvore de pastas",
     "staged": "Em stage",
@@ -351,6 +366,14 @@
     "errorRequired": "O nome da branch é obrigatório.",
     "errorInvalid": "O nome da branch contém caracteres inválidos."
   },
+  "stashModal": {
+    "title": "Guardar no Stash",
+    "messageLabel": "Mensagem para o stash (opcional)",
+    "messagePlaceholder": "Ex: modificações parciais do login...",
+    "includeUntrackedLabel": "Incluir novos arquivos não monitorados (-u)",
+    "submit": "Guardar no Stash",
+    "cancel": "Cancelar"
+  },
   "createTag": {
     "title": "Criar Tag",
     "description": "Criando tag no commit {{oid}}",
@@ -528,12 +551,24 @@
     "confirmCommit": "Confirmar commit",
     "amendLastCommit": "Emendar último commit",
     "viewShortcuts": "Ver atalhos de teclado",
+    "toggleFileExplorer": "Alternar Explorador de Arquivos",
     "closeModals": "Fechar modais / menus",
     "middleClick": "Botão do meio",
     "rightClick": "Botão direito",
     "doubleClick": "Duplo clique",
     "space": "Espaço",
-    "markAmend": "Marcar Amend"
+    "markAmend": "Marcar Amend",
+    "diffNavigation": "Navegação no Documento / Diff (estilo Tig)",
+    "scrollDiffLines": "Rolar documento (diff) para baixo / cima",
+    "scrollDiffHalfPage": "Rolar meia página para baixo / cima",
+    "scrollDiffTopBottom": "Ir para o topo / final do documento",
+    "navigateHunks": "Próximo bloco (hunk) / bloco anterior",
+    "stageUnstageHunk": "Preparar / despreparar bloco (hunk) atual",
+    "switchPanes": "Alternar entre Histórico e Arquivos",
+    "toggleBlameShortcut": "Alternar Git Blame",
+    "toggleCompactDiff": "Alternar modo Só alterações",
+    "toggleDiffViewMode": "Alternar visualização Unificado / Lado a lado",
+    "toggleExpandDiff": "Expandir / restaurar diff em tela cheia"
   },
   "refPopover": {
     "dialogLabel": "Referências do commit",
@@ -681,6 +716,20 @@
     "testTerminal": "Testar Terminal",
     "testOpened": "Terminal aberto com sucesso",
     "noSession": "Abra um repositório para testar",
+    "save": "Salvar"
+  },
+  "editor": {
+    "title": "Editor de Código",
+    "settingsTitle": "Editor de Código",
+    "settingsDesc": "Escolha qual editor deve ser aberto ao clicar em 'Abrir no editor'. O modo 'Padrão' detecta o VS Code ou usa a associação padrão do sistema.",
+    "defaultSystem": "Auto-detectar / VS Code",
+    "custom": "Personalizado",
+    "customCommand": "Comando ou caminho personalizado:",
+    "customPrompt": "Informe o nome do binário ou comando (ex: nvim, subl, emacs, webstorm)",
+    "customPlaceholder": "ex: cursor, zed, subl, nvim...",
+    "editorChanged": "Editor definido para {{name}}",
+    "testEditor": "Testar Editor",
+    "testOpened": "Editor iniciado com sucesso",
     "save": "Salvar"
   },
   "console": {

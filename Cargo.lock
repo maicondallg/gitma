@@ -1111,7 +1111,7 @@ dependencies = [
 
 [[package]]
 name = "gitma-core"
-version = "0.1.9"
+version = "0.1.11"
 dependencies = [
  "libc",
  "notify",
@@ -1123,7 +1123,7 @@ dependencies = [
 
 [[package]]
 name = "gitma-desktop"
-version = "0.1.9"
+version = "0.1.11"
 dependencies = [
  "gitma-core",
  "serde",

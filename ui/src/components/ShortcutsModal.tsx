@@ -35,6 +35,7 @@ export function ShortcutsModal({ onClose }: ShortcutsModalProps) {
       title: t('shortcuts.repoAndHistory'),
       shortcuts: [
         { desc: t('shortcuts.openLocalRepo'), keys: ['Ctrl', 'O'] },
+        { desc: t('shortcuts.toggleFileExplorer'), keys: ['Ctrl', 'Shift', 'E'] },
         { desc: t('shortcuts.createNewBranch'), keys: ['Ctrl', 'B'] },
         { desc: t('shortcuts.refreshRepo'), keys: ['Ctrl', 'R'] },
         { desc: t('shortcuts.pushOptions'), keys: [t('shortcuts.rightClick'), 'Push'] },
@@ -47,6 +48,21 @@ export function ShortcutsModal({ onClose }: ShortcutsModalProps) {
         { desc: t('shortcuts.addRemoveStage'), keys: [t('shortcuts.doubleClick')] },
         { desc: t('shortcuts.confirmCommit'), keys: ['Ctrl', 'Enter'] },
         { desc: t('shortcuts.amendLastCommit'), keys: [t('shortcuts.markAmend')] },
+      ],
+    },
+    {
+      title: t('shortcuts.diffNavigation'),
+      shortcuts: [
+        { desc: t('shortcuts.scrollDiffLines'), keys: ['J', 'K'] },
+        { desc: t('shortcuts.scrollDiffHalfPage'), keys: ['D / U', 'Shift+J / K'] },
+        { desc: t('shortcuts.scrollDiffTopBottom'), keys: ['G', 'Shift+G'] },
+        { desc: t('shortcuts.navigateHunks'), keys: ['N / P', '[ / ]'] },
+        { desc: t('shortcuts.stageUnstageHunk'), keys: ['Ctrl+Alt+S / U'] },
+        { desc: t('shortcuts.switchPanes'), keys: ['← / →', 'H / L'] },
+        { desc: t('shortcuts.toggleBlameShortcut'), keys: ['B'] },
+        { desc: t('shortcuts.toggleCompactDiff'), keys: ['C'] },
+        { desc: t('shortcuts.toggleDiffViewMode'), keys: ['V'] },
+        { desc: t('shortcuts.toggleExpandDiff'), keys: ['F', 'Z'] },
       ],
     },
     {

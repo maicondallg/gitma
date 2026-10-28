@@ -1,3 +1,4 @@
+pub mod auth;
 pub mod diff;
 pub mod history;
 pub mod operations;
@@ -37,70 +38,142 @@ impl GitRepository {
             git_dir: OnceLock::new(),
         }
     }
+    fn read_head_symbolic_ref(&self) -> Option<String> {
+        if let Ok(git_dir) = self.git_dir() {
+            if let Ok(head_raw) = std::fs::read_to_string(git_dir.join("HEAD")) {
+                let trimmed = head_raw.trim();
+                return trimmed.strip_prefix("ref: ").map(|r| r.trim().to_owned());
+            }
+        }
+        runner::read(&self.context.root, &["symbolic-ref", "-q", "HEAD"])
+            .ok()
+            .map(|bytes| String::from_utf8_lossy(&bytes).trim().to_owned())
+            .filter(|s| !s.is_empty())
+    }
     pub fn snapshot(&self) -> GitResult<RepoSnapshot> {
-        let raw = runner::read(
-            &self.context.root,
-            &["status", "--porcelain=v1", "--untracked-files=all", "-z"],
-        )?;
+        let branch = self
+            .read_head_symbolic_ref()
+            .and_then(|r| r.strip_prefix("refs/heads/").map(str::to_owned))
+            .unwrap_or_default();
+
+        let (raw, (upstream, ahead, behind)) = std::thread::scope(|scope| {
+            let upstream_task = scope.spawn(|| {
+                if branch.is_empty() {
+                    return (String::new(), None, None);
+                }
+                let upstream = match runner::read(
+                    &self.context.root,
+                    &[
+                        "rev-parse",
+                        "--abbrev-ref",
+                        "--symbolic-full-name",
+                        "@{upstream}",
+                    ],
+                ) {
+                    Ok(bytes) => String::from_utf8_lossy(&bytes).trim().to_owned(),
+                    Err(_) => String::new(),
+                };
+                let (ahead, behind) = if !upstream.is_empty() {
+                    if let Ok(out) = runner::read(
+                        &self.context.root,
+                        &["rev-list", "--left-right", "--count", "HEAD...@{upstream}"],
+                    ) {
+                        let text = String::from_utf8_lossy(&out);
+                        let mut parts = text.split_whitespace();
+                        let a = parts.next().and_then(|s| s.parse::<usize>().ok());
+                        let b = parts.next().and_then(|s| s.parse::<usize>().ok());
+                        (a, b)
+                    } else {
+                        (None, None)
+                    }
+                } else {
+                    (None, None)
+                };
+                (upstream, ahead, behind)
+            });
+            let status_raw = runner::read(
+                &self.context.root,
+                &["status", "--porcelain=v1", "--untracked-files=all", "-z"],
+            );
+            (
+                status_raw,
+                upstream_task.join().expect("upstream reader panicked"),
+            )
+        });
+        let raw = raw?;
         let (mut staged, mut unstaged, conflicted) = status::parse_porcelain_z(&raw);
 
-        if !staged.is_empty() {
-            if let Ok(staged_numstat) = runner::read(
-                &self.context.root,
-                &["diff", "--cached", "--numstat", "-M", "-z"],
-            ) {
-                let numstat_map = status::parse_numstat_z(&staged_numstat);
-                for f in &mut staged {
-                    if let Some(stat) = numstat_map
-                        .get(&f.path)
-                        .or_else(|| f.old_path.as_ref().and_then(|op| numstat_map.get(op)))
-                    {
-                        f.insertions = stat.insertions;
-                        f.deletions = stat.deletions;
-                        f.is_binary = stat.is_binary;
-                    }
+        let need_staged_numstat = !staged.is_empty();
+        let need_unstaged_numstat = unstaged.iter().any(|f| f.status != FileStatus::Untracked);
+
+        let (staged_numstat, unstaged_numstat) = std::thread::scope(|scope| {
+            let staged_task = need_staged_numstat.then(|| {
+                scope.spawn(|| {
+                    runner::read(
+                        &self.context.root,
+                        &["diff", "--cached", "--numstat", "-M", "-z"],
+                    )
+                    .ok()
+                })
+            });
+            let unstaged_res = if need_unstaged_numstat {
+                runner::read(&self.context.root, &["diff", "--numstat", "-M", "-z"]).ok()
+            } else {
+                None
+            };
+            (
+                staged_task.and_then(|t| t.join().expect("staged numstat panicked")),
+                unstaged_res,
+            )
+        });
+
+        if let Some(staged_numstat) = staged_numstat {
+            let numstat_map = status::parse_numstat_z(&staged_numstat);
+            for f in &mut staged {
+                if let Some(stat) = numstat_map
+                    .get(&f.path)
+                    .or_else(|| f.old_path.as_ref().and_then(|op| numstat_map.get(op)))
+                {
+                    f.insertions = stat.insertions;
+                    f.deletions = stat.deletions;
+                    f.is_binary = stat.is_binary;
                 }
             }
         }
 
         if !unstaged.is_empty() {
-            if let Ok(unstaged_numstat) =
-                runner::read(&self.context.root, &["diff", "--numstat", "-M", "-z"])
-            {
-                let numstat_map = status::parse_numstat_z(&unstaged_numstat);
-                let mut untracked_inspected = 0;
-                for f in &mut unstaged {
-                    if let Some(stat) = numstat_map
-                        .get(&f.path)
-                        .or_else(|| f.old_path.as_ref().and_then(|op| numstat_map.get(op)))
-                    {
-                        f.insertions = stat.insertions;
-                        f.deletions = stat.deletions;
-                        f.is_binary = stat.is_binary;
-                    } else if f.status == FileStatus::Untracked && untracked_inspected < 20 {
-                        untracked_inspected += 1;
-                        let full_path = self.context.root.join(&f.path);
-                        if let Ok(metadata) = std::fs::metadata(&full_path) {
-                            if metadata.is_file()
-                                && metadata.len() <= diff::DEFAULT_MAX_BYTES as u64
-                            {
-                                if let Ok(content) = std::fs::read(&full_path) {
-                                    if !content.contains(&0) {
-                                        let lines = content.iter().filter(|&&b| b == b'\n').count();
-                                        f.insertions = Some(
-                                            lines
-                                                + if !content.is_empty()
-                                                    && !content.ends_with(b"\n")
-                                                {
-                                                    1
-                                                } else {
-                                                    0
-                                                },
-                                        );
-                                        f.deletions = Some(0);
-                                    } else {
-                                        f.is_binary = true;
-                                    }
+            let numstat_map = unstaged_numstat
+                .as_deref()
+                .map(status::parse_numstat_z)
+                .unwrap_or_default();
+            let mut untracked_inspected = 0;
+            for f in &mut unstaged {
+                if let Some(stat) = numstat_map
+                    .get(&f.path)
+                    .or_else(|| f.old_path.as_ref().and_then(|op| numstat_map.get(op)))
+                {
+                    f.insertions = stat.insertions;
+                    f.deletions = stat.deletions;
+                    f.is_binary = stat.is_binary;
+                } else if f.status == FileStatus::Untracked && untracked_inspected < 20 {
+                    untracked_inspected += 1;
+                    let full_path = self.context.root.join(&f.path);
+                    if let Ok(metadata) = std::fs::metadata(&full_path) {
+                        if metadata.is_file() && metadata.len() <= diff::DEFAULT_MAX_BYTES as u64 {
+                            if let Ok(content) = std::fs::read(&full_path) {
+                                if !content.contains(&0) {
+                                    let lines = content.iter().filter(|&&b| b == b'\n').count();
+                                    f.insertions = Some(
+                                        lines
+                                            + if !content.is_empty() && !content.ends_with(b"\n") {
+                                                1
+                                            } else {
+                                                0
+                                            },
+                                    );
+                                    f.deletions = Some(0);
+                                } else {
+                                    f.is_binary = true;
                                 }
                             }
                         }
@@ -108,45 +181,6 @@ impl GitRepository {
                 }
             }
         }
-
-        let branch = runner::read(
-            &self.context.root,
-            &["symbolic-ref", "--short", "-q", "HEAD"],
-        )
-        .map(|bytes| String::from_utf8_lossy(&bytes).trim().to_owned())
-        .unwrap_or_default(); // A detached HEAD is a normal repository state.
-        let upstream = match runner::read(
-            &self.context.root,
-            &[
-                "rev-parse",
-                "--abbrev-ref",
-                "--symbolic-full-name",
-                "@{upstream}",
-            ],
-        ) {
-            Ok(bytes) => String::from_utf8_lossy(&bytes).trim().to_owned(),
-            Err(_) => String::new(),
-        };
-        let (ahead, behind) = if !upstream.is_empty() {
-            if let Ok(out) = runner::read(
-                &self.context.root,
-                &["rev-list", "--left-right", "--count", "HEAD...@{upstream}"],
-            ) {
-                let text = String::from_utf8_lossy(&out);
-                let parts: Vec<&str> = text.split_whitespace().collect();
-                if parts.len() == 2 {
-                    let a = parts[0].parse::<usize>().ok();
-                    let b = parts[1].parse::<usize>().ok();
-                    (a, b)
-                } else {
-                    (None, None)
-                }
-            } else {
-                (None, None)
-            }
-        } else {
-            (None, None)
-        };
         let in_progress = self
             .git_dir()
             .ok()
@@ -174,12 +208,16 @@ impl GitRepository {
     ) -> GitResult<HistoryPage> {
         let n = page_size.saturating_add(16).to_string();
         let skip = page_no.saturating_mul(page_size).to_string();
-        let head_exists =
-            runner::read(&self.context.root, &["rev-parse", "--verify", "HEAD"]).is_ok();
+        let (head_exists, stash_out) = std::thread::scope(|scope| {
+            let stash_task = scope.spawn(|| {
+                runner::read(&self.context.root, &["stash", "list", "--format=%H%x00%gd"]).ok()
+            });
+            let head = runner::read(&self.context.root, &["rev-parse", "--verify", "HEAD"]).is_ok();
+            (head, stash_task.join().expect("stash list reader panicked"))
+        });
         let mut stash_map = std::collections::HashMap::new();
         let mut stash_refs = Vec::new();
-        if let Ok(out) = runner::read(&self.context.root, &["stash", "list", "--format=%H%x00%gd"])
-        {
+        if let Some(out) = stash_out {
             let s = String::from_utf8_lossy(&out);
             for line in s.lines() {
                 let parts: Vec<&str> = line.split('\0').collect();
@@ -400,26 +438,33 @@ impl GitRepository {
         target_oid: &str,
     ) -> GitResult<Vec<ChangedFile>> {
         let rev_range = format!("{}..{}", base_oid.trim(), target_oid.trim());
-        let raw = runner::read(
-            &self.context.root,
-            &[
-                "diff-tree",
-                "--no-commit-id",
-                "--name-status",
-                "-M",
-                "-C",
-                "-r",
-                "-z",
-                base_oid.trim(),
-                target_oid.trim(),
-            ],
-        )?;
+        let (raw, numstat_raw) = std::thread::scope(|scope| {
+            let numstat = scope.spawn(|| {
+                runner::read(
+                    &self.context.root,
+                    &["diff", "--numstat", "-M", "-C", "-z", &rev_range],
+                )
+            });
+            let names = runner::read(
+                &self.context.root,
+                &[
+                    "diff-tree",
+                    "--no-commit-id",
+                    "--name-status",
+                    "-M",
+                    "-C",
+                    "-r",
+                    "-z",
+                    base_oid.trim(),
+                    target_oid.trim(),
+                ],
+            );
+            (names, numstat.join().expect("numstat reader panicked"))
+        });
+        let raw = raw?;
         let mut files = status::parse_commit_names(&raw);
 
-        if let Ok(numstat_raw) = runner::read(
-            &self.context.root,
-            &["diff", "--numstat", "-M", "-C", "-z", &rev_range],
-        ) {
+        if let Ok(numstat_raw) = numstat_raw {
             let numstat_map = status::parse_numstat_z(&numstat_raw);
             for f in &mut files {
                 if let Some(stat) = numstat_map
@@ -460,9 +505,10 @@ impl GitRepository {
         use sha2::{Digest, Sha256};
         let mut data = runner::read(&self.context.root, &["show-ref", "--head", "--dereference"])
             .unwrap_or_default();
-        data.extend(
-            runner::read(&self.context.root, &["symbolic-ref", "-q", "HEAD"]).unwrap_or_default(),
-        );
+        if let Some(sym_ref) = self.read_head_symbolic_ref() {
+            data.extend(sym_ref.as_bytes());
+            data.push(b'\n');
+        }
         Ok(format!("{:x}", Sha256::digest(data)))
     }
     pub fn index_content(&self, path: &Path) -> GitResult<Option<Vec<u8>>> {
@@ -540,6 +586,52 @@ impl GitRepository {
             .filter(|path| !path.is_empty())
             .map(status::path_from_bytes)
             .collect())
+    }
+    pub fn repo_files(&self, commit_oid: Option<&str>) -> GitResult<Vec<RepoFileEntry>> {
+        if let Some(oid) = commit_oid {
+            let raw = runner::read(
+                &self.context.root,
+                &["ls-tree", "-r", "--name-only", "-z", oid],
+            )?;
+            let mut files = raw
+                .split(|byte| *byte == 0)
+                .filter(|path| !path.is_empty())
+                .map(|p| RepoFileEntry {
+                    path: status::path_from_bytes(p)
+                        .to_string_lossy()
+                        .replace('\\', "/"),
+                    is_tracked: true,
+                })
+                .collect::<Vec<_>>();
+            files.sort_by(|a, b| a.path.cmp(&b.path));
+            Ok(files)
+        } else {
+            let raw = runner::read(
+                &self.context.root,
+                &[
+                    "ls-files",
+                    "-t",
+                    "--cached",
+                    "--others",
+                    "--exclude-standard",
+                    "-z",
+                ],
+            )?;
+            let mut files = Vec::new();
+            for entry in raw.split(|byte| *byte == 0).filter(|p| !p.is_empty()) {
+                if entry.len() >= 2 && entry[1] == b' ' {
+                    let tag = entry[0];
+                    let path_bytes = &entry[2..];
+                    let is_tracked = tag != b'?';
+                    let path = status::path_from_bytes(path_bytes)
+                        .to_string_lossy()
+                        .replace('\\', "/");
+                    files.push(RepoFileEntry { path, is_tracked });
+                }
+            }
+            files.sort_by(|a, b| a.path.cmp(&b.path));
+            Ok(files)
+        }
     }
     fn show_spec(&self, spec: &OsString) -> GitResult<Option<Vec<u8>>> {
         match runner::read_os(
@@ -736,8 +828,12 @@ impl GitRepository {
     pub fn open_terminal(&self, terminal: Option<&str>) -> GitResult<()> {
         operations::open_terminal(&self.context.root, terminal)
     }
-    pub fn open_editor(&self, rel_path: Option<&str>) -> GitResult<()> {
-        operations::open_editor(&self.context.root, rel_path)
+    pub fn open_editor(
+        &self,
+        rel_path: Option<&str>,
+        custom_editor: Option<&str>,
+    ) -> GitResult<()> {
+        operations::open_editor(&self.context.root, rel_path, custom_editor)
     }
     pub fn reveal_file(&self, rel_path: &str) -> GitResult<()> {
         operations::reveal_file(&self.context.root, rel_path)
@@ -785,6 +881,12 @@ impl GitRepository {
     }
     pub fn resolve_conflict(&self, rel_path: &str, choice: &str) -> GitResult<()> {
         operations::resolve_conflict(&self.context.root, rel_path, choice)
+    }
+    pub fn get_auth_state(&self, force_refresh: bool) -> RepoAuthState {
+        auth::get_repo_auth_state(&self.context.root, force_refresh)
+    }
+    pub fn set_repo_account(&self, account_id: &str) -> GitResult<RepoAuthState> {
+        auth::set_repo_account(&self.context.root, account_id)
     }
 }
 

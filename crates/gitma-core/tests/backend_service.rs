@@ -29,7 +29,11 @@ fn repo() -> TempDir {
     dir
 }
 fn commit(dir: &Path, path: &str, text: &str, message: &str) {
-    std::fs::write(dir.join(path), text).unwrap();
+    let full = dir.join(path);
+    if let Some(parent) = full.parent() {
+        std::fs::create_dir_all(parent).unwrap();
+    }
+    std::fs::write(&full, text).unwrap();
     git(dir, &["add", "--", path]);
     git(dir, &["commit", "-qm", message]);
 }
@@ -396,16 +400,14 @@ fn git_command_operation_via_backend_service() {
     let session = backend.open(dir.path(), |_| {}).unwrap();
 
     // 1. Run git status
-    let res = backend.apply_operation(
-        &session.session_id,
-        1,
-        Operation::GitCommand,
-        &[],
-        "status",
-    );
+    let res = backend.apply_operation(&session.session_id, 1, Operation::GitCommand, &[], "status");
     assert!(res.is_ok());
     let op_res = res.unwrap();
-    assert!(op_res.message.contains("nothing to commit") || op_res.message.contains("clean") || op_res.message.contains("branch"));
+    assert!(
+        op_res.message.contains("nothing to commit")
+            || op_res.message.contains("clean")
+            || op_res.message.contains("branch")
+    );
 
     // 2. Run git branch test-cli
     let res2 = backend.apply_operation(
@@ -418,15 +420,96 @@ fn git_command_operation_via_backend_service() {
     assert!(res2.is_ok());
 
     // 3. Verify branch exists via git branch command
-    let res3 = backend.apply_operation(
-        &session.session_id,
-        3,
-        Operation::GitCommand,
-        &[],
-        "branch",
-    ).unwrap();
+    let res3 = backend
+        .apply_operation(&session.session_id, 3, Operation::GitCommand, &[], "branch")
+        .unwrap();
     assert!(res3.message.contains("test-cli"));
 
     backend.close(&session.session_id).unwrap();
 }
 
+#[test]
+fn repo_files_and_repo_preview_work_across_worktree_and_commit() {
+    let dir = repo();
+    commit(dir.path(), "src/main.rs", "fn main() {}\n", "first commit");
+    commit(dir.path(), "docs/readme.md", "# Readme\n", "docs commit");
+    std::fs::write(dir.path().join("untracked.txt"), "hello untracked\n").unwrap();
+
+    let backend = Backend::new();
+    let session = backend.open(dir.path(), |_| {}).unwrap();
+
+    // 1. Check repo files at worktree
+    let result = backend.repo_files(&session.session_id, 1, None).unwrap();
+    let paths: Vec<&str> = result.files.iter().map(|f| f.path.as_str()).collect();
+    assert_eq!(
+        paths,
+        vec!["docs/readme.md", "src/main.rs", "untracked.txt"]
+    );
+    assert!(result.files[0].is_tracked);
+    assert!(result.files[1].is_tracked);
+    assert!(!result.files[2].is_tracked);
+
+    // 2. Check preview of worktree repo file
+    let preview = backend
+        .file_preview(&session.session_id, 2, "repo:src/main.rs")
+        .unwrap();
+    assert_eq!(preview.kind, "text");
+    assert_eq!(preview.modified, "fn main() {}\n");
+
+    // 3. Check preview of untracked file
+    let untracked_prev = backend
+        .file_preview(&session.session_id, 3, "repo:untracked.txt")
+        .unwrap();
+    assert_eq!(untracked_prev.kind, "text");
+    assert_eq!(untracked_prev.modified, "hello untracked\n");
+
+    // 4. Test open_editor operation with JSON payload
+    let json_msg = serde_json::json!({
+        "path": "src/main.rs",
+        "editor": "test-editor"
+    })
+    .to_string();
+    let res = backend.apply_operation(
+        &session.session_id,
+        4,
+        Operation::OpenEditor,
+        &[],
+        &json_msg,
+    );
+    assert!(res.is_ok());
+
+    backend.close(&session.session_id).unwrap();
+}
+
+#[test]
+fn repo_auth_state_can_be_queried_and_persisted() {
+    let dir = repo();
+    git(
+        dir.path(),
+        &[
+            "remote",
+            "add",
+            "origin",
+            "git@github.com:maicondallg/Gitma.git",
+        ],
+    );
+    let backend = Backend::new();
+    let session = backend.open(dir.path(), |_| {}).unwrap();
+
+    let initial = backend.get_auth_state(&session.session_id, false).unwrap();
+    assert_eq!(initial.selected_id, "auto");
+
+    let updated = backend
+        .set_repo_account(&session.session_id, "gh:maicondallg")
+        .unwrap();
+    assert_eq!(updated.selected_id, "gh:maicondallg");
+    assert_eq!(updated.resolved_id.as_deref(), Some("gh:maicondallg"));
+    assert_eq!(updated.resolution_reason, "manual");
+
+    let reset = backend
+        .set_repo_account(&session.session_id, "auto")
+        .unwrap();
+    assert_eq!(reset.selected_id, "auto");
+
+    backend.close(&session.session_id).unwrap();
+}
