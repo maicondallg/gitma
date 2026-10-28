@@ -5,7 +5,7 @@ import { setBridgeAdapter } from '../lib/bridge';
 import { setLanguage } from '../i18n';
 import { RemotesModal } from './RemotesModal';
 import { GraphPanel } from './GraphPanel';
-import { DiffPanel } from './DiffPanel';
+import { DiffPanel, parseConflictBlocks } from './DiffPanel';
 import { TabBar } from './TabBar';
 import type { BridgeAdapter } from '../lib/bridge';
 import type { RemotesResult } from '../lib/types';
@@ -359,28 +359,92 @@ describe('Phase 4 Features', () => {
       fireEvent.click(markBtn);
       expect(resolveConflictSpy).toHaveBeenCalledWith('README.md', 'mark_resolved');
     });
+
+    it('permite clicar diretamente em cada bloco de conflito (Atual, Entrada ou Ambos) na GUI sem editor externo', async () => {
+      const resolveConflictSpy = vi.fn().mockResolvedValue(undefined);
+      const multiConflictText = [
+        'linha inicial',
+        '<<<<<<< HEAD',
+        'const versao = "main";',
+        '=======',
+        'const versao = "feature";',
+        '>>>>>>> feature/login',
+        'meio',
+        '<<<<<<< HEAD',
+        'const porta = 3000;',
+        '=======',
+        'const porta = 8080;',
+        '>>>>>>> feature/login',
+      ].join('\n');
+
+      const parsed = parseConflictBlocks(multiConflictText);
+      expect(parsed).toHaveLength(2);
+      expect(parsed[0].oursLines).toEqual(['const versao = "main";']);
+      expect(parsed[0].theirsLines).toEqual(['const versao = "feature";']);
+      expect(parsed[1].oursLines).toEqual(['const porta = 3000;']);
+      expect(parsed[1].theirsLines).toEqual(['const porta = 8080;']);
+
+      useAppStore.setState({
+        resolveConflict: resolveConflictSpy,
+        selectedFile: {
+          id: 'f-multi-conflict',
+          name: 'config.ts',
+          directory: 'src',
+          pathDisplay: 'src/config.ts',
+          oldPathDisplay: null,
+          status: 'conflicted',
+          area: 'unstaged',
+          insertions: 6,
+          deletions: 2,
+        },
+        preview: {
+          sessionId: 's1',
+          requestId: 2,
+          fileId: 'f-multi-conflict',
+          version: '2',
+          kind: 'conflict',
+          original: 'linha inicial\nconst versao = "main";\nmeio\nconst porta = 3000;\n',
+          modified: multiConflictText,
+          message: null,
+        },
+      });
+
+      render(<DiffPanel />);
+
+      expect(await screen.findByTestId('diff-conflict-resolver')).toBeInTheDocument();
+      expect(screen.getByText(/Conflito 1 de 2/i)).toBeInTheDocument();
+
+      // Clicar no card Atual do bloco 0
+      fireEvent.click(screen.getByTestId('conflict-card-ours'));
+      expect(resolveConflictSpy).toHaveBeenCalledWith('src/config.ts', 'ours', 0);
+
+      // Navegar para o conflito #2 e clicar no card Entrada (bloco 1)
+      fireEvent.click(screen.getByRole('button', { name: '#2' }));
+      expect(screen.getByText(/Conflito 2 de 2/i)).toBeInTheDocument();
+
+      fireEvent.click(screen.getByTestId('conflict-card-theirs'));
+      expect(resolveConflictSpy).toHaveBeenCalledWith('src/config.ts', 'theirs', 1);
+
+      // Clicar em Manter Ambos neste bloco (bloco 1)
+      fireEvent.click(screen.getByTestId('conflict-block-both'));
+      expect(resolveConflictSpy).toHaveBeenCalledWith('src/config.ts', 'both', 1);
+    });
   });
 
-  describe('TabBar Ahead / Behind Badges & Remotes Button', () => {
-    it('renderiza badges de Ahead (↑3) e Behind (↓1) e dispara push/pull ao clicar', async () => {
+  describe('TabBar Behind Badge & Remotes Button', () => {
+    it('não renderiza badge de Ahead e renderiza badge de Behind (↓1) que dispara pull ao clicar', async () => {
       const runOpSpy = vi.fn().mockResolvedValue(undefined);
       useAppStore.setState({ runOperation: runOpSpy });
 
       render(<TabBar />);
 
-      // Ahead badge
-      const aheadBadge = screen.getByRole('button', { name: /3 commit.*à frente/i });
-      expect(aheadBadge).toBeInTheDocument();
-      expect(aheadBadge).toHaveTextContent('3');
+      // Ahead badge não deve existir
+      expect(screen.queryByRole('button', { name: /commit.*à frente/i })).not.toBeInTheDocument();
 
       // Behind badge
       const behindBadge = screen.getByRole('button', { name: /1 commit.*atrás/i });
       expect(behindBadge).toBeInTheDocument();
       expect(behindBadge).toHaveTextContent('1');
-
-      // Clica no ahead badge
-      fireEvent.click(aheadBadge);
-      expect(runOpSpy).toHaveBeenCalledWith('push');
 
       // Clica no behind badge
       fireEvent.click(behindBadge);

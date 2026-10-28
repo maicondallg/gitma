@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import {
+  Check,
   Code2,
   Copy,
   FileMinus2,
@@ -32,6 +33,7 @@ export interface FileContextMenuProps {
   onRestoreCommitFile?: (commitOid: string, path: string) => void;
   onViewBlame?: (path: string, commitOid?: string | null) => void;
   onOpenBrowser?: (path: string, commitOid?: string | null) => void;
+  onResolveConflict?: (path: string, choice: 'ours' | 'theirs' | 'both' | 'mark_resolved') => void;
 }
 
 export function FileContextMenu({
@@ -51,6 +53,7 @@ export function FileContextMenu({
   onRestoreCommitFile,
   onViewBlame,
   onOpenBrowser,
+  onResolveConflict,
 }: FileContextMenuProps) {
   const { t } = useI18n();
   const menuRef = useRef<HTMLDivElement>(null);
@@ -187,6 +190,56 @@ export function FileContextMenu({
 
       {file.area === 'commit' && (onRestoreCommitFile || onViewBlame || onOpenBrowser) && (
         <div className="menu-separator" />
+      )}
+
+      {file.status === 'conflicted' && onResolveConflict && (
+        <>
+          <button
+            type="button"
+            className="menu-item"
+            onClick={() => {
+              onClose();
+              onResolveConflict(file.pathDisplay, 'ours');
+            }}
+          >
+            <Check size={14} />
+            <span>{t('conflicts.acceptOurs')}</span>
+          </button>
+          <button
+            type="button"
+            className="menu-item"
+            onClick={() => {
+              onClose();
+              onResolveConflict(file.pathDisplay, 'theirs');
+            }}
+          >
+            <Check size={14} />
+            <span>{t('conflicts.acceptTheirs')}</span>
+          </button>
+          <button
+            type="button"
+            className="menu-item"
+            onClick={() => {
+              onClose();
+              onResolveConflict(file.pathDisplay, 'both');
+            }}
+          >
+            <Check size={14} />
+            <span>{t('conflicts.acceptBoth')}</span>
+          </button>
+          <button
+            type="button"
+            className="menu-item"
+            onClick={() => {
+              onClose();
+              onResolveConflict(file.pathDisplay, 'mark_resolved');
+            }}
+          >
+            <Check size={14} />
+            <span>{t('conflicts.markResolved')}</span>
+          </button>
+          <div className="menu-separator" />
+        </>
       )}
 
       {file.area === 'unstaged' && onStage && (

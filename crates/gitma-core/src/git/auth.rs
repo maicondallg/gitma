@@ -20,6 +20,14 @@ struct GhUser {
     active: bool,
 }
 
+#[derive(Clone, Debug, Default)]
+struct RepoLocalAuthConfig {
+    account: Option<String>,
+    resolved_account: Option<String>,
+    user_email: Option<String>,
+    remote_urls: Vec<String>,
+}
+
 struct DiscoveryCache {
     updated_at: Option<Instant>,
     accounts: Vec<GitAccountOption>,
@@ -169,12 +177,18 @@ pub fn discover_accounts(force_refresh: bool) -> Vec<GitAccountOption> {
 
 pub fn get_repo_auth_state(root: &Path, force_refresh: bool) -> RepoAuthState {
     let accounts = discover_accounts(force_refresh);
-    let selected_id =
-        read_local_config(root, "gitma.account").unwrap_or_else(|| "auto".to_string());
-    let remote_urls = read_repo_remote_urls(root);
+    let local_cfg = read_repo_local_auth_config(root);
+    let selected_id = local_cfg
+        .account
+        .clone()
+        .unwrap_or_else(|| "auto".to_string());
 
-    let (resolved_opt, reason) =
-        resolve_account_option(root, &selected_id, &remote_urls, &accounts);
+    let (resolved_opt, reason) = resolve_account_option_with_config(
+        &local_cfg,
+        &selected_id,
+        &local_cfg.remote_urls,
+        &accounts,
+    );
 
     RepoAuthState {
         selected_id,
@@ -189,19 +203,20 @@ pub fn set_repo_account(root: &Path, account_id: &str) -> GitResult<RepoAuthStat
     let trimmed = account_id.trim();
     let mode = if trimmed.is_empty() { "auto" } else { trimmed };
 
-    let status = Command::new("git")
+    let mut set_cmd = Command::new("git");
+    set_cmd
         .arg("-C")
         .arg(root)
         .args(["config", "--local", "gitma.account", mode])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .status()
-        .map_err(|e| GitError {
-            category: GitErrorCategory::Io,
-            message: "Não foi possível salvar a conta no repositório".into(),
-            details: Some(e.to_string()),
-        })?;
+        .stderr(Stdio::piped());
+    hide_console_window(&mut set_cmd);
+    let status = set_cmd.status().map_err(|e| GitError {
+        category: GitErrorCategory::Io,
+        message: "Não foi possível salvar a conta no repositório".into(),
+        details: Some(e.to_string()),
+    })?;
 
     if !status.success() {
         return Err(GitError {
@@ -212,27 +227,30 @@ pub fn set_repo_account(root: &Path, account_id: &str) -> GitResult<RepoAuthStat
     }
 
     // Clear any cached auto-resolved fallback when the user changes the setting
-    let _ = Command::new("git")
+    let mut unset_cmd = Command::new("git");
+    unset_cmd
         .arg("-C")
         .arg(root)
         .args(["config", "--local", "--unset", "gitma.resolvedAccount"])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status();
+        .stderr(Stdio::null());
+    hide_console_window(&mut unset_cmd);
+    let _ = unset_cmd.status();
 
     Ok(get_repo_auth_state(root, false))
 }
 
 pub fn save_auto_resolved_account(root: &Path, account_id: &str) {
-    let _ = Command::new("git")
-        .arg("-C")
+    let mut cmd = Command::new("git");
+    cmd.arg("-C")
         .arg(root)
         .args(["config", "--local", "gitma.resolvedAccount", account_id])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status();
+        .stderr(Stdio::null());
+    hide_console_window(&mut cmd);
+    let _ = cmd.status();
 }
 
 /// Resolves the primary `ExecutionAuth` for a network Git operation in `root`,
@@ -242,13 +260,16 @@ pub fn resolve_network_auth_plan(
     root: &Path,
     extra_urls: &[String],
 ) -> (Option<ExecutionAuth>, Vec<ExecutionAuth>) {
-    let selected_id =
-        read_local_config(root, "gitma.account").unwrap_or_else(|| "auto".to_string());
+    let local_cfg = read_repo_local_auth_config(root);
+    let selected_id = local_cfg
+        .account
+        .clone()
+        .unwrap_or_else(|| "auto".to_string());
     if selected_id == "system" {
         return (None, Vec::new());
     }
 
-    let mut remote_urls = read_repo_remote_urls(root);
+    let mut remote_urls = local_cfg.remote_urls.clone();
     for u in extra_urls {
         if !u.trim().is_empty() {
             remote_urls.push(u.trim().to_string());
@@ -272,7 +293,8 @@ pub fn resolve_network_auth_plan(
         .any(|u| u.to_lowercase().contains("github.com"));
     let is_auto = selected_id == "auto";
 
-    let (primary_opt, _) = resolve_account_option(root, &selected_id, &remote_urls, &accounts);
+    let (primary_opt, _) =
+        resolve_account_option_with_config(&local_cfg, &selected_id, &remote_urls, &accounts);
     let primary_auth = primary_opt
         .as_ref()
         .and_then(|opt| build_execution_auth(opt, is_auto, is_github_remote));
@@ -297,8 +319,19 @@ pub fn resolve_network_auth_plan(
     (primary_auth, fallbacks)
 }
 
+#[cfg(test)]
 fn resolve_account_option(
     root: &Path,
+    selected_id: &str,
+    remote_urls: &[String],
+    accounts: &[GitAccountOption],
+) -> (Option<GitAccountOption>, String) {
+    let local_cfg = read_repo_local_auth_config(root);
+    resolve_account_option_with_config(&local_cfg, selected_id, remote_urls, accounts)
+}
+
+fn resolve_account_option_with_config(
+    local_cfg: &RepoLocalAuthConfig,
     selected_id: &str,
     remote_urls: &[String],
     accounts: &[GitAccountOption],
@@ -330,8 +363,8 @@ fn resolve_account_option(
 
     // Auto mode resolution:
     // 1. Check if a previous auto-fallback verified and saved a working account for this repo
-    if let Some(saved_auto) = read_local_config(root, "gitma.resolvedAccount") {
-        if let Some(found) = accounts.iter().find(|a| a.id == saved_auto) {
+    if let Some(saved_auto) = &local_cfg.resolved_account {
+        if let Some(found) = accounts.iter().find(|a| &a.id == saved_auto) {
             return (Some(found.clone()), "verified".to_string());
         }
     }
@@ -358,42 +391,58 @@ fn resolve_account_option(
         }
     }
 
-    // 3. Token / Heuristic match on remote URL host alias or organization name
-    // (e.g., `petrobras.github.com` or `github.com/petrobras/...` -> matches `maicon-dallagnol-prestserv_petro` / `id_petro`)
-    for url in remote_urls {
-        let url_tokens = meaningful_tokens(url);
-        if let Some(found) = accounts.iter().find(|a| {
-            let acc_tokens = meaningful_tokens(&a.label);
-            let key_tokens = a
+    // Precompute account tokens once for heuristic matching
+    let account_tokens: Vec<(Vec<String>, Vec<String>)> = accounts
+        .iter()
+        .map(|a| {
+            let label_toks = meaningful_tokens(&a.label);
+            let key_toks = a
                 .ssh_key_name
                 .as_deref()
                 .map(meaningful_tokens)
                 .unwrap_or_default();
-            url_tokens.iter().any(|ut| {
-                acc_tokens
-                    .iter()
-                    .any(|at| at.contains(ut) || ut.contains(at))
-                    || key_tokens
-                        .iter()
-                        .any(|kt| kt.contains(ut) || ut.contains(kt))
-            })
-        }) {
-            return (Some(found.clone()), "heuristic".to_string());
+            (label_toks, key_toks)
+        })
+        .collect();
+
+    // 3. Token / Heuristic match on remote URL host alias or organization name
+    // (e.g., `petrobras.github.com` or `github.com/petrobras/...` -> matches `maicon-dallagnol-prestserv_petro` / `id_petro`)
+    for url in remote_urls {
+        let url_tokens = meaningful_tokens(url);
+        if let Some((idx, _)) =
+            account_tokens
+                .iter()
+                .enumerate()
+                .find(|(_, (acc_tokens, key_tokens))| {
+                    url_tokens.iter().any(|ut| {
+                        acc_tokens
+                            .iter()
+                            .any(|at| at.contains(ut) || ut.contains(at))
+                            || key_tokens
+                                .iter()
+                                .any(|kt| kt.contains(ut) || ut.contains(kt))
+                    })
+                })
+        {
+            return (Some(accounts[idx].clone()), "heuristic".to_string());
         }
     }
 
     // 4. Local repo `user.email` / `user.name` heuristic (only `--local`, never `--global`)
-    if let Some(local_email) = read_local_config(root, "user.email") {
-        let email_tokens = meaningful_tokens(&local_email);
-        if let Some(found) = accounts.iter().find(|a| {
-            let acc_tokens = meaningful_tokens(&a.label);
-            email_tokens.iter().any(|et| {
-                acc_tokens
-                    .iter()
-                    .any(|at| at.contains(et) || et.contains(at))
+    if let Some(local_email) = &local_cfg.user_email {
+        let email_tokens = meaningful_tokens(local_email);
+        if let Some((idx, _)) = account_tokens
+            .iter()
+            .enumerate()
+            .find(|(_, (acc_tokens, _))| {
+                email_tokens.iter().any(|et| {
+                    acc_tokens
+                        .iter()
+                        .any(|at| at.contains(et) || et.contains(at))
+                })
             })
-        }) {
-            return (Some(found.clone()), "heuristic".to_string());
+        {
+            return (Some(accounts[idx].clone()), "heuristic".to_string());
         }
     }
 
@@ -531,43 +580,46 @@ fn discover_gh_users() -> Vec<GhUser> {
         .stderr(Stdio::piped());
     hide_console_window(&mut cmd);
 
-    if let Ok(output) = cmd.output() {
-        if let Ok(json) = serde_json::from_slice::<serde_json::Value>(&output.stdout) {
-            if let Some(hosts) = json.get("hosts").and_then(|h| h.as_object()) {
-                let mut users = Vec::new();
-                for (_host, entries) in hosts {
-                    if let Some(arr) = entries.as_array() {
-                        for item in arr {
-                            let login = item
-                                .get("login")
-                                .and_then(|v| v.as_str())
-                                .unwrap_or("")
-                                .trim();
-                            let state = item
-                                .get("state")
-                                .and_then(|v| v.as_str())
-                                .unwrap_or("success");
-                            let active = item
-                                .get("active")
-                                .and_then(|v| v.as_bool())
-                                .unwrap_or(false);
-                            if !login.is_empty()
-                                && state == "success"
-                                && !users.iter().any(|u: &GhUser| u.login == login)
-                            {
-                                users.push(GhUser {
-                                    login: login.to_string(),
-                                    active,
-                                });
-                            }
+    let Ok(output) = cmd.output() else {
+        return Vec::new();
+    };
+    if let Ok(json) = serde_json::from_slice::<serde_json::Value>(&output.stdout) {
+        if let Some(hosts) = json.get("hosts").and_then(|h| h.as_object()) {
+            let mut users = Vec::new();
+            for (_host, entries) in hosts {
+                if let Some(arr) = entries.as_array() {
+                    for item in arr {
+                        let login = item
+                            .get("login")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .trim();
+                        let state = item
+                            .get("state")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("success");
+                        let active = item
+                            .get("active")
+                            .and_then(|v| v.as_bool())
+                            .unwrap_or(false);
+                        if !login.is_empty()
+                            && state == "success"
+                            && !users.iter().any(|u: &GhUser| u.login == login)
+                        {
+                            users.push(GhUser {
+                                login: login.to_string(),
+                                active,
+                            });
                         }
                     }
                 }
-                if !users.is_empty() {
-                    return users;
-                }
             }
+            return users;
         }
+    }
+    let stderr_str = String::from_utf8_lossy(&output.stderr);
+    if !stderr_str.contains("unknown flag") && !stderr_str.contains("flag") {
+        return Vec::new();
     }
 
     // Fallback for older `gh` CLI versions without `--json`
@@ -687,48 +739,55 @@ fn fetch_gh_token(login: &str) -> Option<String> {
     Some(token)
 }
 
-fn read_local_config(root: &Path, key: &str) -> Option<String> {
+/// Reads all repository-local auth config (`gitma.account`, `gitma.resolvedAccount`,
+/// `user.email`, and `remote.*.url`) in a single `git config --local --list -z` invocation
+/// instead of spawning 3–4 sequential Git subprocesses.
+fn read_repo_local_auth_config(root: &Path) -> RepoLocalAuthConfig {
     let mut cmd = Command::new("git");
     cmd.arg("-C")
         .arg(root)
-        .args(["config", "--local", "--get", key])
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null());
-    hide_console_window(&mut cmd);
-
-    let out = cmd.output().ok()?;
-    if !out.status.success() {
-        return None;
-    }
-    let val = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    (!val.is_empty()).then_some(val)
-}
-
-fn read_repo_remote_urls(root: &Path) -> Vec<String> {
-    let mut cmd = Command::new("git");
-    cmd.arg("-C")
-        .arg(root)
-        .args(["config", "--local", "--get-regexp", r"^remote\..*\.url$"])
+        .args(["config", "--local", "--list", "-z"])
+        .env("GIT_OPTIONAL_LOCKS", "0")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
     hide_console_window(&mut cmd);
 
     let Ok(out) = cmd.output() else {
-        return Vec::new();
+        return RepoLocalAuthConfig::default();
     };
-    let text = String::from_utf8_lossy(&out.stdout);
-    let mut urls = Vec::new();
-    for line in text.lines() {
-        if let Some((_, url)) = line.split_once(char::is_whitespace) {
-            let trimmed = url.trim();
-            if !trimmed.is_empty() {
-                urls.push(trimmed.to_string());
+    if !out.status.success() {
+        return RepoLocalAuthConfig::default();
+    }
+
+    let mut cfg = RepoLocalAuthConfig::default();
+    for raw_entry in out.stdout.split(|&b| b == 0) {
+        if raw_entry.is_empty() {
+            continue;
+        }
+        let text = String::from_utf8_lossy(raw_entry);
+        // `git config --list -z` emits `section.key\nvalue` (or `section.key` for bare booleans).
+        let Some((raw_key, raw_val)) = text.split_once('\n') else {
+            continue;
+        };
+        let key = raw_key.trim();
+        let val = raw_val.trim();
+        if val.is_empty() {
+            continue;
+        }
+        if key.eq_ignore_ascii_case("gitma.account") {
+            cfg.account = Some(val.to_string());
+        } else if key.eq_ignore_ascii_case("gitma.resolvedaccount") {
+            cfg.resolved_account = Some(val.to_string());
+        } else if key.eq_ignore_ascii_case("user.email") {
+            cfg.user_email = Some(val.to_string());
+        } else if let Some(rest) = key.strip_prefix("remote.") {
+            if rest.ends_with(".url") && rest.len() > ".url".len() {
+                cfg.remote_urls.push(val.to_string());
             }
         }
     }
-    urls
+    cfg
 }
 
 pub fn is_network_remote_url(url: &str) -> bool {

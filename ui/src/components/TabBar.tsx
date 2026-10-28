@@ -1,8 +1,7 @@
-import { memo, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import {
   ArrowDown,
-  ArrowUp,
   Check,
   ChevronLeft,
   ChevronRight,
@@ -23,7 +22,7 @@ import {
   X,
   XCircle,
 } from 'lucide-react';
-import { useAppStore, loadSavedGroupNames } from '../store/app';
+import { useAppStore, loadSavedGroupNames, saveOpenTabs } from '../store/app';
 import { AccountSelector } from './AccountSelector';
 import { useI18n } from '../i18n';
 import type { TabItem } from '../lib/types';
@@ -80,7 +79,6 @@ export const TabBar = memo(function TabBar() {
   const tabs = useAppStore((s) => s.tabs);
   const activeTabId = useAppStore((s) => s.activeTabId);
   const activeBranch = useAppStore((s) => s.snapshot?.branch ?? null);
-  const ahead = useAppStore((s) => s.snapshot?.ahead ?? 0);
   const behind = useAppStore((s) => s.snapshot?.behind ?? 0);
   const openHome = useAppStore((s) => s.openHome);
   const switchTab = useAppStore((s) => s.switchTab);
@@ -242,33 +240,45 @@ export const TabBar = memo(function TabBar() {
       hasMoved: false,
     };
 
+    let moveRafId: number | null = null;
+    let latestClientX = e.clientX;
+
     const onPointerMove = (moveEvent: PointerEvent) => {
       if (!dragRef.current || !dragRef.current.active) return;
-      const deltaX = moveEvent.clientX - dragRef.current.startX;
+      latestClientX = moveEvent.clientX;
+      const deltaX = latestClientX - dragRef.current.startX;
 
       if (!dragRef.current.hasMoved && Math.abs(deltaX) > 6) {
         dragRef.current.hasMoved = true;
         setSlidingIndex(dragRef.current.currentIndex);
       }
 
-      if (dragRef.current.hasMoved && tabListRef.current) {
-        const tabElements = Array.from(tabListRef.current.querySelectorAll<HTMLElement>('.tab-project'));
-        for (let i = 0; i < tabElements.length; i++) {
-          const rect = tabElements[i].getBoundingClientRect();
-          if (moveEvent.clientX >= rect.left && moveEvent.clientX <= rect.right) {
-            const targetIdx = Number(tabElements[i].dataset.tabIndex);
-            if (!Number.isNaN(targetIdx) && targetIdx !== dragRef.current.currentIndex) {
-              reorderTabs(dragRef.current.currentIndex, targetIdx);
-              dragRef.current.currentIndex = targetIdx;
-              setSlidingIndex(targetIdx);
+      if (dragRef.current.hasMoved && moveRafId === null) {
+        moveRafId = requestAnimationFrame(() => {
+          moveRafId = null;
+          if (!dragRef.current?.active || !tabListRef.current) return;
+          const tabElements = tabListRef.current.querySelectorAll<HTMLElement>('.tab-project');
+          for (let i = 0; i < tabElements.length; i++) {
+            const rect = tabElements[i].getBoundingClientRect();
+            if (latestClientX >= rect.left && latestClientX <= rect.right) {
+              const targetIdx = Number(tabElements[i].dataset.tabIndex);
+              if (!Number.isNaN(targetIdx) && targetIdx !== dragRef.current.currentIndex) {
+                reorderTabs(dragRef.current.currentIndex, targetIdx, { persist: false });
+                dragRef.current.currentIndex = targetIdx;
+                setSlidingIndex(targetIdx);
+              }
+              break;
             }
-            break;
           }
-        }
+        });
       }
     };
 
     const onPointerUp = () => {
+      if (moveRafId !== null) {
+        cancelAnimationFrame(moveRafId);
+        moveRafId = null;
+      }
       window.removeEventListener('pointermove', onPointerMove);
       window.removeEventListener('pointerup', onPointerUp);
       window.removeEventListener('pointercancel', onPointerUp);
@@ -280,6 +290,8 @@ export const TabBar = memo(function TabBar() {
 
       if (hasMoved) {
         justDraggedRef.current = true;
+        const st = useAppStore.getState();
+        saveOpenTabs(st.tabs.map((t) => t.path), st.activeTabId);
       } else {
         void switchTab(tabId);
       }
@@ -371,45 +383,57 @@ export const TabBar = memo(function TabBar() {
       hasMoved: false,
     };
 
+    let groupRafId: number | null = null;
+    let latestGroupX = e.clientX;
+
     const onPointerMove = (moveEvent: PointerEvent) => {
       if (!groupDragRef.current || !groupDragRef.current.active) return;
-      const deltaX = moveEvent.clientX - groupDragRef.current.startX;
+      latestGroupX = moveEvent.clientX;
+      const deltaX = latestGroupX - groupDragRef.current.startX;
 
       if (!groupDragRef.current.hasMoved && Math.abs(deltaX) > 6) {
         groupDragRef.current.hasMoved = true;
         setDraggingGroupIndex(groupDragRef.current.groupIndex);
       }
 
-      if (groupDragRef.current.hasMoved && tabListRef.current) {
-        const groupElements = Array.from(tabListRef.current.querySelectorAll<HTMLElement>('[data-group-index]'));
-        for (let i = 0; i < groupElements.length; i++) {
-          const rect = groupElements[i].getBoundingClientRect();
-          if (moveEvent.clientX >= rect.left && moveEvent.clientX <= rect.right) {
-            const targetGroupIdx = Number(groupElements[i].dataset.groupIndex);
-            if (!Number.isNaN(targetGroupIdx) && targetGroupIdx !== groupDragRef.current.groupIndex) {
-              const curTabs = useAppStore.getState().tabs;
-              const curGroups: TabGroup[] = [];
-              curTabs.forEach((tab, idx) => {
-                const prev = curGroups[curGroups.length - 1];
-                if (prev && prev.color && tab.color && prev.color.toLowerCase() === tab.color.toLowerCase()) {
-                  prev.tabs.push({ tab, index: idx });
-                } else {
-                  curGroups.push({ key: `${tab.color ?? 'none'}-${idx}`, color: tab.color ?? null, tabs: [{ tab, index: idx }] });
-                }
-              });
+      if (groupDragRef.current.hasMoved && groupRafId === null) {
+        groupRafId = requestAnimationFrame(() => {
+          groupRafId = null;
+          if (!groupDragRef.current?.active || !tabListRef.current) return;
+          const groupElements = tabListRef.current.querySelectorAll<HTMLElement>('[data-group-index]');
+          for (let i = 0; i < groupElements.length; i++) {
+            const rect = groupElements[i].getBoundingClientRect();
+            if (latestGroupX >= rect.left && latestGroupX <= rect.right) {
+              const targetGroupIdx = Number(groupElements[i].dataset.groupIndex);
+              if (!Number.isNaN(targetGroupIdx) && targetGroupIdx !== groupDragRef.current.groupIndex) {
+                const curTabs = useAppStore.getState().tabs;
+                const curGroups: TabGroup[] = [];
+                curTabs.forEach((tab, idx) => {
+                  const prev = curGroups[curGroups.length - 1];
+                  if (prev && prev.color && tab.color && prev.color.toLowerCase() === tab.color.toLowerCase()) {
+                    prev.tabs.push({ tab, index: idx });
+                  } else {
+                    curGroups.push({ key: `${tab.color ?? 'none'}-${idx}`, color: tab.color ?? null, tabs: [{ tab, index: idx }] });
+                  }
+                });
 
-              const newTabs = reorderTabsByGroup(curTabs, groupDragRef.current.groupIndex, targetGroupIdx, curGroups);
-              reorderTabsList(newTabs);
-              groupDragRef.current.groupIndex = targetGroupIdx;
-              setDraggingGroupIndex(targetGroupIdx);
+                const newTabs = reorderTabsByGroup(curTabs, groupDragRef.current.groupIndex, targetGroupIdx, curGroups);
+                reorderTabsList(newTabs, { persist: false });
+                groupDragRef.current.groupIndex = targetGroupIdx;
+                setDraggingGroupIndex(targetGroupIdx);
+              }
+              break;
             }
-            break;
           }
-        }
+        });
       }
     };
 
     const onPointerUp = () => {
+      if (groupRafId !== null) {
+        cancelAnimationFrame(groupRafId);
+        groupRafId = null;
+      }
       window.removeEventListener('pointermove', onPointerMove);
       window.removeEventListener('pointerup', onPointerUp);
       window.removeEventListener('pointercancel', onPointerUp);
@@ -421,6 +445,8 @@ export const TabBar = memo(function TabBar() {
 
       if (hasMoved) {
         justGroupDraggedRef.current = true;
+        const st = useAppStore.getState();
+        saveOpenTabs(st.tabs.map((t) => t.path), st.activeTabId);
       }
     };
 
@@ -429,24 +455,27 @@ export const TabBar = memo(function TabBar() {
     window.addEventListener('pointercancel', onPointerUp);
   };
 
-  const groups: TabGroup[] = [];
-  tabs.forEach((tab, index) => {
-    const prevGroup = groups[groups.length - 1];
-    if (
-      prevGroup &&
-      prevGroup.color &&
-      tab.color &&
-      prevGroup.color.toLowerCase() === tab.color.toLowerCase()
-    ) {
-      prevGroup.tabs.push({ tab, index });
-    } else {
-      groups.push({
-        key: `${tab.color ?? 'none'}-${index}`,
-        color: tab.color ?? null,
-        tabs: [{ tab, index }],
-      });
-    }
-  });
+  const groups = useMemo<TabGroup[]>(() => {
+    const result: TabGroup[] = [];
+    tabs.forEach((tab, index) => {
+      const prevGroup = result[result.length - 1];
+      if (
+        prevGroup &&
+        prevGroup.color &&
+        tab.color &&
+        prevGroup.color.toLowerCase() === tab.color.toLowerCase()
+      ) {
+        prevGroup.tabs.push({ tab, index });
+      } else {
+        result.push({
+          key: `${tab.color ?? 'none'}-${index}`,
+          color: tab.color ?? null,
+          tabs: [{ tab, index }],
+        });
+      }
+    });
+    return result;
+  }, [tabs]);
 
   return (
     <nav className="tab-bar" aria-label="Abas de projetos">
@@ -902,31 +931,6 @@ export const TabBar = memo(function TabBar() {
       <div className="tab-bar-right-actions">
         {activeTabId !== 'home' && (
           <>
-            {ahead > 0 && (
-              <button
-                type="button"
-                className="tab-bar-badge-btn ahead-badge"
-                onClick={() => void runOperation('push')}
-                title={t('sync.pushAhead', { count: ahead })}
-                aria-label={t('sync.pushAhead', { count: ahead })}
-                style={{
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: '3px',
-                  fontSize: '11px',
-                  fontWeight: 600,
-                  color: 'var(--green)',
-                  background: 'rgba(16, 185, 129, 0.12)',
-                  border: '1px solid rgba(16, 185, 129, 0.25)',
-                  borderRadius: '4px',
-                  padding: '2px 6px',
-                  cursor: 'pointer'
-                }}
-              >
-                <ArrowUp size={12} />
-                <span>{ahead}</span>
-              </button>
-            )}
             {behind > 0 && (
               <button
                 type="button"

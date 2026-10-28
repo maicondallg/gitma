@@ -1,7 +1,7 @@
 //! Deterministic, Git-independent layout for the commit graph.
 
 use crate::domain::{CommitSummary, HistoryPage};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, HashSet};
 
 pub type Lane = usize;
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -32,18 +32,34 @@ pub struct GraphLayout {
     pub has_more: bool,
 }
 
+#[inline]
+fn mark_lane(bitset: &mut Vec<bool>, lane: Lane) {
+    if lane >= bitset.len() {
+        bitset.resize(lane + 1, false);
+    }
+    bitset[lane] = true;
+}
+
 pub fn layout_page(page: &HistoryPage, incoming: &LaneState) -> (GraphLayout, LaneState) {
     let mut state = incoming.clone();
     let mut rows = Vec::with_capacity(page.commits.len());
-    let mut seen = BTreeSet::new();
+    let mut seen = HashSet::with_capacity(page.commits.len());
+    let mut active_bitset = Vec::<bool>::with_capacity(state.lane_count.max(8));
+    let mut used_bitset = Vec::<bool>::with_capacity(state.lane_count.max(8));
+
     for (row, commit) in page.commits.iter().cloned().enumerate() {
-        let mut active_lanes: BTreeSet<Lane> = state.open.values().copied().collect();
+        active_bitset.fill(false);
+        for &open_lane in state.open.values() {
+            mark_lane(&mut active_bitset, open_lane);
+        }
+
         let lane = state
             .open
             .remove(&commit.oid)
-            .unwrap_or_else(|| allocate_lane(&state));
-        active_lanes.insert(lane);
+            .unwrap_or_else(|| allocate_lane(&state, &mut used_bitset));
+        mark_lane(&mut active_bitset, lane);
         state.lane_count = state.lane_count.max(lane + 1);
+
         let mut parent_lanes = Vec::with_capacity(commit.parents.len());
         for (index, parent) in commit.parents.iter().enumerate() {
             // A parent may already have a lane opened by an earlier sibling.
@@ -53,20 +69,25 @@ pub fn layout_page(page: &HistoryPage, incoming: &LaneState) -> (GraphLayout, La
                 if index == 0 {
                     lane
                 } else {
-                    allocate_lane(&state)
+                    allocate_lane(&state, &mut used_bitset)
                 }
             });
             state.open.insert(parent.clone(), parent_lane);
-            active_lanes.insert(parent_lane);
+            mark_lane(&mut active_bitset, parent_lane);
             state.lane_count = state.lane_count.max(parent_lane + 1);
             parent_lanes.push(parent_lane);
         }
-        active_lanes.extend(state.open.values().copied());
+
         if seen.insert(commit.oid.clone()) {
             let connections = parent_lanes
                 .iter()
                 .copied()
                 .map(|to| Connection { from: lane, to })
+                .collect();
+            let active_lanes = active_bitset
+                .iter()
+                .enumerate()
+                .filter_map(|(idx, &active)| active.then_some(idx))
                 .collect();
             rows.push(CommitLayout {
                 commit,
@@ -74,7 +95,7 @@ pub fn layout_page(page: &HistoryPage, incoming: &LaneState) -> (GraphLayout, La
                 lane,
                 parent_lanes,
                 connections,
-                active_lanes: active_lanes.into_iter().collect(),
+                active_lanes,
             });
         }
     }
@@ -93,11 +114,21 @@ pub fn layout_page(page: &HistoryPage, incoming: &LaneState) -> (GraphLayout, La
 pub fn layout_history(page: &HistoryPage) -> GraphLayout {
     layout_page(page, &LaneState::default()).0
 }
-fn allocate_lane(state: &LaneState) -> Lane {
-    let used: BTreeSet<_> = state.open.values().copied().collect();
-    (0..=state.lane_count)
-        .find(|lane| !used.contains(lane))
-        .unwrap_or(state.lane_count)
+fn allocate_lane(state: &LaneState, used: &mut Vec<bool>) -> Lane {
+    let needed = state.lane_count + 1;
+    if used.len() < needed {
+        used.resize(needed, false);
+    }
+    used[..needed].fill(false);
+    for &lane in state.open.values() {
+        if lane >= used.len() {
+            used.resize(lane + 1, false);
+        }
+        used[lane] = true;
+    }
+    used.iter()
+        .position(|&in_use| !in_use)
+        .unwrap_or(used.len())
 }
 
 #[cfg(test)]

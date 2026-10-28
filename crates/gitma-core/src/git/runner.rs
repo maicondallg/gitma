@@ -136,24 +136,30 @@ fn run_raw_once(
 
     let stdout = child.stdout.take().expect("stdout was piped");
     let stderr = child.stderr.take().expect("stderr was piped");
-    let stdout_reader = thread::spawn(move || read_pipe(stdout, MAX_STDOUT_CAPTURE));
-    let stderr_reader = thread::spawn(move || read_pipe(stderr, MAX_STDERR_CAPTURE));
+    let (done_tx, done_rx) = std::sync::mpsc::sync_channel::<()>(0);
+    let stderr_done_tx = done_tx.clone();
+    let stdout_reader = thread::spawn(move || {
+        let res = read_pipe(stdout, MAX_STDOUT_CAPTURE);
+        drop(done_tx);
+        res
+    });
+    let stderr_reader = thread::spawn(move || {
+        let res = read_pipe(stderr, MAX_STDERR_CAPTURE);
+        drop(stderr_done_tx);
+        res
+    });
 
     let deadline = Instant::now() + MUTATION_TIMEOUT;
-    let started = Instant::now();
     let status = loop {
         match child.try_wait() {
             Ok(Some(status)) => break status,
             Ok(None) if Instant::now() < deadline && !CANCELLED.load(Ordering::SeqCst) => {
-                let elapsed = started.elapsed();
-                let interval = if elapsed < Duration::from_millis(5) {
-                    Duration::from_micros(150)
-                } else if elapsed < Duration::from_millis(50) {
-                    Duration::from_millis(1)
-                } else {
-                    Duration::from_millis(10)
-                };
-                thread::sleep(interval)
+                match done_rx.recv_timeout(Duration::from_millis(10)) {
+                    Ok(()) | Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+                    Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                        thread::sleep(Duration::from_millis(1));
+                    }
+                }
             }
             Ok(None) if CANCELLED.load(Ordering::SeqCst) => {
                 stop_child(&mut child);
@@ -361,27 +367,33 @@ fn run_once_with_input(
     let stdout = child.stdout.take().expect("stdout was piped");
     let stderr = child.stderr.take().expect("stderr was piped");
     // Read both pipes while Git is running so a verbose command cannot block
-    // on either pipe before its timeout is checked.
-    let stdout_reader = thread::spawn(move || read_pipe(stdout, MAX_STDOUT_CAPTURE));
-    let stderr_reader = thread::spawn(move || read_pipe(stderr, MAX_STDERR_CAPTURE));
+    // on either pipe before its timeout is checked. Hold `done_tx` in both
+    // reader threads so `done_rx` disconnects right as both pipes reach EOF.
+    let (done_tx, done_rx) = std::sync::mpsc::sync_channel::<()>(0);
+    let stderr_done_tx = done_tx.clone();
+    let stdout_reader = thread::spawn(move || {
+        let res = read_pipe(stdout, MAX_STDOUT_CAPTURE);
+        drop(done_tx);
+        res
+    });
+    let stderr_reader = thread::spawn(move || {
+        let res = read_pipe(stderr, MAX_STDERR_CAPTURE);
+        drop(stderr_done_tx);
+        res
+    });
 
     let deadline = Instant::now() + timeout;
-    let started = Instant::now();
     let status = loop {
         match child.try_wait() {
             Ok(Some(status)) => break status,
             Ok(None) if Instant::now() < deadline && !CANCELLED.load(Ordering::SeqCst) => {
-                // Most local Git commands finish in under a millisecond. Poll
-                // them promptly, then back off for slower network operations.
-                let elapsed = started.elapsed();
-                let interval = if elapsed < Duration::from_millis(5) {
-                    Duration::from_micros(150)
-                } else if elapsed < Duration::from_millis(50) {
-                    Duration::from_millis(1)
-                } else {
-                    Duration::from_millis(10)
-                };
-                thread::sleep(interval)
+                // Wake up immediately via channel disconnect when both pipes close on process exit.
+                match done_rx.recv_timeout(Duration::from_millis(10)) {
+                    Ok(()) | Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+                    Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                        thread::sleep(Duration::from_millis(1));
+                    }
+                }
             }
             Ok(None) if CANCELLED.load(Ordering::SeqCst) => {
                 stop_child(&mut child);
@@ -513,8 +525,8 @@ fn stop_child(child: &mut std::process::Child) {
 }
 
 fn read_pipe(mut pipe: impl Read, max_capture: usize) -> std::io::Result<Vec<u8>> {
-    let mut bytes = Vec::new();
-    let mut buffer = [0; 8192];
+    let mut bytes = Vec::with_capacity(4096);
+    let mut buffer = [0; 16384];
     loop {
         let read = pipe.read(&mut buffer)?;
         if read == 0 {

@@ -1,4 +1,4 @@
-import { FormEvent, KeyboardEvent, memo, useState } from 'react'
+import { FormEvent, KeyboardEvent, memo, startTransition, useEffect, useState } from 'react'
 import { History } from 'lucide-react'
 import { useAppStore } from '../store/app'
 import { useI18n } from '../i18n'
@@ -7,7 +7,7 @@ import './Lists.css'
 
 export const CommitForm = memo(function CommitForm() {
   const { t } = useI18n()
-  const message = useAppStore((state) => state.commitMessage)
+  const storeMessage = useAppStore((state) => state.commitMessage)
   const setMessage = useAppStore((state) => state.setCommitMessage)
   const runOperation = useAppStore((state) => state.runOperation)
   const stagedCount = useAppStore((state) => state.snapshot?.staged?.length ?? 0)
@@ -15,12 +15,22 @@ export const CommitForm = memo(function CommitForm() {
   const isLocal = useAppStore((state) => state.context.kind === 'local')
   const operation = useAppStore((state) => state.operation)
 
+  const [value, setValue] = useState(storeMessage ?? '')
   const [isAmend, setIsAmend] = useState(false)
   const [draftMessage, setDraftMessage] = useState('')
 
+  useEffect(() => {
+    setValue(storeMessage ?? '')
+  }, [storeMessage])
+
   if (!isLocal) return null
 
-  const value = message ?? ''
+  const handleChange = (nextValue: string) => {
+    setValue(nextValue)
+    startTransition(() => {
+      setMessage(nextValue)
+    })
+  }
 
   const handleToggleAmend = (nextAmend: boolean) => {
     setIsAmend(nextAmend)
@@ -31,6 +41,7 @@ export const CommitForm = memo(function CommitForm() {
       const lastCommit = history?.rows?.find((r) => r.row === 0 || r.commit)?.commit
       if (lastCommit?.oid && !value.trim()) {
         if (lastCommit.subject) {
+          setValue(lastCommit.subject)
           setMessage(lastCommit.subject)
         }
         const session = useAppStore.getState().session
@@ -38,6 +49,7 @@ export const CommitForm = memo(function CommitForm() {
           void getBridge().getCommitFiles(session.sessionId, Date.now(), lastCommit.oid).then((res) => {
             if (res.details?.body?.trim()) {
               const fullMsg = `${res.details.subject}\n\n${res.details.body.trim()}`
+              setValue(fullMsg)
               setMessage(fullMsg)
             }
           }).catch(() => {})
@@ -45,6 +57,7 @@ export const CommitForm = memo(function CommitForm() {
       }
     } else {
       if (draftMessage !== undefined) {
+        setValue(draftMessage)
         setMessage(draftMessage)
       }
     }
@@ -62,6 +75,9 @@ export const CommitForm = memo(function CommitForm() {
   const submit = async (event?: FormEvent) => {
     event?.preventDefault()
     if (!disabled) {
+      if (useAppStore.getState().commitMessage !== value) {
+        setMessage(value)
+      }
       await runOperation(isAmend ? 'commitAmend' : 'commit')
       if (isAmend) setIsAmend(false)
     }
@@ -97,7 +113,7 @@ export const CommitForm = memo(function CommitForm() {
       <textarea
         id="commit-message"
         value={value}
-        onChange={(event) => setMessage(event.target.value)}
+        onChange={(event) => handleChange(event.target.value)}
         onKeyDown={onKeyDown}
         placeholder={isAmend ? t('commit.placeholderAmend') : t('commit.placeholder')}
         rows={3}

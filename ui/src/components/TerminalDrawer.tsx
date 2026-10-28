@@ -76,16 +76,18 @@ export function TerminalDrawer() {
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [copyAllFeedback, setCopyAllFeedback] = useState(false);
 
+  const drawerRef = useRef<HTMLDivElement>(null);
+  const logsContainerRef = useRef<HTMLDivElement>(null);
   const logsEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const isResizingRef = useRef(false);
   const startYRef = useRef(0);
   const startHeightRef = useRef(0);
 
-  // Auto-scroll to bottom when new logs arrive
+  // Auto-scroll to bottom immediately when new logs arrive without smooth-scroll layout jitter
   useEffect(() => {
-    if (isConsoleOpen && logsEndRef.current) {
-      logsEndRef.current.scrollIntoView?.({ behavior: 'smooth' });
+    if (isConsoleOpen && logsContainerRef.current) {
+      logsContainerRef.current.scrollTop = logsContainerRef.current.scrollHeight;
     }
   }, [commandLogs.length, isConsoleOpen]);
 
@@ -178,25 +180,42 @@ export function TerminalDrawer() {
     setTimeout(() => setCopyAllFeedback(false), 1800);
   };
 
-  // Resize handler
+  // Resize handler: mutate DOM height via rAF during drag to avoid React re-renders on every pixel
   const handleMouseDownResize = (e: MouseEvent) => {
     e.preventDefault();
     isResizingRef.current = true;
     startYRef.current = e.clientY;
     startHeightRef.current = drawerHeight;
     let currentHeight = drawerHeight;
+    let rafId: number | null = null;
+    document.body.style.cursor = 'row-resize';
+    document.body.style.userSelect = 'none';
 
     const onMouseMove = (moveEvent: globalThis.MouseEvent) => {
       if (!isResizingRef.current) return;
       const delta = startYRef.current - moveEvent.clientY;
       currentHeight = Math.min(MAX_HEIGHT, Math.max(MIN_HEIGHT, startHeightRef.current + delta));
-      setDrawerHeight(currentHeight);
+      if (rafId === null) {
+        rafId = requestAnimationFrame(() => {
+          rafId = null;
+          if (drawerRef.current) {
+            drawerRef.current.style.height = `${currentHeight}px`;
+          }
+        });
+      }
     };
 
     const onMouseUp = () => {
       isResizingRef.current = false;
+      if (rafId !== null) {
+        cancelAnimationFrame(rafId);
+        rafId = null;
+      }
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
       window.removeEventListener('mousemove', onMouseMove);
       window.removeEventListener('mouseup', onMouseUp);
+      setDrawerHeight(currentHeight);
       try {
         localStorage.setItem(HEIGHT_STORAGE_KEY, String(currentHeight));
       } catch {}
@@ -212,6 +231,7 @@ export function TerminalDrawer() {
 
   return (
     <div
+      ref={drawerRef}
       className={`terminal-drawer ${isMaximized ? 'is-maximized' : ''}`}
       style={{ height: isMaximized ? '75vh' : `${drawerHeight}px` }}
       role="region"
@@ -305,7 +325,7 @@ export function TerminalDrawer() {
       </div>
 
       {/* Body: Logs List */}
-      <div className="terminal-drawer-logs">
+      <div ref={logsContainerRef} className="terminal-drawer-logs">
         {commandLogs.length === 0 ? (
           <div className="terminal-empty-state">
             <Sparkles size={24} className="terminal-empty-icon" />

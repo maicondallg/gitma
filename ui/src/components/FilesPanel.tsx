@@ -58,15 +58,6 @@ const FLAT_ROW_HEIGHT = 36;
 const TREE_ROW_HEIGHT = 25;
 // Keep the visible-files memo stable while only the selection changes.
 const EMPTY_FILES: FileEntry[] = [];
-const statusLabel: Record<FileEntry['status'], string> = {
-  added: 'Adicionado',
-  modified: 'Modificado',
-  deleted: 'Excluído',
-  renamed: 'Renomeado',
-  copied: 'Copiado',
-  untracked: 'Não rastreado',
-  conflicted: 'Conflito',
-};
 const statusGlyph: Record<FileEntry['status'], LucideIcon> = {
   added: CirclePlus,
   modified: FilePenLine,
@@ -278,7 +269,7 @@ export function DiscardButton({
   );
 }
 
-function FileRow({
+const FileRow = memo(function FileRow({
   file,
   selected = false,
   canStage,
@@ -299,11 +290,11 @@ function FileRow({
   indent?: number;
   showDir?: boolean;
   isTree?: boolean;
-  onStage: () => void;
-  onSelect: () => void;
-  onPrefetch?: () => void;
-  onDiscard?: () => void;
-  onContextMenu?: (e: React.MouseEvent) => void;
+  onStage: (file: FileEntry) => void;
+  onSelect: (file: FileEntry) => void;
+  onPrefetch?: (file: FileEntry) => void;
+  onDiscard?: (file: FileEntry) => void;
+  onContextMenu?: (e: React.MouseEvent, file: FileEntry) => void;
 }) {
   const { t } = useI18n();
   const Icon = statusGlyph[file.status];
@@ -313,10 +304,10 @@ function FileRow({
     <div
       className={`lists-file-row ${isTree ? 'is-tree-file-row' : ''}`}
       style={{ paddingLeft: `${indent}px` }}
-      onContextMenu={onContextMenu}
+      onContextMenu={onContextMenu ? (e) => onContextMenu(e, file) : undefined}
       onDoubleClick={() => {
         if (canStage && !disabled) {
-          onStage();
+          onStage(file);
         }
       }}
     >
@@ -326,7 +317,7 @@ function FileRow({
           type="checkbox"
           disabled={disabled}
           checked={file.area === 'staged'}
-          onChange={onStage}
+          onChange={() => onStage(file)}
           onClick={(e) => e.stopPropagation()}
           aria-label={`${file.name}: ${actionText}`}
         />
@@ -335,16 +326,16 @@ function FileRow({
         type="button"
         aria-current={selected ? 'true' : undefined}
         className={`lists-file-select ${selected ? 'lists-row-selected' : ''} ${isTree ? 'is-tree-select' : ''}`}
-        onPointerEnter={onPrefetch}
-        onFocus={onPrefetch}
+        onPointerEnter={onPrefetch ? () => onPrefetch(file) : undefined}
+        onFocus={onPrefetch ? () => onPrefetch(file) : undefined}
         onClick={(e) => {
-          onSelect();
+          onSelect(file);
           (e.currentTarget as HTMLElement).blur();
         }}
         onDoubleClick={(e) => {
           e.stopPropagation();
           if (canStage && !disabled) {
-            onStage();
+            onStage(file);
           }
         }}
         title={`${file.pathDisplay}\n(${t('files.doubleClickToToggle', { action: actionText })})`}
@@ -380,7 +371,7 @@ function FileRow({
         <DiscardButton
           disabled={disabled}
           size={isTree ? 11 : 13}
-          onDiscard={onDiscard}
+          onDiscard={() => onDiscard(file)}
           title={t('files.discardFile', { name: file.name })}
           confirmTitle={t('files.confirmDiscard')}
           ariaLabel={t('files.discard')}
@@ -389,9 +380,11 @@ function FileRow({
       )}
     </div>
   );
-}
+});
 
-export function DirRow({
+const NOOP_STAGE = () => undefined;
+
+export const DirRow = memo(function DirRow({
   node,
   descendantFiles,
   isCollapsed,
@@ -478,9 +471,9 @@ export function DirRow({
       </div>
     </div>
   );
-}
+});
 
-function FileGroup({
+const FileGroup = memo(function FileGroup({
   title,
   shortTitle,
   files,
@@ -488,6 +481,7 @@ function FileGroup({
   area,
   disabled,
   isTree,
+  visibleItems: precomputedVisibleItems,
   collapsed,
   onToggleDir,
   onSelect,
@@ -509,6 +503,7 @@ function FileGroup({
   area: Area;
   disabled: boolean;
   isTree: boolean;
+  visibleItems?: FileTreeNode[];
   collapsed: Set<string>;
   onToggleDir: (dirPath: string) => void;
   onSelect: (file: FileEntry) => void;
@@ -523,10 +518,13 @@ function FileGroup({
   onContextMenu?: (e: React.MouseEvent, file: FileEntry) => void;
   onDirContextMenu?: (e: React.MouseEvent, node: FileTreeNode, descendantFiles: FileEntry[], area: Area) => void;
 }) {
-  const treeNodes = useMemo(() => (isTree ? buildTree(files) : []), [isTree, files]);
+  const treeNodes = useMemo(
+    () => (isTree && !precomputedVisibleItems ? buildTree(files) : []),
+    [isTree, precomputedVisibleItems, files]
+  );
   const visibleItems = useMemo(
-    () => (isTree ? flattenTree(treeNodes, collapsed) : []),
-    [isTree, treeNodes, collapsed]
+    () => (precomputedVisibleItems ?? (isTree ? flattenTree(treeNodes, collapsed) : [])),
+    [precomputedVisibleItems, isTree, treeNodes, collapsed]
   );
 
   const count = isTree ? visibleItems.length : files.length;
@@ -621,7 +619,7 @@ function FileGroup({
                   <div
                     key={node.id}
                     className="lists-virtual-row lists-tree-row"
-                    style={{ transform: `translateY(${item.start}px)`, height: `${TREE_ROW_HEIGHT}px` }}
+                    style={{ transform: `translate3d(0, ${item.start}px, 0)`, height: `${TREE_ROW_HEIGHT}px` }}
                   >
                     <DirRow
                       node={node}
@@ -643,7 +641,7 @@ function FileGroup({
                 <div
                   key={file.id}
                   className="lists-virtual-row lists-tree-row"
-                  style={{ transform: `translateY(${item.start}px)`, height: `${TREE_ROW_HEIGHT}px` }}
+                  style={{ transform: `translate3d(0, ${item.start}px, 0)`, height: `${TREE_ROW_HEIGHT}px` }}
                 >
                   <FileRow
                     file={file}
@@ -653,11 +651,11 @@ function FileGroup({
                     indent={6 + node.depth * 11}
                     showDir={false}
                     isTree={true}
-                    onStage={() => onStage(file)}
-                    onSelect={() => onSelect(file)}
-                    onPrefetch={() => onPrefetch?.(file)}
-                    onDiscard={onDiscard ? () => onDiscard(file) : undefined}
-                    onContextMenu={(e) => onContextMenu?.(e, file)}
+                    onStage={onStage}
+                    onSelect={onSelect}
+                    onPrefetch={onPrefetch}
+                    onDiscard={onDiscard}
+                    onContextMenu={onContextMenu}
                   />
                 </div>
               );
@@ -669,7 +667,7 @@ function FileGroup({
               <div
                 key={file.id}
                 className="lists-virtual-row"
-                style={{ transform: `translateY(${item.start}px)`, height: `${FLAT_ROW_HEIGHT}px` }}
+                style={{ transform: `translate3d(0, ${item.start}px, 0)`, height: `${FLAT_ROW_HEIGHT}px` }}
               >
                 <FileRow
                   file={file}
@@ -679,11 +677,11 @@ function FileGroup({
                   indent={0}
                   showDir={true}
                   isTree={false}
-                  onStage={() => onStage(file)}
-                  onSelect={() => onSelect(file)}
-                  onPrefetch={() => onPrefetch?.(file)}
-                  onDiscard={onDiscard ? () => onDiscard(file) : undefined}
-                  onContextMenu={(e) => onContextMenu?.(e, file)}
+                  onStage={onStage}
+                  onSelect={onSelect}
+                  onPrefetch={onPrefetch}
+                  onDiscard={onDiscard}
+                  onContextMenu={onContextMenu}
                 />
               </div>
             );
@@ -692,12 +690,13 @@ function FileGroup({
       </div>
     </div>
   );
-}
+});
 
-function VirtualHistoryFiles({
+const VirtualHistoryFiles = memo(function VirtualHistoryFiles({
   files,
   selectedId,
   isTree,
+  visibleItems: precomputedVisibleItems,
   collapsed,
   onToggleDir,
   onSelect,
@@ -708,6 +707,7 @@ function VirtualHistoryFiles({
   files: FileEntry[];
   selectedId?: string;
   isTree: boolean;
+  visibleItems?: FileTreeNode[];
   collapsed: Set<string>;
   onToggleDir: (dirPath: string) => void;
   onSelect: (file: FileEntry) => void;
@@ -715,10 +715,13 @@ function VirtualHistoryFiles({
   onContextMenu?: (e: React.MouseEvent, file: FileEntry) => void;
   onDirContextMenu?: (e: React.MouseEvent, node: FileTreeNode, descendantFiles: FileEntry[], area: Area) => void;
 }) {
-  const treeNodes = useMemo(() => (isTree ? buildTree(files) : []), [isTree, files]);
+  const treeNodes = useMemo(
+    () => (isTree && !precomputedVisibleItems ? buildTree(files) : []),
+    [isTree, precomputedVisibleItems, files]
+  );
   const visibleItems = useMemo(
-    () => (isTree ? flattenTree(treeNodes, collapsed) : []),
-    [isTree, treeNodes, collapsed]
+    () => (precomputedVisibleItems ?? (isTree ? flattenTree(treeNodes, collapsed) : [])),
+    [precomputedVisibleItems, isTree, treeNodes, collapsed]
   );
 
   const count = isTree ? visibleItems.length : files.length;
@@ -759,7 +762,7 @@ function VirtualHistoryFiles({
                 <div
                   key={node.id}
                   className="lists-virtual-row lists-tree-row"
-                  style={{ transform: `translateY(${item.start}px)`, height: `${TREE_ROW_HEIGHT}px` }}
+                  style={{ transform: `translate3d(0, ${item.start}px, 0)`, height: `${TREE_ROW_HEIGHT}px` }}
                 >
                   <DirRow
                     node={node}
@@ -778,7 +781,7 @@ function VirtualHistoryFiles({
               <div
                 key={file.id}
                 className="lists-virtual-row lists-tree-row"
-                style={{ transform: `translateY(${item.start}px)`, height: `${TREE_ROW_HEIGHT}px` }}
+                style={{ transform: `translate3d(0, ${item.start}px, 0)`, height: `${TREE_ROW_HEIGHT}px` }}
               >
                 <FileRow
                   file={file}
@@ -787,10 +790,10 @@ function VirtualHistoryFiles({
                   indent={6 + node.depth * 11}
                   showDir={false}
                   isTree={true}
-                  onStage={() => undefined}
-                  onSelect={() => onSelect(file)}
-                  onPrefetch={() => onPrefetch?.(file)}
-                  onContextMenu={(e) => onContextMenu?.(e, file)}
+                  onStage={NOOP_STAGE}
+                  onSelect={onSelect}
+                  onPrefetch={onPrefetch}
+                  onContextMenu={onContextMenu}
                 />
               </div>
             );
@@ -802,7 +805,7 @@ function VirtualHistoryFiles({
             <div
               key={file.id}
               className="lists-virtual-row"
-              style={{ transform: `translateY(${item.start}px)`, height: `${FLAT_ROW_HEIGHT}px` }}
+              style={{ transform: `translate3d(0, ${item.start}px, 0)`, height: `${FLAT_ROW_HEIGHT}px` }}
             >
               <FileRow
                 file={file}
@@ -811,10 +814,10 @@ function VirtualHistoryFiles({
                 indent={0}
                 showDir={true}
                 isTree={false}
-                onStage={() => undefined}
-                onSelect={() => onSelect(file)}
-                onPrefetch={() => onPrefetch?.(file)}
-                onContextMenu={(e) => onContextMenu?.(e, file)}
+                onStage={NOOP_STAGE}
+                onSelect={onSelect}
+                onPrefetch={onPrefetch}
+                onContextMenu={onContextMenu}
               />
             </div>
           );
@@ -822,7 +825,7 @@ function VirtualHistoryFiles({
       </div>
     </div>
   );
-}
+});
 
 export const FilesPanel = memo(function FilesPanel() {
   const session = useAppStore((state) => state.session);
@@ -839,7 +842,7 @@ export const FilesPanel = memo(function FilesPanel() {
   const runOperation = useAppStore((state) => state.runOperation);
   const operation = useAppStore((state) => state.operation);
   const selectedFile = useAppStore((state) => state.selectedFile);
-  const preview = useAppStore((state) => state.preview);
+  const previewFileId = useAppStore((state) => state.preview?.fileId ?? null);
   const fileViewMode = useAppStore((state) => state.fileViewMode);
   const setFileViewMode = useAppStore((state) => state.setFileViewMode);
   const activePane = useAppStore((state) => state.activePane);
@@ -848,6 +851,7 @@ export const FilesPanel = memo(function FilesPanel() {
   const setFilesTab = useAppStore((state) => state.setFilesTab);
   const openInBrowser = useAppStore((state) => state.openInBrowser);
   const restoreCommitFile = useAppStore((state) => state.restoreCommitFile);
+  const resolveConflict = useAppStore((state) => state.resolveConflict);
   const setBlameOpen = useAppStore((state) => state.setBlameOpen);
   const { t } = useI18n();
 
@@ -907,9 +911,11 @@ export const FilesPanel = memo(function FilesPanel() {
 
   const [collapsedDirs, setCollapsedDirs] = useState<Set<string>>(new Set());
 
+  const contextCommitOid = context?.kind === 'commit' ? context.oid : null;
+
   useEffect(() => {
     setCollapsedDirs(new Set());
-  }, [context?.kind, context?.kind === 'commit' ? context.oid : null]);
+  }, [context?.kind, contextCommitOid]);
 
   const toggleDir = useCallback((dirPath: string) => {
     setCollapsedDirs((prev) => {
@@ -920,35 +926,77 @@ export const FilesPanel = memo(function FilesPanel() {
     });
   }, []);
 
+  const stagedTree = useMemo(() => (local && isTree ? buildTree(staged) : []), [local, isTree, staged]);
+  const unstagedTree = useMemo(() => (local && isTree ? buildTree(unstaged) : []), [local, isTree, unstaged]);
+  const historicalTree = useMemo(() => (!local && isTree ? buildTree(historical) : []), [local, isTree, historical]);
+
+  const stagedVisibleItems = useMemo(
+    () => (local && isTree ? flattenTree(stagedTree, collapsedDirs) : []),
+    [local, isTree, stagedTree, collapsedDirs]
+  );
+  const unstagedVisibleItems = useMemo(
+    () => (local && isTree ? flattenTree(unstagedTree, collapsedDirs) : []),
+    [local, isTree, unstagedTree, collapsedDirs]
+  );
+  const historicalVisibleItems = useMemo(
+    () => (!local && isTree ? flattenTree(historicalTree, collapsedDirs) : []),
+    [local, isTree, historicalTree, collapsedDirs]
+  );
+
   const visibleFiles = useMemo(() => {
     if (local) {
       if (isTree) {
-        const s = flattenTree(buildTree(staged), collapsedDirs)
-          .filter((n) => !n.isDir && n.file)
-          .map((n) => n.file!);
-        const u = flattenTree(buildTree(unstaged), collapsedDirs)
-          .filter((n) => !n.isDir && n.file)
-          .map((n) => n.file!);
-        return [...s, ...u];
+        const result: FileEntry[] = [];
+        for (let i = 0; i < stagedVisibleItems.length; i++) {
+          const n = stagedVisibleItems[i];
+          if (!n.isDir && n.file) result.push(n.file);
+        }
+        for (let i = 0; i < unstagedVisibleItems.length; i++) {
+          const n = unstagedVisibleItems[i];
+          if (!n.isDir && n.file) result.push(n.file);
+        }
+        return result;
       }
       return [...staged, ...unstaged];
     } else {
       if (isTree) {
-        return flattenTree(buildTree(historical), collapsedDirs)
-          .filter((n) => !n.isDir && n.file)
-          .map((n) => n.file!);
+        const result: FileEntry[] = [];
+        for (let i = 0; i < historicalVisibleItems.length; i++) {
+          const n = historicalVisibleItems[i];
+          if (!n.isDir && n.file) result.push(n.file);
+        }
+        return result;
       }
       return historical;
     }
-  }, [local, isTree, staged, unstaged, historical, collapsedDirs]);
+  }, [local, isTree, staged, unstaged, historical, stagedVisibleItems, unstagedVisibleItems, historicalVisibleItems]);
 
   useEffect(() => {
-    if (!selectedFile || preview?.fileId !== selectedFile.id) return;
+    if (!selectedFile || previewFileId !== selectedFile.id) return;
     const index = visibleFiles.findIndex((file) => file.id === selectedFile.id && file.area === selectedFile.area);
     if (index < 0) return;
     if (visibleFiles[index + 1]) prefetchFile(visibleFiles[index + 1]);
     if (visibleFiles[index - 1]) prefetchFile(visibleFiles[index - 1]);
-  }, [selectedFile?.id, selectedFile?.area, preview?.fileId, visibleFiles, prefetchFile]);
+  }, [selectedFile?.id, selectedFile?.area, previewFileId, visibleFiles, prefetchFile]);
+
+  const navRef = useRef({
+    activePane,
+    filesTab,
+    visibleFiles,
+    selectFile,
+    setActivePane,
+    local,
+    runOperation,
+  });
+  navRef.current = {
+    activePane,
+    filesTab,
+    visibleFiles,
+    selectFile,
+    setActivePane,
+    local,
+    runOperation,
+  };
 
   useEffect(() => {
     let previewTimer: ReturnType<typeof setTimeout> | null = null;
@@ -964,7 +1012,7 @@ export const FilesPanel = memo(function FilesPanel() {
         const file = useAppStore.getState().selectedFile;
         if (!file) return;
         previewInFlight = true;
-        void selectFile(file).finally(() => {
+        void navRef.current.selectFile(file).finally(() => {
           previewInFlight = false;
           if (pressedArrows.size > 0) schedulePreview();
         });
@@ -976,12 +1024,21 @@ export const FilesPanel = memo(function FilesPanel() {
       if (!previewDeferred) return;
       previewDeferred = false;
       const file = useAppStore.getState().selectedFile;
-      if (file) void selectFile(file);
+      if (file) void navRef.current.selectFile(file);
     };
 
     const handleKeyDown = (e: KeyboardEvent) => {
+      const {
+        activePane: curPane,
+        filesTab: propTab,
+        visibleFiles: curVisibleFiles,
+        selectFile: curSelectFile,
+        setActivePane: curSetActivePane,
+        local: isLocal,
+        runOperation: curRunOperation,
+      } = navRef.current;
       if (e.defaultPrevented || e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
-      if (activePane !== 'files') return;
+      if (curPane !== 'files') return;
       if (document.querySelector('.modal-backdrop')) return;
 
       const activeElement = document.activeElement;
@@ -996,11 +1053,11 @@ export const FilesPanel = memo(function FilesPanel() {
 
       if (e.key === 'ArrowLeft' || e.key === 'h') {
         e.preventDefault();
-        setActivePane('history');
+        curSetActivePane('history');
         return;
       }
 
-      const currentTab = useAppStore.getState().filesTab;
+      const currentTab = useAppStore.getState().filesTab ?? propTab;
       if (currentTab === 'explorer') return;
 
       if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
@@ -1013,11 +1070,11 @@ export const FilesPanel = memo(function FilesPanel() {
         if (document.activeElement instanceof HTMLElement) {
           document.activeElement.blur();
         }
-        if (visibleFiles.length === 0) return;
+        if (curVisibleFiles.length === 0) return;
         const currentFile = useAppStore.getState().selectedFile;
-        const curIdx = visibleFiles.findIndex((f) => f.id === currentFile?.id && f.area === currentFile?.area);
-        const nextIdx = curIdx === -1 ? 0 : Math.min(visibleFiles.length - 1, curIdx + 1);
-        if (visibleFiles[nextIdx] && nextIdx !== curIdx) {
+        const curIdx = curVisibleFiles.findIndex((f) => f.id === currentFile?.id && f.area === currentFile?.area);
+        const nextIdx = curIdx === -1 ? 0 : Math.min(curVisibleFiles.length - 1, curIdx + 1);
+        if (curVisibleFiles[nextIdx] && nextIdx !== curIdx) {
           if (e.repeat) {
             previewDeferred = true;
             schedulePreview();
@@ -1026,19 +1083,19 @@ export const FilesPanel = memo(function FilesPanel() {
             if (previewTimer !== null) clearTimeout(previewTimer);
             previewTimer = null;
           }
-          if (e.repeat) void selectFile(visibleFiles[nextIdx], { deferPreview: true });
-          else void selectFile(visibleFiles[nextIdx]);
+          if (e.repeat) void curSelectFile(curVisibleFiles[nextIdx], { deferPreview: true });
+          else void curSelectFile(curVisibleFiles[nextIdx]);
         }
       } else if (e.key === 'ArrowUp') {
         e.preventDefault();
         if (document.activeElement instanceof HTMLElement) {
           document.activeElement.blur();
         }
-        if (visibleFiles.length === 0) return;
+        if (curVisibleFiles.length === 0) return;
         const currentFile = useAppStore.getState().selectedFile;
-        const curIdx = visibleFiles.findIndex((f) => f.id === currentFile?.id && f.area === currentFile?.area);
+        const curIdx = curVisibleFiles.findIndex((f) => f.id === currentFile?.id && f.area === currentFile?.area);
         const prevIdx = curIdx === -1 ? 0 : Math.max(0, curIdx - 1);
-        if (visibleFiles[prevIdx] && prevIdx !== curIdx) {
+        if (curVisibleFiles[prevIdx] && prevIdx !== curIdx) {
           if (e.repeat) {
             previewDeferred = true;
             schedulePreview();
@@ -1047,17 +1104,17 @@ export const FilesPanel = memo(function FilesPanel() {
             if (previewTimer !== null) clearTimeout(previewTimer);
             previewTimer = null;
           }
-          if (e.repeat) void selectFile(visibleFiles[prevIdx], { deferPreview: true });
-          else void selectFile(visibleFiles[prevIdx]);
+          if (e.repeat) void curSelectFile(curVisibleFiles[prevIdx], { deferPreview: true });
+          else void curSelectFile(curVisibleFiles[prevIdx]);
         }
       } else if (e.key === ' ' || e.code === 'Space') {
         const currentFile = useAppStore.getState().selectedFile;
-        if (!local || !currentFile) return;
+        if (!isLocal || !currentFile) return;
         e.preventDefault();
         if (currentFile.area === 'unstaged') {
-          void runOperation('stage', [currentFile.id]);
+          void curRunOperation('stage', [currentFile.id]);
         } else if (currentFile.area === 'staged') {
-          void runOperation('unstage', [currentFile.id]);
+          void curRunOperation('unstage', [currentFile.id]);
         }
       }
     };
@@ -1083,7 +1140,46 @@ export const FilesPanel = memo(function FilesPanel() {
       previewDeferred = false;
       if (previewTimer !== null) clearTimeout(previewTimer);
     };
-  }, [activePane, filesTab, visibleFiles, selectFile, setActivePane, local, runOperation]);
+  }, []);
+
+  const handleUnstageFile = useCallback((file: FileEntry) => {
+    void runOperation('unstage', [file.id]);
+  }, [runOperation]);
+
+  const handleStageFile = useCallback((file: FileEntry) => {
+    void runOperation('stage', [file.id]);
+  }, [runOperation]);
+
+  const handleDiscardFile = useCallback((file: FileEntry) => {
+    void runOperation('discard', [file.id]);
+  }, [runOperation]);
+
+  const handleUnstageAll = useCallback(() => {
+    void runOperation('unstageAll');
+  }, [runOperation]);
+
+  const handleStageAll = useCallback(() => {
+    void runOperation('stageAll');
+  }, [runOperation]);
+
+  const unstagedCount = unstaged.length;
+  const handleDiscardAll = useCallback(() => {
+    if (window.confirm(t('files.discardConfirmAll', { count: unstagedCount }))) {
+      void runOperation('discardAll');
+    }
+  }, [t, unstagedCount, runOperation]);
+
+  const handleUnstageDir = useCallback((files: FileEntry[]) => {
+    void runOperation('unstage', files.map((f) => f.id));
+  }, [runOperation]);
+
+  const handleStageDir = useCallback((files: FileEntry[]) => {
+    void runOperation('stage', files.map((f) => f.id));
+  }, [runOperation]);
+
+  const handleDiscardDir = useCallback((files: FileEntry[]) => {
+    void runOperation('discard', files.map((f) => f.id));
+  }, [runOperation]);
 
   const handleFileContextMenu = useCallback((e: React.MouseEvent, file: FileEntry) => {
     e.preventDefault();
@@ -1097,9 +1193,9 @@ export const FilesPanel = memo(function FilesPanel() {
   }, [selectFile]);
 
   const selectedCommit = useMemo(() => {
-    if (context?.kind !== 'commit') return null;
-    return (history?.rows ?? []).find((r) => r.commit.oid === context.oid)?.commit ?? null;
-  }, [context, history?.rows]);
+    if (!contextCommitOid) return null;
+    return (history?.rows ?? []).find((r) => r.commit.oid === contextCommitOid)?.commit ?? null;
+  }, [contextCommitOid, history?.rows]);
 
   const [copiedHash, setCopiedHash] = useState<string | null>(null);
 
@@ -1286,13 +1382,14 @@ export const FilesPanel = memo(function FilesPanel() {
             area="staged"
             disabled={Boolean(operation)}
             isTree={isTree}
+            visibleItems={stagedVisibleItems}
             collapsed={collapsedDirs}
             onToggleDir={toggleDir}
             onSelect={selectFile}
             onPrefetch={prefetchFile}
-            onStage={(file) => runOperation('unstage', [file.id])}
-            onAll={() => runOperation('unstageAll')}
-            onUnstageDir={(files) => void runOperation('unstage', files.map((f) => f.id))}
+            onStage={handleUnstageFile}
+            onAll={handleUnstageAll}
+            onUnstageDir={handleUnstageDir}
             onContextMenu={handleFileContextMenu}
             onDirContextMenu={handleDirContextMenu}
           />
@@ -1304,26 +1401,17 @@ export const FilesPanel = memo(function FilesPanel() {
             area="unstaged"
             disabled={Boolean(operation)}
             isTree={isTree}
+            visibleItems={unstagedVisibleItems}
             collapsed={collapsedDirs}
             onToggleDir={toggleDir}
             onSelect={selectFile}
             onPrefetch={prefetchFile}
-            onStage={(file) => runOperation('stage', [file.id])}
-            onAll={() => runOperation('stageAll')}
-            onStageDir={(files) => void runOperation('stage', files.map((f) => f.id))}
-            onDiscardDir={(files) => void runOperation('discard', files.map((f) => f.id))}
-            onDiscard={(file) => {
-              void runOperation('discard', [file.id]);
-            }}
-            onDiscardAll={() => {
-              if (
-                window.confirm(
-                  t('files.discardConfirmAll', { count: unstaged.length })
-                )
-              ) {
-                void runOperation('discardAll');
-              }
-            }}
+            onStage={handleStageFile}
+            onAll={handleStageAll}
+            onStageDir={handleStageDir}
+            onDiscardDir={handleDiscardDir}
+            onDiscard={handleDiscardFile}
+            onDiscardAll={handleDiscardAll}
             onContextMenu={handleFileContextMenu}
             onDirContextMenu={handleDirContextMenu}
           />
@@ -1333,6 +1421,7 @@ export const FilesPanel = memo(function FilesPanel() {
           files={historical}
           selectedId={selectedFile?.id}
           isTree={isTree}
+          visibleItems={historicalVisibleItems}
           collapsed={collapsedDirs}
           onToggleDir={toggleDir}
           onSelect={selectFile}
@@ -1360,6 +1449,7 @@ export const FilesPanel = memo(function FilesPanel() {
           onRestoreCommitFile={(oid, path) => void restoreCommitFile?.(oid, path)}
           onViewBlame={(_p, _oid) => setBlameOpen(true)}
           onOpenBrowser={(p, oid) => void openInBrowser?.({ commitOid: oid, filePath: p })}
+          onResolveConflict={(path, choice) => void resolveConflict(path, choice)}
         />
       )}
 

@@ -8,12 +8,14 @@ export interface HistoryListHandle {
 
 // Scroll changes the visible range, but rows that remain in it keep their
 // content and position. Avoid rebuilding their refs, dates, icons and handlers.
-const HistoryRow = memo(function HistoryRow({ item, render }: {
+const HistoryRow = memo(function HistoryRow({ item, isSelected, render }: {
   item: VirtualItem;
-  render: (item: VirtualItem) => ReactNode;
+  isSelected: boolean;
+  render: (item: VirtualItem, isSelected: boolean) => ReactNode;
 }) {
-  return render(item);
+  return render(item, isSelected);
 }, (previous, next) => previous.render === next.render &&
+  previous.isSelected === next.isSelected &&
   previous.item.key === next.item.key &&
   previous.item.index === next.item.index &&
   previous.item.start === next.item.start &&
@@ -33,7 +35,7 @@ export function VirtualHistoryList({
   pageKey: string;
   hasMore: boolean;
   loadMore: () => Promise<void>;
-  children: (item: VirtualItem) => ReactNode;
+  children: (item: VirtualItem, isSelected: boolean) => ReactNode;
 }) {
   const viewportRef = useRef<HTMLDivElement>(null);
   const requestedPage = useRef<string | null>(null);
@@ -68,7 +70,7 @@ export function VirtualHistoryList({
   return (
     <div ref={viewportRef} className="lists-scroll" tabIndex={0} role="list" aria-label="Commits">
       <div className="lists-virtual-content" style={{ height: virtualizer.getTotalSize() }}>
-        {items.map((item) => <HistoryRow key={item.key ?? item.index} item={item} render={children} />)}
+        {items.map((item) => <HistoryRow key={item.key ?? item.index} item={item} isSelected={item.index === selectedIndex} render={children} />)}
       </div>
     </div>
   );

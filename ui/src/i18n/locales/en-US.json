@@ -675,7 +675,17 @@
     "acceptTheirs": "Accept Incoming",
     "acceptBoth": "Accept Both",
     "markResolved": "Mark as Resolved",
-    "resolvedNotice": "Conflict resolved"
+    "resolvedNotice": "Conflict resolved",
+    "blockBadge": "Conflict {{current}} of {{total}}",
+    "prevConflict": "Previous conflict",
+    "nextConflict": "Next conflict",
+    "chooseSidePrompt": "Click the version you want to keep for this conflict:",
+    "currentSideLabel": "Current",
+    "incomingSideLabel": "Incoming",
+    "chooseOursBlock": "Choose Current",
+    "chooseTheirsBlock": "Choose Incoming",
+    "combineBothBlocks": "Keep Both in this block",
+    "emptySide": "(empty section / lines removed)"
   },
   "compare": {
     "comparing": "Comparing: {{base}} ↔ {{target}}",

@@ -2,7 +2,8 @@ import { monaco } from './monaco';
 import { registerEditorThemeApplier } from './theme';
 import type { ThemeDefinition } from './types';
 
-registerEditorThemeApplier((theme: ThemeDefinition) => {
+export function applyMonacoTheme(theme: ThemeDefinition) {
+  if (!theme?.colors) return;
   const colors = theme.colors;
   const isLight = theme.type === 'light';
   const name = `gitma-theme-${theme.id}`;
@@ -33,4 +34,6 @@ registerEditorThemeApplier((theme: ThemeDefinition) => {
     },
   });
   monaco.editor.setTheme(name);
-});
+}
+
+registerEditorThemeApplier(applyMonacoTheme);

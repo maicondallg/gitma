@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { lazy, Suspense, useDeferredValue, useMemo, useState } from 'react';
 import {
   CheckSquare,
   Clock,
@@ -18,9 +18,10 @@ import { useI18n } from '../i18n';
 import type { RecentRepo } from '../lib/types';
 import { useAppStore } from '../store/app';
 import logoSvg from '../../logo.svg';
-import { CloneModal } from './CloneModal';
-import { InitModal } from './InitModal';
 import { APP_VERSION } from '../version';
+
+const CloneModal = lazy(() => import('./CloneModal').then((m) => ({ default: m.CloneModal })));
+const InitModal = lazy(() => import('./InitModal').then((m) => ({ default: m.InitModal })));
 
 function formatRelativeTime(
   timestamp: number,
@@ -58,11 +59,26 @@ export function HomeTab() {
   const [showCloneModal, setShowCloneModal] = useState(false);
   const [showInitModal, setShowInitModal] = useState(false);
 
-  const filteredRecents = recentRepos.filter(
-    (repo) =>
-      repo.name.toLowerCase().includes(filter.toLowerCase()) ||
-      repo.path.toLowerCase().includes(filter.toLowerCase())
-  );
+  const deferredFilter = useDeferredValue(filter);
+
+  const openPathsSet = useMemo(() => {
+    const s = new Set<string>();
+    for (const tab of tabs) {
+      s.add(tab.path);
+      s.add(tab.session.root);
+    }
+    return s;
+  }, [tabs]);
+
+  const filteredRecents = useMemo(() => {
+    const q = deferredFilter.trim().toLowerCase();
+    if (!q) return recentRepos;
+    return recentRepos.filter(
+      (repo) =>
+        repo.name.toLowerCase().includes(q) ||
+        repo.path.toLowerCase().includes(q)
+    );
+  }, [recentRepos, deferredFilter]);
 
   const toggleSelectPath = (path: string) => {
     setSelectedPaths((prev) =>
@@ -322,9 +338,7 @@ export function HomeTab() {
             ) : (
               <div className="recents-list">
                 {filteredRecents.map((repo) => {
-                  const isOpenInTab = tabs.some(
-                    (t) => t.path === repo.path || t.session.root === repo.path
-                  );
+                  const isOpenInTab = openPathsSet.has(repo.path);
                   const isSelected = selectedPaths.includes(repo.path);
 
                   return (
@@ -411,8 +425,16 @@ export function HomeTab() {
         </section>
       </div>
 
-      <CloneModal isOpen={showCloneModal} onClose={() => setShowCloneModal(false)} />
-      <InitModal isOpen={showInitModal} onClose={() => setShowInitModal(false)} />
+      {showCloneModal && (
+        <Suspense fallback={null}>
+          <CloneModal isOpen={showCloneModal} onClose={() => setShowCloneModal(false)} />
+        </Suspense>
+      )}
+      {showInitModal && (
+        <Suspense fallback={null}>
+          <InitModal isOpen={showInitModal} onClose={() => setShowInitModal(false)} />
+        </Suspense>
+      )}
     </div>
   );
 }

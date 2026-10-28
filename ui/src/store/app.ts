@@ -196,7 +196,7 @@ export interface AppState {
   restoreCommitFile?(commitOid: string, path: string): Promise<void>;
   setHistoryScope(scope: 'all' | 'current'): Promise<void>;
   compareCommits(baseOid: string, targetOid: string): Promise<void>;
-  resolveConflict(path: string, choice: 'ours' | 'theirs' | 'both' | 'mark_resolved'): Promise<void>;
+  resolveConflict(path: string, choice: 'ours' | 'theirs' | 'both' | 'mark_resolved', conflictIndex?: number): Promise<void>;
 
   openRepository(path?: string, options?: { activate?: boolean }): Promise<void>;
   openRepositories(paths?: string[]): Promise<void>;
@@ -210,8 +210,8 @@ export interface AppState {
   closeOtherTabs(tabId: string): Promise<void>;
   closeTabsToRight(tabId: string): Promise<void>;
   switchTab(tabId: string): Promise<void>;
-  reorderTabs(sourceIndex: number, destinationIndex: number): void;
-  reorderTabsList(tabs: TabItem[]): void;
+  reorderTabs(sourceIndex: number, destinationIndex: number, options?: { persist?: boolean }): void;
+  reorderTabsList(tabs: TabItem[], options?: { persist?: boolean }): void;
   setTabName(tabId: string, name: string): void;
   setTabColor(tabId: string, color: string | null): void;
   groupNames: Record<string, string>;
@@ -252,6 +252,10 @@ export interface AppState {
   runGitCommand(command: string): Promise<void>;
 }
 
+const COMMIT_PREVIEW_CACHE_LIMIT = 64;
+const LOCAL_PREVIEW_CACHE_LIMIT = 32;
+const MAX_CONCURRENT_PREFETCHES = 4;
+
 let nextRequestId = 0;
 let selectionToken = 0;
 let contextToken = 0;
@@ -263,7 +267,7 @@ let writeChain: Promise<void> = Promise.resolve();
 let writeReserved = false;
 let loadingMore: { sessionId: string; historyKey: string; page: number; token: number } | null = null;
 let unlisten: (() => void) | null = null;
-// Commit contents are immutable. Keep a small UI cache so revisiting history
+// Commit contents are immutable. Keep an LRU UI cache so revisiting history
 // does not clear the file list or diff while the backend cache is queried.
 const commitFilesCache = new Map<string, CommitFiles>();
 const commitPreviewCache = new Map<string, Preview>();
@@ -280,10 +284,55 @@ const filePreviewKey = (sessionId: string, context: Context, fileId: string) =>
 function invalidateLocalPreviews(sessionId: string) {
   localPreviewEpoch.set(sessionId, (localPreviewEpoch.get(sessionId) ?? 0) + 1);
 }
+function evictSessionCaches(sessionId: string) {
+  const prefix = `${sessionId}\0`;
+  for (const key of commitFilesCache.keys()) {
+    if (key.startsWith(prefix)) commitFilesCache.delete(key);
+  }
+  for (const key of commitPreviewCache.keys()) {
+    if (key.startsWith(prefix)) commitPreviewCache.delete(key);
+  }
+  for (const key of localPreviewCache.keys()) {
+    if (key.startsWith(prefix)) localPreviewCache.delete(key);
+  }
+  for (const key of previewPrefetches.keys()) {
+    if (key.startsWith(prefix)) previewPrefetches.delete(key);
+  }
+  localPreviewEpoch.delete(sessionId);
+}
 function remember<T>(cache: Map<string, T>, key: string, value: T, limit: number) {
   cache.delete(key);
   cache.set(key, value);
   if (cache.size > limit) cache.delete(cache.keys().next().value!);
+}
+function sameAuthState(a: RepoAuthState | null | undefined, b: RepoAuthState | null | undefined): boolean {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  if (
+    a.selectedId !== b.selectedId ||
+    a.resolvedId !== b.resolvedId ||
+    a.resolvedLabel !== b.resolvedLabel ||
+    a.resolutionReason !== b.resolutionReason ||
+    a.accounts.length !== b.accounts.length
+  ) {
+    return false;
+  }
+  for (let i = 0; i < a.accounts.length; i++) {
+    const left = a.accounts[i];
+    const right = b.accounts[i];
+    if (
+      left.id !== right.id ||
+      left.label !== right.label ||
+      left.kind !== right.kind ||
+      left.username !== right.username ||
+      left.sshKeyPath !== right.sshKeyPath ||
+      left.sshKeyName !== right.sshKeyName ||
+      left.isGhActive !== right.isGhActive
+    ) {
+      return false;
+    }
+  }
+  return true;
 }
 
 const asError = (error: unknown): AppError => {
@@ -302,7 +351,7 @@ const NO_FILE_OPERATIONS = new Set<Operation>([
   'reset', 'revertCommit', 'createTag', 'deleteTag', 'pushTag',
   'rebase', 'rebaseContinue', 'rebaseAbort', 'rebaseSkip',
   'stageHunk', 'unstageHunk', 'discardHunk', 'ignorePath', 'openTerminal', 'openEditor', 'revealFile',
-  'openBrowser', 'restoreCommitFile', 'gitCommand'
+  'openBrowser', 'restoreCommitFile', 'resolveConflict', 'gitCommand'
 ]);
 const NO_REFRESH_OPERATIONS = new Set<Operation>(['openTerminal', 'openEditor', 'revealFile', 'openBrowser']);
 const MAX_COMMAND_LOGS = 10;
@@ -384,6 +433,19 @@ function formatGitLogCommand(operation: Operation, ids: string[], messageToSend:
       return 'git rebase --continue';
     case 'rebaseSkip':
       return 'git rebase --skip';
+    case 'resolveConflict': {
+      try {
+        const parsed = JSON.parse(messageToSend);
+        const p = parsed.path || '<file>';
+        const idx = typeof parsed.conflictIndex === 'number' ? ` (bloco #${parsed.conflictIndex + 1})` : '';
+        if (parsed.choice === 'ours') return `git checkout --ours -- ${p}${idx}`;
+        if (parsed.choice === 'theirs') return `git checkout --theirs -- ${p}${idx}`;
+        if (parsed.choice === 'both') return `git add -- ${p} (ambos${idx})`;
+        return `git add -- ${p}`;
+      } catch {
+        return `git resolveConflict ${messageToSend}`;
+      }
+    }
     default:
       return `git ${operation}${ids.length ? ` (${ids.length})` : ''}${messageToSend ? ` ${messageToSend}` : ''}`;
   }
@@ -442,9 +504,9 @@ export const useAppStore = create<AppState>((set, get) => {
       const current = get();
       if (token === selectionToken && context === contextToken && current.session?.sessionId === state.session.sessionId && sameFile(current.selectedFile, file) && preview.fileId === file.id) {
         if (state.context.kind === 'commit') {
-          remember(commitPreviewCache, previewKey(state.session.sessionId, state.context.oid, file.id), preview, 16);
+          remember(commitPreviewCache, previewKey(state.session.sessionId, state.context.oid, file.id), preview, COMMIT_PREVIEW_CACHE_LIMIT);
         } else if (state.context.kind === 'local' && key === localKey(state.session.sessionId, file.id)) {
-          remember(localPreviewCache, key, preview, 16);
+          remember(localPreviewCache, key, preview, LOCAL_PREVIEW_CACHE_LIMIT);
         }
         if (current.preview?.version !== preview.version) {
           set({ preview });
@@ -468,7 +530,10 @@ export const useAppStore = create<AppState>((set, get) => {
       ? getBridge().getHistory(before.session.sessionId, requestId, 0, initialAllBranches)
       : null;
     pendingInitialHistory?.catch(() => undefined);
-    set({ refreshing: true });
+    const showRefreshing = reason === 'manual';
+    if (showRefreshing) {
+      set({ refreshing: true });
+    }
     try {
       const snapshot = await getBridge().getSnapshot(before.session.sessionId, requestId);
       const current = get();
@@ -511,7 +576,9 @@ export const useAppStore = create<AppState>((set, get) => {
     } catch (error) {
       if (get().session?.sessionId === before.session.sessionId) set({ notice: asError(error) });
     } finally {
-      if (get().session?.sessionId === before.session.sessionId) set({ refreshing: false });
+      if (showRefreshing && get().refreshing && get().session?.sessionId === before.session.sessionId) {
+        set({ refreshing: false });
+      }
     }
   }
 
@@ -595,16 +662,14 @@ export const useAppStore = create<AppState>((set, get) => {
         const state = get();
         if (event.sessionId === state.session?.sessionId) {
           void state.refresh('watcher', event);
-        } else {
-          set((s) => ({
-            tabs: s.tabs.map((t) => (t.session.sessionId === event.sessionId ? { ...t, snapshot: null } : t)),
-          }));
         }
       });
     }
 
     if (options?.activate !== false) await get().refresh('manual');
   }
+
+  const pendingAuthRequests = new Map<string, Promise<void>>();
 
   return {
     tabs: [],
@@ -640,17 +705,29 @@ export const useAppStore = create<AppState>((set, get) => {
       const session = get().session;
       const bridge = getBridge();
       if (!session || !bridge.getAuthState) return;
-      try {
-        const authState = await bridge.getAuthState(session.sessionId, forceRefresh);
-        if (get().session?.sessionId === session.sessionId) {
-          set((s) => ({
-            authState,
-            tabs: s.tabs.map((t) => (t.session.sessionId === session.sessionId ? { ...t, authState } : t)),
-          }));
+      const key = `${session.sessionId}:${forceRefresh}`;
+      const existing = pendingAuthRequests.get(key);
+      if (existing) return existing;
+      const request = (async () => {
+        try {
+          const authState = await bridge.getAuthState!(session.sessionId, forceRefresh);
+          const latest = get();
+          if (latest.session?.sessionId === session.sessionId && !sameAuthState(latest.authState, authState)) {
+            set((s) => ({
+              authState,
+              tabs: s.tabs.map((t) => (t.session.sessionId === session.sessionId ? { ...t, authState } : t)),
+            }));
+          }
+        } catch {
+          // Ignore if auth state lookup fails
         }
-      } catch {
-        // Ignore if auth state lookup fails
-      }
+      })().finally(() => {
+        if (pendingAuthRequests.get(key) === request) {
+          pendingAuthRequests.delete(key);
+        }
+      });
+      pendingAuthRequests.set(key, request);
+      return request;
     },
     async setRepoAccount(accountId: string) {
       const session = get().session;
@@ -835,7 +912,6 @@ export const useAppStore = create<AppState>((set, get) => {
       const token = ++historyScopeToken;
       set((state) => ({
         historyScope: scope,
-        history: null,
         tabs: state.tabs.map((tab) => ({ ...tab, history: null })),
       }));
       if (current.session) {
@@ -854,8 +930,9 @@ export const useAppStore = create<AppState>((set, get) => {
         }
       }
     },
-    async resolveConflict(path, choice) {
-      await get().runOperation('resolveConflict', [], JSON.stringify({ path, choice }));
+    async resolveConflict(path, choice, conflictIndex) {
+      const payload = conflictIndex !== undefined ? { path, choice, conflictIndex } : { path, choice };
+      await get().runOperation('resolveConflict', [], JSON.stringify(payload));
     },
     activePane: 'history',
     setActivePane(pane) {
@@ -984,9 +1061,33 @@ export const useAppStore = create<AppState>((set, get) => {
         if (!targetPaths || targetPaths.length === 0) return;
       }
 
-      for (const p of targetPaths) {
-        await get().openRepository(p);
+      if (targetPaths.length === 1) {
+        await get().openRepository(targetPaths[0], { activate: true });
+        return;
       }
+
+      const bgPaths = targetPaths.slice(0, -1);
+      const activePath = targetPaths[targetPaths.length - 1];
+      const token = ++openToken;
+      const bgResults = await Promise.all(
+        bgPaths.map(async (p) => {
+          const current = get();
+          if (current.tabs.some((t) => t.path === p || t.session.root === p)) return null;
+          try {
+            const session = await bridge.openRepository(p);
+            return { session, path: p };
+          } catch (error) {
+            if (token === openToken) set({ notice: asError(error) });
+            return null;
+          }
+        })
+      );
+      for (const item of bgResults) {
+        if (item) {
+          await mountSession(item.session, item.path, token, { activate: false });
+        }
+      }
+      await get().openRepository(activePath, { activate: true });
     },
 
     async closeTab(tabId) {
@@ -994,6 +1095,7 @@ export const useAppStore = create<AppState>((set, get) => {
       const tabToClose = current.tabs.find((t) => t.id === tabId);
       if (!tabToClose) return;
 
+      evictSessionCaches(tabToClose.session.sessionId);
       void getBridge().closeRepository(tabToClose.session.sessionId);
 
       const remainingTabs = current.tabs.filter((t) => t.id !== tabId);
@@ -1050,7 +1152,7 @@ export const useAppStore = create<AppState>((set, get) => {
       }
     },
 
-    reorderTabs(sourceIndex, destinationIndex) {
+    reorderTabs(sourceIndex, destinationIndex, options) {
       const current = get();
       if (
         sourceIndex === destinationIndex ||
@@ -1064,13 +1166,17 @@ export const useAppStore = create<AppState>((set, get) => {
       const [moved] = reordered.splice(sourceIndex, 1);
       reordered.splice(destinationIndex, 0, moved);
       set({ tabs: reordered });
-      saveOpenTabs(reordered.map((t) => t.path), current.activeTabId);
+      if (options?.persist !== false) {
+        saveOpenTabs(reordered.map((t) => t.path), current.activeTabId);
+      }
     },
 
-    reorderTabsList(newTabs) {
+    reorderTabsList(newTabs, options) {
       const current = get();
       set({ tabs: newTabs });
-      saveOpenTabs(newTabs.map((t) => t.path), current.activeTabId);
+      if (options?.persist !== false) {
+        saveOpenTabs(newTabs.map((t) => t.path), current.activeTabId);
+      }
     },
 
     setTabName(tabId, name) {
@@ -1142,6 +1248,7 @@ export const useAppStore = create<AppState>((set, get) => {
       const current = get();
       const tabsToClose = current.tabs.filter((t) => t.id !== tabId);
       for (const t of tabsToClose) {
+        evictSessionCaches(t.session.sessionId);
         void getBridge().closeRepository(t.session.sessionId);
       }
       const remaining = current.tabs.filter((t) => t.id === tabId);
@@ -1159,6 +1266,7 @@ export const useAppStore = create<AppState>((set, get) => {
       if (index === -1 || index >= current.tabs.length - 1) return;
       const tabsToClose = current.tabs.slice(index + 1);
       for (const t of tabsToClose) {
+        evictSessionCaches(t.session.sessionId);
         void getBridge().closeRepository(t.session.sessionId);
       }
       const remaining = current.tabs.slice(0, index + 1);
@@ -1260,14 +1368,55 @@ export const useAppStore = create<AppState>((set, get) => {
         set({ activeTabId: 'home' });
         return;
       }
-      const preferred = savedPaths.includes(savedActive ?? '') ? savedActive : savedPaths[0];
-      const restorePaths = [preferred!, ...savedPaths.filter((path) => path !== preferred)];
-      let activatePending = savedActive !== 'home';
-      for (const path of restorePaths) {
-        await get().openRepository(path, {
-          activate: activatePending,
-        });
-        if (get().activeTabId !== 'home') activatePending = false;
+
+      const openBackgroundBatch = async (paths: string[]) => {
+        if (paths.length === 0) return;
+        const bridge = getBridge();
+        const token = openToken;
+        const results = await Promise.all(
+          paths.map(async (p) => {
+            const current = get();
+            if (current.tabs.some((t) => t.path === p || t.session.root === p)) return null;
+            try {
+              const session = await bridge.openRepository(p);
+              return { session, path: p };
+            } catch (error) {
+              if (token === openToken) set({ notice: asError(error) });
+              return null;
+            }
+          })
+        );
+        for (const item of results) {
+          if (item) {
+            await mountSession(item.session, item.path, token, { activate: false });
+          }
+        }
+      };
+
+      if (savedActive === 'home') {
+        openToken++;
+        await openBackgroundBatch(savedPaths);
+        saveOpenTabs(
+          get().tabs.map((t) => t.path),
+          'home'
+        );
+        return;
+      }
+
+      const preferred = savedPaths.includes(savedActive ?? '') ? savedActive! : savedPaths[0];
+      const remainingPaths = savedPaths.filter((path) => path !== preferred);
+      let activatePending = true;
+
+      await get().openRepository(preferred, { activate: activatePending });
+      if (get().activeTabId !== 'home') activatePending = false;
+
+      if (!activatePending) {
+        await openBackgroundBatch(remainingPaths);
+      } else {
+        for (const path of remainingPaths) {
+          await get().openRepository(path, { activate: activatePending });
+          if (get().activeTabId !== 'home') activatePending = false;
+        }
       }
     },
 
@@ -1393,15 +1542,15 @@ export const useAppStore = create<AppState>((set, get) => {
       const key = filePreviewKey(state.session.sessionId, state.context, file.id);
       const cached = state.context.kind === 'local' ? localPreviewCache.get(key)
         : state.context.kind === 'commit' ? commitPreviewCache.get(key) : null;
-      if (cached || previewPrefetches.has(key) || previewPrefetches.size >= 2) return;
+      if (cached || previewPrefetches.has(key) || previewPrefetches.size >= MAX_CONCURRENT_PREFETCHES) return;
       const request = getBridge().getFilePreview(state.session.sessionId, ++nextRequestId, file.id);
       previewPrefetches.set(key, request);
       void request.then((preview) => {
         if (preview.fileId !== file.id) return;
         if (state.context.kind === 'local' && key === localKey(state.session!.sessionId, file.id)) {
-          remember(localPreviewCache, key, preview, 16);
+          remember(localPreviewCache, key, preview, LOCAL_PREVIEW_CACHE_LIMIT);
         } else if (state.context.kind === 'commit') {
-          remember(commitPreviewCache, key, preview, 16);
+          remember(commitPreviewCache, key, preview, COMMIT_PREVIEW_CACHE_LIMIT);
         }
       }).catch(() => undefined).finally(() => {
         if (previewPrefetches.get(key) === request) previewPrefetches.delete(key);
@@ -1487,6 +1636,7 @@ export const useAppStore = create<AppState>((set, get) => {
             if ((operation === 'commit' || operation === 'commitAmend') && get().commitMessage === state.commitMessage) {
               set({ commitMessage: '' });
             }
+            set({ operation: null });
             if (!NO_REFRESH_OPERATIONS.has(operation)) await get().refresh('mutation');
           }
         } catch (error) {
@@ -1508,7 +1658,12 @@ export const useAppStore = create<AppState>((set, get) => {
             notify(err, set);
           }
         }
-        finally { writeReserved = false; if (get().session?.sessionId === state.session.sessionId) set({ operation: null }); }
+        finally {
+          writeReserved = false;
+          if (get().operation && get().session?.sessionId === state.session.sessionId) {
+            set({ operation: null });
+          }
+        }
       };
       writeChain = writeChain.then(execute, execute);
       await writeChain;

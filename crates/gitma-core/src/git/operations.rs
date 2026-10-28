@@ -6,6 +6,8 @@ use crate::domain::{
 use std::ffi::OsStr;
 use std::path::Path;
 
+const BATCH_CHUNK_SIZE: usize = 256;
+
 pub fn stage(root: &Path, path: &Path) -> GitResult<()> {
     mutate_os(
         root,
@@ -22,45 +24,82 @@ pub fn unstage(root: &Path, path: &Path) -> GitResult<()> {
     unstage_paths(root, &[path])
 }
 pub fn stage_file(root: &Path, file: &ChangedFile) -> GitResult<()> {
-    stage_paths(root, "add", file)
+    stage_files(root, std::slice::from_ref(file))
+}
+pub fn stage_files(root: &Path, files: &[ChangedFile]) -> GitResult<()> {
+    if files.is_empty() {
+        return Ok(());
+    }
+    let mut paths: Vec<&Path> = Vec::with_capacity(files.len() * 2);
+    for file in files {
+        if let Some(old_path) = &file.old_path {
+            if root.join(old_path).exists()
+                || super::runner::read_os(
+                    root,
+                    &[
+                        OsStr::new("ls-files"),
+                        OsStr::new("--error-unmatch"),
+                        OsStr::new("--"),
+                        old_path.as_os_str(),
+                    ],
+                )
+                .is_ok()
+            {
+                paths.push(old_path.as_path());
+            }
+        }
+        paths.push(file.path.as_path());
+    }
+    for chunk in paths.chunks(BATCH_CHUNK_SIZE) {
+        let mut args = Vec::with_capacity(chunk.len() + 3);
+        args.push(OsStr::new("add"));
+        args.push(OsStr::new("-A"));
+        args.push(OsStr::new("--"));
+        args.extend(chunk.iter().map(|p| p.as_os_str()));
+        mutate_os(root, &args)?;
+    }
+    Ok(())
 }
 pub fn unstage_file(root: &Path, file: &ChangedFile) -> GitResult<()> {
-    let mut paths = Vec::new();
-    if let Some(old_path) = &file.old_path {
-        paths.push(old_path.as_path());
-    }
-    paths.push(file.path.as_path());
-    unstage_paths(root, &paths)
+    unstage_files(root, std::slice::from_ref(file))
 }
-
-fn stage_paths(root: &Path, command: &str, file: &ChangedFile) -> GitResult<()> {
-    let mut args = vec![OsStr::new(command)];
-    if command == "add" {
-        args.push(OsStr::new("-A"));
+pub fn unstage_files(root: &Path, files: &[ChangedFile]) -> GitResult<()> {
+    if files.is_empty() {
+        return Ok(());
     }
-    args.push(OsStr::new("--"));
-    if let Some(old_path) = &file.old_path {
-        if root.join(old_path).exists()
-            || super::runner::read_os(
-                root,
-                &[
-                    OsStr::new("ls-files"),
-                    OsStr::new("--error-unmatch"),
-                    OsStr::new("--"),
-                    old_path.as_os_str(),
-                ],
-            )
-            .is_ok()
-        {
-            args.push(old_path.as_os_str());
+    let mut paths: Vec<&Path> = Vec::with_capacity(files.len() * 2);
+    for file in files {
+        if let Some(old_path) = &file.old_path {
+            paths.push(old_path.as_path());
         }
+        paths.push(file.path.as_path());
     }
-    args.push(file.path.as_os_str());
-    mutate_os(root, &args).map(|_| ())
+    for chunk in paths.chunks(BATCH_CHUNK_SIZE) {
+        unstage_paths(root, chunk)?;
+    }
+    Ok(())
+}
+pub fn unstage_all(root: &Path) -> GitResult<()> {
+    match mutate(root, &["reset"]) {
+        Ok(_) => Ok(()),
+        Err(error) if error.category == GitErrorCategory::Process => {
+            if super::runner::read(root, &["rev-parse", "--verify", "HEAD"]).is_ok() {
+                return Err(error);
+            }
+            mutate(
+                root,
+                &["rm", "-r", "--cached", "--ignore-unmatch", "--", "."],
+            )
+            .map(|_| ())
+        }
+        Err(error) => Err(error),
+    }
 }
 
 fn unstage_paths(root: &Path, paths: &[&Path]) -> GitResult<()> {
-    let mut reset = vec![OsStr::new("reset"), OsStr::new("--")];
+    let mut reset = Vec::with_capacity(paths.len() + 2);
+    reset.push(OsStr::new("reset"));
+    reset.push(OsStr::new("--"));
     reset.extend(paths.iter().map(|path| path.as_os_str()));
     match mutate_os(root, &reset) {
         Ok(_) => Ok(()),
@@ -70,12 +109,13 @@ fn unstage_paths(root: &Path, paths: &[&Path]) -> GitResult<()> {
             if super::runner::read(root, &["rev-parse", "--verify", "HEAD"]).is_ok() {
                 return Err(error);
             }
-            let mut remove = vec![
+            let mut remove = Vec::with_capacity(paths.len() + 4);
+            remove.extend_from_slice(&[
                 OsStr::new("rm"),
                 OsStr::new("--cached"),
                 OsStr::new("--ignore-unmatch"),
                 OsStr::new("--"),
-            ];
+            ]);
             remove.extend(paths.iter().map(|path| path.as_os_str()));
             mutate_os(root, &remove).map(|_| ())
         }
@@ -335,33 +375,42 @@ pub fn reset_head(root: &Path, oid: &str, mode: &str) -> GitResult<String> {
 }
 
 pub fn discard_file(root: &Path, file: &ChangedFile) -> GitResult<()> {
-    if file.status == FileStatus::Untracked {
-        let full_path = root.join(&file.path);
-        if full_path.is_dir() {
-            std::fs::remove_dir_all(&full_path).map_err(|e| GitError {
-                category: GitErrorCategory::Io,
-                message: format!("Falha ao excluir diretório {}", file.path.display()),
-                details: Some(e.to_string()),
-            })?;
-        } else if full_path.exists() {
-            std::fs::remove_file(&full_path).map_err(|e| GitError {
-                category: GitErrorCategory::Io,
-                message: format!("Falha ao excluir arquivo {}", file.path.display()),
-                details: Some(e.to_string()),
-            })?;
-        }
-        Ok(())
-    } else {
-        mutate_os(
-            root,
-            &[
-                OsStr::new("checkout"),
-                OsStr::new("--"),
-                file.path.as_os_str(),
-            ],
-        )
-        .map(|_| ())
+    discard_files(root, std::slice::from_ref(file))
+}
+
+pub fn discard_files(root: &Path, files: &[ChangedFile]) -> GitResult<()> {
+    if files.is_empty() {
+        return Ok(());
     }
+    let mut tracked_paths: Vec<&Path> = Vec::new();
+    for file in files {
+        if file.status == FileStatus::Untracked {
+            let full_path = root.join(&file.path);
+            if full_path.is_dir() {
+                std::fs::remove_dir_all(&full_path).map_err(|e| GitError {
+                    category: GitErrorCategory::Io,
+                    message: format!("Falha ao excluir diretório {}", file.path.display()),
+                    details: Some(e.to_string()),
+                })?;
+            } else if full_path.exists() {
+                std::fs::remove_file(&full_path).map_err(|e| GitError {
+                    category: GitErrorCategory::Io,
+                    message: format!("Falha ao excluir arquivo {}", file.path.display()),
+                    details: Some(e.to_string()),
+                })?;
+            }
+        } else {
+            tracked_paths.push(file.path.as_path());
+        }
+    }
+    for chunk in tracked_paths.chunks(BATCH_CHUNK_SIZE) {
+        let mut args = Vec::with_capacity(chunk.len() + 2);
+        args.push(OsStr::new("checkout"));
+        args.push(OsStr::new("--"));
+        args.extend(chunk.iter().map(|p| p.as_os_str()));
+        mutate_os(root, &args)?;
+    }
+    Ok(())
 }
 
 pub fn discard_all_unstaged(root: &Path) -> GitResult<()> {
@@ -1005,16 +1054,34 @@ pub fn open_browser(url: &str) -> GitResult<()> {
 }
 
 pub fn restore_file_from_commit(root: &Path, commit_oid: &str, path: &Path) -> GitResult<()> {
-    mutate_os(
+    let trimmed = commit_oid.trim();
+    match mutate_os(
         root,
         &[
             OsStr::new("checkout"),
-            OsStr::new(commit_oid.trim()),
+            OsStr::new(trimmed),
             OsStr::new("--"),
             path.as_os_str(),
         ],
-    )
-    .map(|_| ())
+    ) {
+        Ok(_) => Ok(()),
+        Err(err) => {
+            if let Some(u_oid) = super::stash_untracked_parent(root, trimmed) {
+                mutate_os(
+                    root,
+                    &[
+                        OsStr::new("checkout"),
+                        OsStr::new(&u_oid),
+                        OsStr::new("--"),
+                        path.as_os_str(),
+                    ],
+                )
+                .map(|_| ())
+            } else {
+                Err(err)
+            }
+        }
+    }
 }
 
 pub fn commit_details(root: &Path, oid: &str) -> GitResult<CommitDetails> {
@@ -1286,34 +1353,205 @@ pub fn fetch_prune(root: &Path, remote: Option<&str>) -> GitResult<String> {
     Ok(String::from_utf8_lossy(&out).into_owned())
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ParsedConflict {
+    start_idx: usize,
+    base_idx: Option<usize>,
+    divider_idx: usize,
+    end_idx: usize,
+}
+
+fn find_conflict_blocks(raw_lines: &[&str]) -> Vec<ParsedConflict> {
+    let mut conflicts = Vec::new();
+    let mut i = 0;
+    while i < raw_lines.len() {
+        if raw_lines[i].starts_with("<<<<<<<") {
+            let start_idx = i;
+            let mut base_idx = None;
+            let mut divider_idx = None;
+            let mut end_idx = None;
+            let mut j = i + 1;
+            while j < raw_lines.len() {
+                let line = raw_lines[j];
+                if line.starts_with("<<<<<<<") {
+                    break;
+                } else if divider_idx.is_none() && base_idx.is_none() && line.starts_with("|||||||")
+                {
+                    base_idx = Some(j);
+                } else if divider_idx.is_none() && line.starts_with("=======") {
+                    divider_idx = Some(j);
+                } else if divider_idx.is_some() && line.starts_with(">>>>>>>") {
+                    end_idx = Some(j);
+                    break;
+                }
+                j += 1;
+            }
+            if let (Some(div), Some(end)) = (divider_idx, end_idx) {
+                conflicts.push(ParsedConflict {
+                    start_idx,
+                    base_idx,
+                    divider_idx: div,
+                    end_idx: end,
+                });
+                i = end + 1;
+                continue;
+            }
+        }
+        i += 1;
+    }
+    conflicts
+}
+
+pub fn resolve_conflict_in_text(
+    content: &str,
+    choice: &str,
+    conflict_index: Option<usize>,
+) -> GitResult<(String, usize)> {
+    let newline = if content.contains("\r\n") {
+        "\r\n"
+    } else {
+        "\n"
+    };
+    let has_trailing_newline = content.ends_with('\n');
+    let raw_lines: Vec<&str> = content.lines().collect();
+    let conflicts = find_conflict_blocks(&raw_lines);
+
+    if let Some(target_idx) = conflict_index {
+        if target_idx >= conflicts.len() {
+            return Err(GitError {
+                category: GitErrorCategory::Process,
+                message: format!(
+                    "Bloco de conflito #{} não encontrado (total: {})",
+                    target_idx + 1,
+                    conflicts.len()
+                ),
+                details: None,
+            });
+        }
+    }
+
+    let mut out_lines: Vec<&str> = Vec::with_capacity(raw_lines.len());
+    let mut cursor = 0;
+
+    for (idx, conflict) in conflicts.iter().enumerate() {
+        if cursor < conflict.start_idx {
+            out_lines.extend_from_slice(&raw_lines[cursor..conflict.start_idx]);
+        }
+        let should_resolve = match conflict_index {
+            Some(target) => target == idx,
+            None => true,
+        };
+        if should_resolve {
+            let ours_end = conflict.base_idx.unwrap_or(conflict.divider_idx);
+            let ours_slice = &raw_lines[(conflict.start_idx + 1)..ours_end];
+            let theirs_slice = &raw_lines[(conflict.divider_idx + 1)..conflict.end_idx];
+            match choice {
+                "ours" => out_lines.extend_from_slice(ours_slice),
+                "theirs" => out_lines.extend_from_slice(theirs_slice),
+                "both" => {
+                    out_lines.extend_from_slice(ours_slice);
+                    out_lines.extend_from_slice(theirs_slice);
+                }
+                _ => {
+                    return Err(GitError {
+                        category: GitErrorCategory::Process,
+                        message: format!("Estratégia de resolução desconhecida: {choice}"),
+                        details: None,
+                    });
+                }
+            }
+        } else {
+            out_lines.extend_from_slice(&raw_lines[conflict.start_idx..=conflict.end_idx]);
+        }
+        cursor = conflict.end_idx + 1;
+    }
+
+    if cursor < raw_lines.len() {
+        out_lines.extend_from_slice(&raw_lines[cursor..]);
+    }
+
+    let mut new_text = out_lines.join(newline);
+    if has_trailing_newline && !out_lines.is_empty() {
+        new_text.push_str(newline);
+    }
+
+    let remaining = if conflict_index.is_some() {
+        conflicts.len().saturating_sub(1)
+    } else {
+        0
+    };
+    Ok((new_text, remaining))
+}
+
 pub fn resolve_conflict(root: &Path, rel_path: &str, choice: &str) -> GitResult<()> {
+    resolve_conflict_block(root, rel_path, choice, None)
+}
+
+pub fn resolve_conflict_block(
+    root: &Path,
+    rel_path: &str,
+    choice: &str,
+    conflict_index: Option<usize>,
+) -> GitResult<()> {
     let trimmed_choice = choice.trim().to_lowercase();
+    if let Some(idx) = conflict_index {
+        match trimmed_choice.as_str() {
+            "ours" | "theirs" | "both" => {
+                let full_path = root.join(rel_path);
+                let content = std::fs::read_to_string(&full_path).map_err(|e| GitError {
+                    category: GitErrorCategory::Io,
+                    message: format!("Não foi possível ler o arquivo com conflito: {rel_path}"),
+                    details: Some(e.to_string()),
+                })?;
+                let (new_text, remaining) =
+                    resolve_conflict_in_text(&content, &trimmed_choice, Some(idx))?;
+                std::fs::write(&full_path, new_text).map_err(|e| GitError {
+                    category: GitErrorCategory::Io,
+                    message: format!("Não foi possível salvar o arquivo resolvido: {rel_path}"),
+                    details: Some(e.to_string()),
+                })?;
+                if remaining == 0 {
+                    mutate(root, &["add", "--", rel_path])?;
+                }
+                return Ok(());
+            }
+            _ => {
+                return Err(GitError {
+                    category: GitErrorCategory::Process,
+                    message: format!("Estratégia de resolução desconhecida: {choice}"),
+                    details: None,
+                });
+            }
+        }
+    }
+
     match trimmed_choice.as_str() {
         "ours" => {
-            mutate(root, &["checkout", "--ours", "--", rel_path])?;
+            if mutate(root, &["checkout", "--ours", "--", rel_path]).is_err() {
+                let full_path = root.join(rel_path);
+                if let Ok(content) = std::fs::read_to_string(&full_path) {
+                    if let Ok((new_text, _)) = resolve_conflict_in_text(&content, "ours", None) {
+                        let _ = std::fs::write(&full_path, new_text);
+                    }
+                }
+            }
             mutate(root, &["add", "--", rel_path])?;
         }
         "theirs" => {
-            mutate(root, &["checkout", "--theirs", "--", rel_path])?;
+            if mutate(root, &["checkout", "--theirs", "--", rel_path]).is_err() {
+                let full_path = root.join(rel_path);
+                if let Ok(content) = std::fs::read_to_string(&full_path) {
+                    if let Ok((new_text, _)) = resolve_conflict_in_text(&content, "theirs", None) {
+                        let _ = std::fs::write(&full_path, new_text);
+                    }
+                }
+            }
             mutate(root, &["add", "--", rel_path])?;
         }
         "both" => {
             let full_path = root.join(rel_path);
             if let Ok(content) = std::fs::read_to_string(&full_path) {
-                let mut resolved = Vec::new();
-                for line in content.lines() {
-                    if line.starts_with("<<<<<<<")
-                        || line.starts_with("=======")
-                        || line.starts_with(">>>>>>>")
-                    {
-                        continue;
-                    }
-                    resolved.push(line);
-                }
-                let mut new_text = resolved.join("\n");
-                if content.ends_with('\n') {
-                    new_text.push('\n');
-                }
+                let (new_text, _) = resolve_conflict_in_text(&content, "both", None)?;
                 let _ = std::fs::write(&full_path, new_text);
             }
             mutate(root, &["add", "--", rel_path])?;

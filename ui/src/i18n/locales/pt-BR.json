@@ -675,7 +675,17 @@
     "acceptTheirs": "Aceitar Entrada (Incoming)",
     "acceptBoth": "Aceitar Ambos",
     "markResolved": "Marcar como Resolvido",
-    "resolvedNotice": "Conflito resolvido"
+    "resolvedNotice": "Conflito resolvido",
+    "blockBadge": "Conflito {{current}} de {{total}}",
+    "prevConflict": "Conflito anterior",
+    "nextConflict": "Próximo conflito",
+    "chooseSidePrompt": "Clique na versão que deseja manter para este trecho:",
+    "currentSideLabel": "Atual",
+    "incomingSideLabel": "Entrada",
+    "chooseOursBlock": "Escolher Atual",
+    "chooseTheirsBlock": "Escolher Entrada",
+    "combineBothBlocks": "Manter Ambos neste bloco",
+    "emptySide": "(trecho vazio / linhas removidas)"
   },
   "compare": {
     "comparing": "Comparando: {{base}} ↔ {{target}}",

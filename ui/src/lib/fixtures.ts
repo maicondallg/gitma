@@ -21,6 +21,7 @@ const graphRows: GraphRow[] = commits.map((commit, row) => ({
 }));
 const original = `import { repository } from './git';\n\nexport async function refreshRepository() {\n  const selected = state.selectedFile;\n  state.preview = null;\n  state.notice = null;\n  const snapshot = await repository.snapshot();\n  state.snapshot = snapshot;\n  state.selectedFile = selected;\n}\n`;
 const modified = `import { repository } from './git';\n\nexport async function refreshRepository() {\n  const selected = state.selectedFile;\n  const snapshot = await repository.snapshot();\n  if (snapshot.revision !== state.snapshot?.revision) {\n    state.snapshot = snapshot;\n  }\n  state.selectedFile = selected;\n  await revalidatePreview(selected);\n}\n`;
+const conflictModified = `import { repository } from './git';\n\nexport async function refreshRepository() {\n  const selected = state.selectedFile;\n<<<<<<< HEAD\n  state.preview = null;\n  const snapshot = await repository.snapshot();\n  state.snapshot = snapshot;\n=======\n  const snapshot = await repository.snapshot();\n  if (snapshot.revision !== state.snapshot?.revision) {\n    state.snapshot = snapshot;\n  }\n>>>>>>> feature/diff\n  state.selectedFile = selected;\n}\n`;
 
 export function createFixtureAdapter(name = 'local'): BridgeAdapter {
   const sessionId = 'demo-session';
@@ -164,7 +165,7 @@ export function createFixtureAdapter(name = 'local'): BridgeAdapter {
       version: `demo-${fileId}`,
       kind: name === 'binary' ? 'binary' : name === 'conflict' ? 'conflict' : 'text',
       original,
-      modified,
+      modified: name === 'conflict' ? conflictModified : modified,
       message: name === 'binary' ? 'Arquivo binário — comparação textual indisponível.' : name === 'conflict' ? 'Resolva o conflito antes de commitar.' : null,
       hunks: name !== 'binary' && name !== 'conflict' ? [
         {

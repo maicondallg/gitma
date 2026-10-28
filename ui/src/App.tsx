@@ -5,13 +5,18 @@ import {
   Archive,
   ArrowDownToLine,
   CheckCircle2,
+  Columns2,
   Download,
+  FoldVertical,
   GitBranch,
   GitBranchPlus,
-  GitFork,
   Globe,
   HelpCircle,
+  History,
+  Maximize2,
+  Minimize2,
   RefreshCw,
+  Rows3,
   Settings,
   ShieldAlert,
   Tag,
@@ -25,12 +30,8 @@ import { FilesPanel } from './components/FilesPanel';
 import { GraphPanel } from './components/GraphPanel';
 import { HomeTab } from './components/HomeTab';
 import { InProgressBanner } from './components/InProgressBanner';
-import { NewBranchModal } from './components/NewBranchModal';
-import { ShortcutsModal } from './components/ShortcutsModal';
-import { StashModal } from './components/StashModal';
 import { TabBar } from './components/TabBar';
 import { TerminalButton } from './components/TerminalButton';
-import { TerminalDrawer } from './components/TerminalDrawer';
 import { useI18n } from './i18n';
 import { useAppStore } from './store/app';
 import type { Operation } from './lib/types';
@@ -41,6 +42,10 @@ const SettingsModal = lazy(() => import('./components/SettingsModal').then((modu
 const FileHistoryModal = lazy(() => import('./components/FileHistoryModal').then((module) => ({ default: module.FileHistoryModal })));
 const ReflogModal = lazy(() => import('./components/ReflogModal').then((module) => ({ default: module.ReflogModal })));
 const RemotesModal = lazy(() => import('./components/RemotesModal').then((module) => ({ default: module.RemotesModal })));
+const NewBranchModal = lazy(() => import('./components/NewBranchModal').then((module) => ({ default: module.NewBranchModal })));
+const ShortcutsModal = lazy(() => import('./components/ShortcutsModal').then((module) => ({ default: module.ShortcutsModal })));
+const StashModal = lazy(() => import('./components/StashModal').then((module) => ({ default: module.StashModal })));
+const TerminalDrawer = lazy(() => import('./components/TerminalDrawer').then((module) => ({ default: module.TerminalDrawer })));
 
 function LoadOnFirstOpen({ open, children }: { open: boolean; children: ReactNode }) {
   const [loaded, setLoaded] = useState(open);
@@ -76,6 +81,13 @@ export default function App() {
   const openInBrowser = useAppStore((s) => s.openInBrowser);
   const operation = useAppStore((s) => s.operation);
   const expandedDiff = useAppStore((s) => s.expandedDiff);
+  const setExpandedDiff = useAppStore((s) => s.setExpandedDiff);
+  const diffMode = useAppStore((s) => s.diffMode);
+  const setDiffMode = useAppStore((s) => s.setDiffMode);
+  const compactDiff = useAppStore((s) => s.compactDiff);
+  const setCompactDiff = useAppStore((s) => s.setCompactDiff);
+  const blameOpen = useAppStore((s) => s.blameOpen);
+  const setBlameOpen = useAppStore((s) => s.setBlameOpen);
   const settingsOpen = useAppStore((s) => s.settingsOpen);
   const closeSettings = useAppStore((s) => s.closeSettings);
   const toggleSettings = useAppStore((s) => s.toggleSettings);
@@ -88,6 +100,13 @@ export default function App() {
   const isConsoleOpen = useAppStore((s) => s.isConsoleOpen);
   const toggleConsole = useAppStore((s) => s.toggleConsole);
   const filesTab = useAppStore((s) => s.filesTab);
+  const hasActiveDiffTarget = useAppStore((s) => s.selectedFile !== null || s.preview !== null);
+  const [diffMounted, setDiffMounted] = useState(hasActiveDiffTarget);
+  useEffect(() => {
+    if (hasActiveDiffTarget && !diffMounted) {
+      setDiffMounted(true);
+    }
+  }, [hasActiveDiffTarget, diffMounted]);
   const { t } = useI18n();
 
   const [initialLayout] = useState(savedLayout);
@@ -99,6 +118,13 @@ export default function App() {
   const workspaceRef = useRef<ImperativePanelGroupHandle>(null);
   const normalLayoutRef = useRef<number[] | null>(null);
   const switchingLayoutRef = useRef(false);
+  const layoutSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (layoutSaveTimerRef.current) clearTimeout(layoutSaveTimerRef.current);
+    };
+  }, []);
 
   useLayoutEffect(() => {
     const workspace = workspaceRef.current;
@@ -559,7 +585,13 @@ export default function App() {
             onLayout={(layout) => {
               if (!expandedDiff && !switchingLayoutRef.current && layout.length === 3) {
                 normalLayoutRef.current = layout;
-                localStorage.setItem(LAYOUT_KEY, JSON.stringify(layout));
+                if (layoutSaveTimerRef.current) clearTimeout(layoutSaveTimerRef.current);
+                layoutSaveTimerRef.current = setTimeout(() => {
+                  layoutSaveTimerRef.current = null;
+                  try {
+                    localStorage.setItem(LAYOUT_KEY, JSON.stringify(layout));
+                  } catch {}
+                }, 150);
               }
             }}
             className="workspace"
@@ -580,13 +612,83 @@ export default function App() {
             </Panel>
             <PanelResizeHandle className="resize-handle" />
             <Panel defaultSize={initialLayout?.[2] ?? 35} minSize={26}>
-              <Suspense fallback={<div className="diff-panel-loading" aria-busy="true" />}>
-                <DiffPanel />
-              </Suspense>
+              {diffMounted || hasActiveDiffTarget ? (
+                <Suspense fallback={<div className="diff-panel-loading" aria-busy="true" />}>
+                  <DiffPanel />
+                </Suspense>
+              ) : (
+                <section className="diff-panel" aria-label="Diff">
+                  <header className="panel-header diff-header">
+                    <span className="path-label" title={t('diff.selectFile')}>
+                      <bdo dir="ltr">{t('diff.selectFile')}</bdo>
+                    </span>
+                    <div className="mode-switch" role="group" aria-label="Layout do diff">
+                      <button
+                        type="button"
+                        className={blameOpen ? 'active' : ''}
+                        onClick={() => setBlameOpen(!blameOpen)}
+                        title={blameOpen ? t('diff.blameActive') : t('diff.toggleBlame')}
+                        aria-pressed={blameOpen}
+                      >
+                        <History size={14} />
+                        <span>{t('diff.toggleBlame')}</span>
+                      </button>
+                      <button
+                        type="button"
+                        className={compactDiff ? 'active' : ''}
+                        onClick={() => setCompactDiff(!compactDiff)}
+                        title={compactDiff ? t('diff.compactDiffActive') : t('diff.compactDiffInactive')}
+                        aria-pressed={compactDiff}
+                      >
+                        <FoldVertical size={14} />
+                        <span>{t('diff.onlyChanges')}</span>
+                      </button>
+                      <button
+                        type="button"
+                        className={diffMode === 'unified' ? 'active' : ''}
+                        onClick={() => setDiffMode('unified')}
+                        title={t('diff.unified')}
+                        aria-pressed={diffMode === 'unified'}
+                      >
+                        <Rows3 size={14} />
+                        <span>{t('diff.unified')}</span>
+                      </button>
+                      <button
+                        type="button"
+                        className={diffMode === 'split' ? 'active' : ''}
+                        onClick={() => setDiffMode('split')}
+                        title={t('diff.split')}
+                        aria-pressed={diffMode === 'split'}
+                      >
+                        <Columns2 size={14} />
+                        <span>{t('diff.split')}</span>
+                      </button>
+                      <div className="diff-toolbar-separator" />
+                      <button
+                        type="button"
+                        className={`diff-expand-btn ${expandedDiff ? 'active' : ''}`}
+                        onClick={() => setExpandedDiff(!expandedDiff)}
+                        title={expandedDiff ? t('diff.restoreDiff') : t('diff.expandDiff')}
+                        aria-label={expandedDiff ? t('diff.restoreDiff') : t('diff.expandDiff')}
+                        aria-pressed={expandedDiff}
+                      >
+                        {expandedDiff ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
+                      </button>
+                    </div>
+                  </header>
+                  <div className="diff-body">
+                    <div className="empty-state">{t('diff.selectFile')}</div>
+                  </div>
+                </section>
+              )}
             </Panel>
           </PanelGroup>
 
-          {isConsoleOpen && <TerminalDrawer />}
+          {isConsoleOpen && (
+            <Suspense fallback={null}>
+              <TerminalDrawer />
+            </Suspense>
+          )}
         </>
       )}
 
@@ -675,30 +777,36 @@ export default function App() {
       )}
 
       {showNewBranchModal && (
-        <NewBranchModal
-          isOpen={showNewBranchModal}
-          startPoint={branch ?? undefined}
-          onClose={() => setShowNewBranchModal(false)}
-          onSubmit={(params) => void runOperation('createBranch', [], JSON.stringify(params))}
-        />
+        <Suspense fallback={null}>
+          <NewBranchModal
+            isOpen={showNewBranchModal}
+            startPoint={branch ?? undefined}
+            onClose={() => setShowNewBranchModal(false)}
+            onSubmit={(params) => void runOperation('createBranch', [], JSON.stringify(params))}
+          />
+        </Suspense>
       )}
 
       {showStashModal && (
-        <StashModal
-          isOpen={showStashModal}
-          onClose={() => setShowStashModal(false)}
-          onSubmit={({ message, includeUntracked }) => {
-            void runOperation(
-              'stashPush',
-              [],
-              JSON.stringify({ message, include_untracked: includeUntracked })
-            );
-          }}
-        />
+        <Suspense fallback={null}>
+          <StashModal
+            isOpen={showStashModal}
+            onClose={() => setShowStashModal(false)}
+            onSubmit={({ message, includeUntracked }) => {
+              void runOperation(
+                'stashPush',
+                [],
+                JSON.stringify({ message, include_untracked: includeUntracked })
+              );
+            }}
+          />
+        </Suspense>
       )}
 
       {showShortcutsModal && (
-        <ShortcutsModal onClose={() => setShowShortcutsModal(false)} />
+        <Suspense fallback={null}>
+          <ShortcutsModal onClose={() => setShowShortcutsModal(false)} />
+        </Suspense>
       )}
 
       <LoadOnFirstOpen open={settingsOpen}>

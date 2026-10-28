@@ -5,7 +5,8 @@
 
 use crate::domain::{
     BlameLine, ChangedFile, CommitDetails, DiffHunk, FileArea, FileHistoryEntry, FileStatus,
-    GitError, GitResult, GitService, ReflogEntry, RemoteEntry, RepoFileEntry, RepoSnapshot,
+    GitError, GitResult, GitService, InProgressKind, ReflogEntry, RemoteEntry, RepoFileEntry,
+    RepoSnapshot,
 };
 pub use crate::domain::{GitAccountOption, RepoAuthState};
 use crate::git::{diff::DEFAULT_MAX_BYTES, operations::PatchTarget, GitRepository};
@@ -21,8 +22,8 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 pub const HISTORY_PAGE_SIZE: usize = 200;
-const DEBOUNCE: Duration = Duration::from_millis(500);
-const MAX_DEBOUNCE: Duration = Duration::from_secs(2);
+const DEBOUNCE: Duration = Duration::from_millis(200);
+const MAX_DEBOUNCE: Duration = Duration::from_secs(1);
 const MAX_LINES: usize = 20_000;
 
 #[derive(Clone, Debug, Serialize)]
@@ -310,6 +311,7 @@ struct SessionState {
     snapshot: Mutex<SnapshotFingerprint>,
     history: Mutex<HistoryCache>,
     commit_cache: Mutex<HashMap<String, CommitFiles>>,
+    repo_tree_cache: Mutex<RepoTreeCache>,
     /// Reads can overlap, mutations get exclusive ownership of Git state.
     coordinator: RwLock<()>,
     watcher: Mutex<Option<RecommendedWatcher>>,
@@ -331,7 +333,14 @@ struct HistoryCache {
     key: String,
     layouts: Vec<GraphLayout>,
     lanes: Vec<LaneState>,
+    first_parent_by_oid: HashMap<String, Option<String>>,
+    stash_oids: HashSet<String>,
     exhausted: bool,
+}
+#[derive(Default)]
+struct RepoTreeCache {
+    worktree: Option<(u64, Vec<RepoFileEntry>)>,
+    commits: HashMap<String, Vec<RepoFileEntry>>,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 struct FileKey {
@@ -390,6 +399,7 @@ impl Backend {
             snapshot: Mutex::new(SnapshotFingerprint::default()),
             history: Mutex::new(HistoryCache::default()),
             commit_cache: Mutex::new(HashMap::new()),
+            repo_tree_cache: Mutex::new(RepoTreeCache::default()),
             coordinator: RwLock::new(()),
             watcher: Mutex::new(None),
         });
@@ -443,10 +453,10 @@ impl Backend {
         let unstaged = register_files(&state, NativeContext::Local, raw.unstaged);
         let in_progress = raw.in_progress.map(|op| InProgressState {
             kind: match op.kind {
-                crate::domain::InProgressKind::Merge => "merge".to_string(),
-                crate::domain::InProgressKind::Rebase => "rebase".to_string(),
-                crate::domain::InProgressKind::CherryPick => "cherryPick".to_string(),
-                crate::domain::InProgressKind::Revert => "revert".to_string(),
+                InProgressKind::Merge => "merge".to_string(),
+                InProgressKind::Rebase => "rebase".to_string(),
+                InProgressKind::CherryPick => "cherryPick".to_string(),
+                InProgressKind::Revert => "revert".to_string(),
             },
             message: op.message,
         });
@@ -558,9 +568,15 @@ impl Backend {
                 return Ok(result);
             }
         }
+        let non_stash_hint: &[String] = &[];
+        let parents_hint = if may_be_stash_commit(&state, oid) {
+            None
+        } else {
+            Some(non_stash_hint)
+        };
         let (raw_files, details) = thread::scope(|scope| {
             let details = scope.spawn(|| state.repo.commit_details(oid).ok());
-            let files = state.repo.files_for_commit(oid);
+            let files = state.repo.files_for_commit_with_parents(oid, parents_hint);
             (
                 files,
                 details.join().expect("commit details reader panicked"),
@@ -705,9 +721,13 @@ impl Backend {
             let path = PathBuf::from(path_str);
             let (original_bytes, modified_bytes) = if let Some(oid) = commit_oid {
                 validate_oid(oid)?;
+                let cached_parent = lookup_first_parent(&state, oid);
                 let (original, modified) = read_preview_sides(
                     || {
-                        let parent = state.repo.first_parent(oid).unwrap_or(None);
+                        let parent = match cached_parent {
+                            Some(p) => p,
+                            None => state.repo.first_parent(oid).unwrap_or(None),
+                        };
                         Ok(match parent.as_deref() {
                             Some(p) => state.repo.revision_content(p, &path).unwrap_or(None),
                             None => None,
@@ -753,17 +773,7 @@ impl Backend {
             .cloned()
             .ok_or_else(|| invalid("Arquivo não pertence a esta sessão"))?;
         let cached_parent = if let NativeContext::Commit(oid) = &selected.context {
-            state
-                .commit_cache
-                .lock()
-                .expect("commit_cache lock poisoned")
-                .get(oid)
-                .and_then(|cached| {
-                    cached
-                        .details
-                        .as_ref()
-                        .map(|details| details.parents.first().cloned())
-                })
+            lookup_first_parent(&state, oid)
         } else {
             None
         };
@@ -832,12 +842,76 @@ impl Backend {
         let _read = state.coordinator.read().expect("coordinator lock poisoned");
         if let Some(oid) = commit_oid {
             validate_oid(oid)?;
+            {
+                let cache = state
+                    .repo_tree_cache
+                    .lock()
+                    .expect("repo_tree_cache lock poisoned");
+                if let Some(cached_files) = cache.commits.get(oid) {
+                    return Ok(RepoTreeResult {
+                        session_id: state.id.clone(),
+                        request_id,
+                        commit_oid: Some(oid.to_owned()),
+                        files: cached_files.clone(),
+                    });
+                }
+            }
+            let non_stash_hint: &[String] = &[];
+            let parents_hint = if may_be_stash_commit(&state, oid) {
+                None
+            } else {
+                Some(non_stash_hint)
+            };
+            let files = state
+                .repo
+                .repo_files_with_parents(Some(oid), parents_hint)?;
+            {
+                let mut cache = state
+                    .repo_tree_cache
+                    .lock()
+                    .expect("repo_tree_cache lock poisoned");
+                if cache.commits.len() >= 64 {
+                    cache.commits.clear();
+                }
+                cache.commits.insert(oid.to_owned(), files.clone());
+            }
+            return Ok(RepoTreeResult {
+                session_id: state.id.clone(),
+                request_id,
+                commit_oid: Some(oid.to_owned()),
+                files,
+            });
         }
-        let files = state.repo.repo_files(commit_oid)?;
+
+        let rev = state.revision.load(Ordering::Relaxed);
+        if rev > 0 {
+            let cache = state
+                .repo_tree_cache
+                .lock()
+                .expect("repo_tree_cache lock poisoned");
+            if let Some((cached_rev, cached_files)) = &cache.worktree {
+                if *cached_rev == rev {
+                    return Ok(RepoTreeResult {
+                        session_id: state.id.clone(),
+                        request_id,
+                        commit_oid: None,
+                        files: cached_files.clone(),
+                    });
+                }
+            }
+        }
+        let files = state.repo.repo_files(None)?;
+        if rev > 0 {
+            let mut cache = state
+                .repo_tree_cache
+                .lock()
+                .expect("repo_tree_cache lock poisoned");
+            cache.worktree = Some((rev, files.clone()));
+        }
         Ok(RepoTreeResult {
             session_id: state.id.clone(),
             request_id,
-            commit_oid: commit_oid.map(str::to_owned),
+            commit_oid: None,
             files,
         })
     }
@@ -865,11 +939,18 @@ impl Backend {
         validate_oid(oid)?;
         let state = self.session(session_id)?;
         let _read = state.coordinator.read().expect("coordinator lock poisoned");
-        let (file, parent) = thread::scope(|scope| {
-            let parent = scope.spawn(|| state.repo.first_parent(oid));
-            let file = state.repo.file_change_for_commit(oid, Path::new(path));
-            (file, parent.join().expect("parent reader panicked"))
-        });
+        let cached_parent = lookup_first_parent(&state, oid);
+        let (file, parent) = match cached_parent {
+            Some(p) => (
+                state.repo.file_change_for_commit(oid, Path::new(path)),
+                Ok(p),
+            ),
+            None => thread::scope(|scope| {
+                let parent = scope.spawn(|| state.repo.first_parent(oid));
+                let file = state.repo.file_change_for_commit(oid, Path::new(path));
+                (file, parent.join().expect("parent reader panicked"))
+            }),
+        };
         let file = file?.ok_or_else(|| invalid("Arquivo não pertence a este commit"))?;
         let parent = parent?;
         let old_path = file.old_path.as_deref().unwrap_or(&file.path);
@@ -935,9 +1016,8 @@ impl Backend {
                     FileArea::Unstaged,
                     "Somente arquivos não preparados podem ser adicionados",
                 )?;
-                for file in &files {
-                    state.repo.stage_file(&file.file)?;
-                }
+                let raw_files: Vec<ChangedFile> = files.into_iter().map(|f| f.file).collect();
+                state.repo.stage_files(&raw_files)?;
             }
             Operation::Unstage => {
                 require_area(
@@ -945,9 +1025,8 @@ impl Backend {
                     FileArea::Staged,
                     "Somente arquivos preparados podem ser removidos",
                 )?;
-                for file in &files {
-                    state.repo.unstage_file(&file.file)?;
-                }
+                let raw_files: Vec<ChangedFile> = files.into_iter().map(|f| f.file).collect();
+                state.repo.unstage_files(&raw_files)?;
             }
             Operation::StageAll => {
                 reject_files(file_ids)?;
@@ -955,9 +1034,7 @@ impl Backend {
             }
             Operation::UnstageAll => {
                 reject_files(file_ids)?;
-                for file in state.repo.snapshot()?.staged {
-                    state.repo.unstage_file(&file)?;
-                }
+                state.repo.unstage_all()?;
             }
             Operation::Discard => {
                 require_area(
@@ -965,9 +1042,8 @@ impl Backend {
                     FileArea::Unstaged,
                     "Somente alterações não preparadas podem ser descartadas",
                 )?;
-                for file in &files {
-                    state.repo.discard_file(&file.file)?;
-                }
+                let raw_files: Vec<ChangedFile> = files.into_iter().map(|f| f.file).collect();
+                state.repo.discard_files(&raw_files)?;
             }
             Operation::DiscardAll => {
                 reject_files(file_ids)?;
@@ -1069,8 +1145,10 @@ impl Backend {
                 struct ResolveParams {
                     path: Option<String>,
                     choice: String,
+                    #[serde(rename = "conflictIndex")]
+                    conflict_index: Option<usize>,
                 }
-                let (path, choice) =
+                let (path, choice, conflict_index) =
                     if let Ok(params) = serde_json::from_str::<ResolveParams>(message) {
                         let p = params
                             .path
@@ -1080,18 +1158,20 @@ impl Backend {
                                     .map(|f| f.file.path.to_string_lossy().into_owned())
                             })
                             .unwrap_or_default();
-                        (p, params.choice)
+                        (p, params.choice, params.conflict_index)
                     } else {
                         let p = files
                             .first()
                             .map(|f| f.file.path.to_string_lossy().into_owned())
                             .unwrap_or_default();
-                        (p, message.trim().to_string())
+                        (p, message.trim().to_string(), None)
                     };
                 if path.is_empty() {
                     return Err(invalid("O caminho do arquivo com conflito é obrigatório"));
                 }
-                state.repo.resolve_conflict(&path, &choice)?;
+                state
+                    .repo
+                    .resolve_conflict_block(&path, &choice, conflict_index)?;
             }
             Operation::AddRemote => {
                 reject_files(file_ids)?;
@@ -1487,11 +1567,23 @@ impl Backend {
                 custom_output = Some(state.repo.run_raw_git_command(trimmed)?);
             }
         }
-        (state.emit)(RepoChanged {
-            session_id: state.id.clone(),
-            scope: "all".into(),
-            paths: Vec::new(),
-        });
+        if !matches!(
+            operation,
+            Operation::OpenTerminal
+                | Operation::OpenEditor
+                | Operation::RevealFile
+                | Operation::OpenBrowser
+        ) {
+            state
+                .repo_tree_cache
+                .lock()
+                .expect("repo_tree_cache lock poisoned")
+                .worktree = None;
+        }
+        // Avoid triggering a redundant immediate `repo-changed` IPC event here:
+        // UI mutations already invoke `refresh('mutation')` directly upon completion,
+        // and external operations (`OpenEditor`, `OpenTerminal`, `RevealFile`, `OpenBrowser`)
+        // do not mutate repository state at all.
         let result_message = match operation {
             Operation::Stage => "Alterações preparadas",
             Operation::Unstage => "Alterações removidas do preparo",
@@ -1561,6 +1653,44 @@ impl Backend {
             .cloned()
             .ok_or_else(|| invalid("Sessão não encontrada"))
     }
+}
+
+fn lookup_first_parent(state: &SessionState, oid: &str) -> Option<Option<String>> {
+    if let Some(parent) = state
+        .history
+        .lock()
+        .expect("history cache lock poisoned")
+        .first_parent_by_oid
+        .get(oid)
+        .cloned()
+    {
+        return Some(parent);
+    }
+    state
+        .commit_cache
+        .lock()
+        .expect("commit_cache lock poisoned")
+        .get(oid)
+        .and_then(|cached| cached.details.as_ref().map(|d| d.parents.first().cloned()))
+}
+
+fn may_be_stash_commit(state: &SessionState, oid: &str) -> bool {
+    {
+        let hist = state.history.lock().expect("history cache lock poisoned");
+        if hist.first_parent_by_oid.contains_key(oid) {
+            return hist.stash_oids.contains(oid);
+        }
+    }
+    if let Some(details) = state
+        .commit_cache
+        .lock()
+        .expect("commit_cache lock poisoned")
+        .get(oid)
+        .and_then(|c| c.details.as_ref())
+    {
+        return details.parents.len() >= 3 || details.refs.iter().any(|r| r.contains("stash"));
+    }
+    true
 }
 
 fn validate_oid(oid: &str) -> Result<(), AppError> {
@@ -1714,6 +1844,12 @@ fn preview_bytes(
         .as_deref()
         .unwrap_or(&selected.file.path);
     match &selected.context {
+        NativeContext::Local if selected.file.status == FileStatus::Conflicted => {
+            read_preview_sides(
+                || repo.revision_content("HEAD", old).or(Ok(None)),
+                || repo.worktree_content(&selected.file.path),
+            )
+        }
         NativeContext::Local if selected.file.area == FileArea::Unstaged => {
             if selected.file.status == FileStatus::Untracked {
                 Ok((None, repo.worktree_content(&selected.file.path)?))
@@ -1857,7 +1993,7 @@ fn update_snapshot_revision(
     snapshot: &RepoSnapshot,
     history_key: &str,
 ) -> u64 {
-    let fingerprint = snapshot_fingerprint(snapshot, history_key);
+    let fingerprint = snapshot_fingerprint(&state.repo.context().root, snapshot, history_key);
     let mut stored = state
         .snapshot
         .lock()
@@ -1894,13 +2030,21 @@ fn cached_history_page(
             .history_scoped(current, HISTORY_PAGE_SIZE, all_branches)?;
         let incoming = cache.lanes.last().cloned().unwrap_or_default();
         let (layout, next_lanes) = layout_page(&source, &incoming);
+        for row in &layout.rows {
+            cache
+                .first_parent_by_oid
+                .insert(row.commit.oid.clone(), row.commit.parents.first().cloned());
+            if row.commit.refs.iter().any(|r| r.contains("stash")) {
+                cache.stash_oids.insert(row.commit.oid.clone());
+            }
+        }
         cache.exhausted = !layout.has_more;
         cache.layouts.push(layout);
         cache.lanes.push(next_lanes);
     }
     Ok(cache.layouts.get(page).cloned().unwrap_or_default())
 }
-fn snapshot_fingerprint(snapshot: &RepoSnapshot, history_key: &str) -> String {
+fn snapshot_fingerprint(root: &Path, snapshot: &RepoSnapshot, history_key: &str) -> String {
     let mut hash = Sha256::new();
     hash.update(history_key.as_bytes());
     hash.update([0]);
@@ -1910,6 +2054,23 @@ fn snapshot_fingerprint(snapshot: &RepoSnapshot, history_key: &str) -> String {
     hash.update((snapshot.ahead.unwrap_or(0) as u64).to_le_bytes());
     hash.update((snapshot.behind.unwrap_or(0) as u64).to_le_bytes());
     hash.update([snapshot.conflicted as u8]);
+    if let Some(op) = &snapshot.in_progress {
+        let kind_tag: u8 = match op.kind {
+            InProgressKind::Merge => 1,
+            InProgressKind::Rebase => 2,
+            InProgressKind::CherryPick => 3,
+            InProgressKind::Revert => 4,
+        };
+        hash.update([kind_tag]);
+        hash.update(op.message.as_deref().unwrap_or("").as_bytes());
+    } else {
+        hash.update([0]);
+    }
+    hash.update([0]);
+
+    let inspect_content = snapshot.unstaged.len() <= 64;
+    let mut inspected = 0usize;
+
     for file in snapshot.staged.iter().chain(&snapshot.unstaged) {
         hash.update(area_name(file.area).as_bytes());
         hash.update([0]);
@@ -1920,6 +2081,38 @@ fn snapshot_fingerprint(snapshot: &RepoSnapshot, history_key: &str) -> String {
             &mut hash,
             file.old_path.as_deref().unwrap_or_else(|| Path::new("")),
         );
+        hash.update(
+            file.insertions
+                .map(|v| v as u64)
+                .unwrap_or(u64::MAX)
+                .to_le_bytes(),
+        );
+        hash.update(
+            file.deletions
+                .map(|v| v as u64)
+                .unwrap_or(u64::MAX)
+                .to_le_bytes(),
+        );
+        hash.update([file.is_binary as u8]);
+
+        if inspect_content
+            && file.area == FileArea::Unstaged
+            && file.status != FileStatus::Deleted
+            && inspected < 32
+        {
+            inspected += 1;
+            let full_path = root.join(&file.path);
+            if let Ok(meta) = std::fs::metadata(&full_path) {
+                if meta.is_file() && meta.len() <= DEFAULT_MAX_BYTES as u64 {
+                    if let Ok(bytes) = std::fs::read(&full_path) {
+                        hash.update((bytes.len() as u64).to_le_bytes());
+                        hash.update(Sha256::digest(&bytes));
+                    }
+                } else {
+                    hash.update(meta.len().to_le_bytes());
+                }
+            }
+        }
     }
     format!("{:x}", hash.finalize())
 }
@@ -1993,10 +2186,22 @@ fn watch_loop(state: Weak<SessionState>, rx: mpsc::Receiver<notify::Result<Event
                 if !is_change_event(&event) {
                     continue;
                 }
+                let Some(session) = state.upgrade() else {
+                    break;
+                };
+                let relevant: Vec<PathBuf> = event
+                    .paths
+                    .into_iter()
+                    .filter(|path| is_watch_candidate(&session, path))
+                    .collect();
+                drop(session);
+                if relevant.is_empty() {
+                    continue;
+                }
                 if first.is_none() {
                     first = Some(Instant::now());
                 }
-                pending.extend(event.paths);
+                pending.extend(relevant);
             }
             Ok(Err(_)) => {}
             Err(mpsc::RecvTimeoutError::Disconnected) => break,
@@ -2017,6 +2222,18 @@ fn is_change_event(event: &Event) -> bool {
         EventKind::Create(_) | EventKind::Modify(_) | EventKind::Remove(_) | EventKind::Any
     )
 }
+fn is_watch_candidate(state: &SessionState, path: &Path) -> bool {
+    if path
+        .components()
+        .any(|component| component.as_os_str().to_string_lossy().ends_with(".lock"))
+    {
+        return false;
+    }
+    if path.starts_with(&state.git_dir) {
+        return metadata_path_scope(state, path).is_some();
+    }
+    true
+}
 fn emit_paths(state: &SessionState, paths: Vec<PathBuf>) {
     let mut scope = None::<&str>;
     let mut display = Vec::new();
@@ -2031,33 +2248,40 @@ fn emit_paths(state: &SessionState, paths: Vec<PathBuf>) {
             }
         }
     }
-    // A single event-driven file listing decides every worktree path in the
-    // burst. This avoids two Git processes per file when a build creates a
-    // large ignored directory, while tracked changes always remain visible.
+    // Fast-path: if every changed worktree path is already registered in Local
+    // FileRegistry, skip spawning `git ls-files` completely. Otherwise, a single
+    // event-driven file listing decides every worktree path in the burst.
     if !worktree.is_empty() {
-        let mut visible: HashSet<_> = state
-            .repo
-            .relevant_worktree_paths()
-            .unwrap_or_default()
-            .into_iter()
+        let local_known: HashSet<PathBuf> = state
+            .files
+            .lock()
+            .expect("file registry lock poisoned")
+            .entries
+            .values()
+            .filter(|entry| entry.context == NativeContext::Local)
+            .flat_map(|entry| {
+                entry
+                    .file
+                    .old_path
+                    .iter()
+                    .cloned()
+                    .chain(std::iter::once(entry.file.path.clone()))
+            })
             .collect();
-        visible.extend(
-            state
-                .files
-                .lock()
-                .expect("file registry lock poisoned")
-                .entries
-                .values()
-                .filter(|entry| entry.context == NativeContext::Local)
-                .flat_map(|entry| {
-                    entry
-                        .file
-                        .old_path
-                        .iter()
-                        .cloned()
-                        .chain(std::iter::once(entry.file.path.clone()))
-                }),
-        );
+
+        let visible = if worktree.iter().all(|rel| local_known.contains(rel)) {
+            local_known
+        } else {
+            let mut visible: HashSet<_> = state
+                .repo
+                .relevant_worktree_paths()
+                .unwrap_or_default()
+                .into_iter()
+                .collect();
+            visible.extend(local_known);
+            visible
+        };
+
         for relative in worktree {
             if visible.contains(&relative) {
                 scope = Some(combine_scope(scope, "worktree"));
@@ -2069,6 +2293,11 @@ fn emit_paths(state: &SessionState, paths: Vec<PathBuf>) {
         }
     }
     if let Some(scope) = scope {
+        state
+            .repo_tree_cache
+            .lock()
+            .expect("repo_tree_cache lock poisoned")
+            .worktree = None;
         (state.emit)(RepoChanged {
             session_id: state.id.clone(),
             scope: scope.into(),
@@ -2145,6 +2374,7 @@ mod tests {
             snapshot: Mutex::new(SnapshotFingerprint::default()),
             history: Mutex::new(HistoryCache::default()),
             commit_cache: Mutex::new(HashMap::new()),
+            repo_tree_cache: Mutex::new(RepoTreeCache::default()),
             coordinator: RwLock::new(()),
             watcher: Mutex::new(None),
         };

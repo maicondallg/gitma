@@ -23,13 +23,30 @@ impl GitRepository {
             message: "Não foi possível abrir o caminho".into(),
             details: Some(e.to_string()),
         })?;
+        let dot_git = p.join(".git");
+        if dot_git.is_dir() && dot_git.join("HEAD").is_file() {
+            let git_dir = OnceLock::new();
+            let _ = git_dir.set(dot_git);
+            return Ok(Self {
+                context: RepoContext {
+                    root: p,
+                    generation: 0,
+                },
+                git_dir,
+            });
+        }
         let root = path_from_git_output(runner::read(&p, &["rev-parse", "--show-toplevel"])?)?;
+        let git_dir = OnceLock::new();
+        let root_dot_git = root.join(".git");
+        if root_dot_git.is_dir() && root_dot_git.join("HEAD").is_file() {
+            let _ = git_dir.set(root_dot_git);
+        }
         Ok(Self {
             context: RepoContext {
                 root,
                 generation: 0,
             },
-            git_dir: OnceLock::new(),
+            git_dir,
         })
     }
     pub fn from_context(context: RepoContext) -> Self {
@@ -50,58 +67,60 @@ impl GitRepository {
             .map(|bytes| String::from_utf8_lossy(&bytes).trim().to_owned())
             .filter(|s| !s.is_empty())
     }
-    pub fn snapshot(&self) -> GitResult<RepoSnapshot> {
-        let branch = self
-            .read_head_symbolic_ref()
-            .and_then(|r| r.strip_prefix("refs/heads/").map(str::to_owned))
-            .unwrap_or_default();
-
-        let (raw, (upstream, ahead, behind)) = std::thread::scope(|scope| {
-            let upstream_task = scope.spawn(|| {
-                if branch.is_empty() {
-                    return (String::new(), None, None);
-                }
-                let upstream = match runner::read(
-                    &self.context.root,
-                    &[
-                        "rev-parse",
-                        "--abbrev-ref",
-                        "--symbolic-full-name",
-                        "@{upstream}",
-                    ],
-                ) {
-                    Ok(bytes) => String::from_utf8_lossy(&bytes).trim().to_owned(),
-                    Err(_) => String::new(),
-                };
-                let (ahead, behind) = if !upstream.is_empty() {
-                    if let Ok(out) = runner::read(
-                        &self.context.root,
-                        &["rev-list", "--left-right", "--count", "HEAD...@{upstream}"],
-                    ) {
-                        let text = String::from_utf8_lossy(&out);
-                        let mut parts = text.split_whitespace();
-                        let a = parts.next().and_then(|s| s.parse::<usize>().ok());
-                        let b = parts.next().and_then(|s| s.parse::<usize>().ok());
-                        (a, b)
-                    } else {
-                        (None, None)
+    fn has_stash_ref(&self) -> bool {
+        let Ok(git_dir) = self.git_dir() else {
+            return true;
+        };
+        if git_dir.join("refs/stash").is_file() || git_dir.join("logs/refs/stash").is_file() {
+            return true;
+        }
+        if let Ok(packed) = std::fs::read_to_string(git_dir.join("packed-refs")) {
+            if packed.contains("refs/stash") {
+                return true;
+            }
+        }
+        false
+    }
+    fn head_commit_exists_fast(&self) -> bool {
+        if let Ok(git_dir) = self.git_dir() {
+            if let Ok(head_raw) = std::fs::read_to_string(git_dir.join("HEAD")) {
+                let trimmed = head_raw.trim();
+                if let Some(sym) = trimmed.strip_prefix("ref: ").map(str::trim) {
+                    if git_dir.join(sym).is_file() {
+                        return true;
                     }
-                } else {
-                    (None, None)
-                };
-                (upstream, ahead, behind)
-            });
-            let status_raw = runner::read(
-                &self.context.root,
-                &["status", "--porcelain=v1", "--untracked-files=all", "-z"],
-            );
-            (
-                status_raw,
-                upstream_task.join().expect("upstream reader panicked"),
-            )
-        });
-        let raw = raw?;
-        let (mut staged, mut unstaged, conflicted) = status::parse_porcelain_z(&raw);
+                    if let Ok(packed) = std::fs::read_to_string(git_dir.join("packed-refs")) {
+                        if packed.lines().any(|line| {
+                            !line.starts_with('#')
+                                && !line.starts_with('^')
+                                && line.split_whitespace().nth(1) == Some(sym)
+                        }) {
+                            return true;
+                        }
+                    }
+                    return false;
+                } else if trimmed.len() >= 40 && trimmed.bytes().all(|b| b.is_ascii_hexdigit()) {
+                    return true;
+                }
+            }
+        }
+        runner::read(&self.context.root, &["rev-parse", "--verify", "HEAD"]).is_ok()
+    }
+    pub fn snapshot(&self) -> GitResult<RepoSnapshot> {
+        let raw = runner::read(
+            &self.context.root,
+            &[
+                "status",
+                "--porcelain=v2",
+                "--branch",
+                "--untracked-files=all",
+                "-z",
+            ],
+        )?;
+        let parsed = status::parse_porcelain_v2_z(&raw);
+        let mut staged = parsed.staged;
+        let mut unstaged = parsed.unstaged;
+        let conflicted = parsed.conflicted;
 
         let need_staged_numstat = !staged.is_empty();
         let need_unstaged_numstat = unstaged.iter().any(|f| f.status != FileStatus::Untracked);
@@ -187,10 +206,10 @@ impl GitRepository {
             .as_deref()
             .and_then(operations::detect_in_progress);
         Ok(RepoSnapshot {
-            branch: (!branch.is_empty()).then_some(branch),
-            upstream: (!upstream.is_empty()).then_some(upstream),
-            ahead,
-            behind,
+            branch: parsed.branch,
+            upstream: parsed.upstream,
+            ahead: parsed.ahead,
+            behind: parsed.behind,
             staged,
             unstaged,
             conflicted,
@@ -208,13 +227,12 @@ impl GitRepository {
     ) -> GitResult<HistoryPage> {
         let n = page_size.saturating_add(16).to_string();
         let skip = page_no.saturating_mul(page_size).to_string();
-        let (head_exists, stash_out) = std::thread::scope(|scope| {
-            let stash_task = scope.spawn(|| {
-                runner::read(&self.context.root, &["stash", "list", "--format=%H%x00%gd"]).ok()
-            });
-            let head = runner::read(&self.context.root, &["rev-parse", "--verify", "HEAD"]).is_ok();
-            (head, stash_task.join().expect("stash list reader panicked"))
-        });
+        let head_exists = self.head_commit_exists_fast();
+        let stash_out = if self.has_stash_ref() {
+            runner::read(&self.context.root, &["stash", "list", "--format=%H%x00%gd"]).ok()
+        } else {
+            None
+        };
         let mut stash_map = std::collections::HashMap::new();
         let mut stash_refs = Vec::new();
         if let Some(out) = stash_out {
@@ -309,12 +327,19 @@ impl GitRepository {
         )?;
         if !staged && matches!(&parsed, FileDiff::Text { lines, .. } if lines.is_empty()) {
             if let Some(relative) = owned.first().map(PathBuf::from) {
-                let snapshot = self.snapshot()?;
-                if snapshot
-                    .unstaged
-                    .iter()
-                    .any(|file| file.path == relative && file.status == FileStatus::Untracked)
-                {
+                let is_untracked = runner::read_os(
+                    &self.context.root,
+                    &[
+                        std::ffi::OsStr::new("ls-files"),
+                        std::ffi::OsStr::new("--others"),
+                        std::ffi::OsStr::new("--exclude-standard"),
+                        std::ffi::OsStr::new("-z"),
+                        std::ffi::OsStr::new("--"),
+                        relative.as_os_str(),
+                    ],
+                )
+                .is_ok_and(|out| !out.is_empty());
+                if is_untracked {
                     return diff::untracked(
                         &self.context.root.join(relative),
                         diff::DEFAULT_MAX_BYTES,
@@ -351,21 +376,48 @@ impl GitRepository {
         for value in &owned {
             args.push(value.as_os_str());
         }
-        diff::parse(
-            &runner::read_os(&self.context.root, &args)?,
-            diff::DEFAULT_MAX_BYTES,
-        )
+        let mut raw = runner::read_os(&self.context.root, &args)?;
+        if (raw.is_empty() || owned.is_empty()) && self.has_stash_ref() {
+            if let Some(u_oid) = stash_untracked_parent(&self.context.root, oid) {
+                let mut u_args = vec![
+                    std::ffi::OsStr::new("diff-tree"),
+                    std::ffi::OsStr::new("--root"),
+                    std::ffi::OsStr::new("-p"),
+                    std::ffi::OsStr::new("--no-ext-diff"),
+                    std::ffi::OsStr::new(&u_oid),
+                    std::ffi::OsStr::new("--"),
+                ];
+                for value in &owned {
+                    u_args.push(value.as_os_str());
+                }
+                if let Ok(u_raw) = runner::read_os(&self.context.root, &u_args) {
+                    raw.extend_from_slice(&u_raw);
+                }
+            }
+        }
+        diff::parse(&raw, diff::DEFAULT_MAX_BYTES)
     }
     pub fn files_for_commit(&self, oid: &str) -> GitResult<Vec<ChangedFile>> {
-        let (raw, numstat_raw) = std::thread::scope(|scope| {
-            let numstat = scope.spawn(|| {
-                runner::read(
+        self.files_for_commit_with_parents(oid, None)
+    }
+    pub fn files_for_commit_with_parents(
+        &self,
+        oid: &str,
+        known_parents: Option<&[String]>,
+    ) -> GitResult<Vec<ChangedFile>> {
+        let may_have_stash_untracked = known_parents.map_or(true, |p| p.len() >= 3);
+        let (raw, untracked_parent) = if may_have_stash_untracked && self.has_stash_ref() {
+            std::thread::scope(|scope| {
+                let untracked_parent =
+                    scope.spawn(|| stash_untracked_parent(&self.context.root, oid));
+                let combined = runner::read(
                     &self.context.root,
                     &[
                         "diff-tree",
                         "--root",
                         "--diff-merges=first-parent",
                         "--no-commit-id",
+                        "--raw",
                         "--numstat",
                         "-M",
                         "-C",
@@ -373,16 +425,24 @@ impl GitRepository {
                         "-z",
                         oid,
                     ],
+                );
+                (
+                    combined,
+                    untracked_parent
+                        .join()
+                        .expect("untracked parent reader panicked"),
                 )
-            });
-            let names = runner::read(
+            })
+        } else {
+            let combined = runner::read(
                 &self.context.root,
                 &[
                     "diff-tree",
                     "--root",
                     "--diff-merges=first-parent",
                     "--no-commit-id",
-                    "--name-status",
+                    "--raw",
+                    "--numstat",
                     "-M",
                     "-C",
                     "-r",
@@ -390,21 +450,16 @@ impl GitRepository {
                     oid,
                 ],
             );
-            (names, numstat.join().expect("numstat reader panicked"))
-        });
+            (combined, None)
+        };
         let raw = raw?;
-        let mut files = status::parse_commit_names(&raw);
+        let mut files = status::parse_diff_tree_raw_numstat_z(&raw);
 
-        if let Ok(numstat_raw) = numstat_raw {
-            let numstat_map = status::parse_numstat_z(&numstat_raw);
-            for f in &mut files {
-                if let Some(stat) = numstat_map
-                    .get(&f.path)
-                    .or_else(|| f.old_path.as_ref().and_then(|op| numstat_map.get(op)))
-                {
-                    f.insertions = stat.insertions;
-                    f.deletions = stat.deletions;
-                    f.is_binary = stat.is_binary;
+        if let Some(u_oid) = untracked_parent {
+            let u_files = files_for_untracked_stash_parent(&self.context.root, &u_oid);
+            for uf in u_files {
+                if !files.iter().any(|existing| existing.path == uf.path) {
+                    files.push(uf);
                 }
             }
         }
@@ -428,29 +483,72 @@ impl GitRepository {
                 oid,
             ],
         )?;
-        Ok(status::parse_commit_names(&raw)
+        if let Some(found) = status::parse_commit_names(&raw)
             .into_iter()
-            .find(|file| file.path == path))
+            .find(|file| file.path == path)
+        {
+            return Ok(Some(found));
+        }
+        if self.has_stash_ref() {
+            if let Some(u_oid) = stash_untracked_parent(&self.context.root, oid) {
+                let u_raw = runner::read(
+                    &self.context.root,
+                    &[
+                        "diff-tree",
+                        "--root",
+                        "--no-commit-id",
+                        "--name-status",
+                        "-r",
+                        "-z",
+                        &u_oid,
+                    ],
+                )?;
+                return Ok(status::parse_commit_names(&u_raw)
+                    .into_iter()
+                    .find(|file| file.path == path));
+            }
+        }
+        Ok(None)
     }
     pub fn files_between_commits(
         &self,
         base_oid: &str,
         target_oid: &str,
     ) -> GitResult<Vec<ChangedFile>> {
-        let rev_range = format!("{}..{}", base_oid.trim(), target_oid.trim());
-        let (raw, numstat_raw) = std::thread::scope(|scope| {
-            let numstat = scope.spawn(|| {
-                runner::read(
+        let (raw, target_untracked) = if self.has_stash_ref() {
+            std::thread::scope(|scope| {
+                let target_untracked =
+                    scope.spawn(|| stash_untracked_parent(&self.context.root, target_oid));
+                let combined = runner::read(
                     &self.context.root,
-                    &["diff", "--numstat", "-M", "-C", "-z", &rev_range],
+                    &[
+                        "diff-tree",
+                        "--no-commit-id",
+                        "--raw",
+                        "--numstat",
+                        "-M",
+                        "-C",
+                        "-r",
+                        "-z",
+                        base_oid.trim(),
+                        target_oid.trim(),
+                    ],
+                );
+                (
+                    combined,
+                    target_untracked
+                        .join()
+                        .expect("target untracked parent reader panicked"),
                 )
-            });
-            let names = runner::read(
+            })
+        } else {
+            let combined = runner::read(
                 &self.context.root,
                 &[
                     "diff-tree",
                     "--no-commit-id",
-                    "--name-status",
+                    "--raw",
+                    "--numstat",
                     "-M",
                     "-C",
                     "-r",
@@ -459,21 +557,16 @@ impl GitRepository {
                     target_oid.trim(),
                 ],
             );
-            (names, numstat.join().expect("numstat reader panicked"))
-        });
+            (combined, None)
+        };
         let raw = raw?;
-        let mut files = status::parse_commit_names(&raw);
+        let mut files = status::parse_diff_tree_raw_numstat_z(&raw);
 
-        if let Ok(numstat_raw) = numstat_raw {
-            let numstat_map = status::parse_numstat_z(&numstat_raw);
-            for f in &mut files {
-                if let Some(stat) = numstat_map
-                    .get(&f.path)
-                    .or_else(|| f.old_path.as_ref().and_then(|op| numstat_map.get(op)))
-                {
-                    f.insertions = stat.insertions;
-                    f.deletions = stat.deletions;
-                    f.is_binary = stat.is_binary;
+        if let Some(u_oid) = target_untracked {
+            let u_files = files_for_untracked_stash_parent(&self.context.root, &u_oid);
+            for uf in u_files {
+                if !files.iter().any(|existing| existing.path == uf.path) {
+                    files.push(uf);
                 }
             }
         }
@@ -518,7 +611,18 @@ impl GitRepository {
         let mut spec = OsString::from(revision);
         spec.push(":");
         spec.push(path.as_os_str());
-        self.show_spec(&spec)
+        if let Some(bytes) = self.show_spec(&spec)? {
+            return Ok(Some(bytes));
+        }
+        if revision != "HEAD" && self.has_stash_ref() {
+            if let Some(u_oid) = stash_untracked_parent(&self.context.root, revision) {
+                let mut u_spec = OsString::from(u_oid);
+                u_spec.push(":");
+                u_spec.push(path.as_os_str());
+                return self.show_spec(&u_spec);
+            }
+        }
+        Ok(None)
     }
     pub fn worktree_content(&self, path: &Path) -> GitResult<Option<Vec<u8>>> {
         let full = self.context.root.join(path);
@@ -588,6 +692,13 @@ impl GitRepository {
             .collect())
     }
     pub fn repo_files(&self, commit_oid: Option<&str>) -> GitResult<Vec<RepoFileEntry>> {
+        self.repo_files_with_parents(commit_oid, None)
+    }
+    pub fn repo_files_with_parents(
+        &self,
+        commit_oid: Option<&str>,
+        known_parents: Option<&[String]>,
+    ) -> GitResult<Vec<RepoFileEntry>> {
         if let Some(oid) = commit_oid {
             let raw = runner::read(
                 &self.context.root,
@@ -603,6 +714,30 @@ impl GitRepository {
                     is_tracked: true,
                 })
                 .collect::<Vec<_>>();
+            let may_have_stash_untracked = known_parents.map_or(true, |p| p.len() >= 3);
+            if may_have_stash_untracked && self.has_stash_ref() {
+                if let Some(u_oid) = stash_untracked_parent(&self.context.root, oid) {
+                    if let Ok(u_raw) = runner::read(
+                        &self.context.root,
+                        &["ls-tree", "-r", "--name-only", "-z", &u_oid],
+                    ) {
+                        for p in u_raw
+                            .split(|byte| *byte == 0)
+                            .filter(|path| !path.is_empty())
+                        {
+                            let path = status::path_from_bytes(p)
+                                .to_string_lossy()
+                                .replace('\\', "/");
+                            if !files.iter().any(|existing| existing.path == path) {
+                                files.push(RepoFileEntry {
+                                    path,
+                                    is_tracked: false,
+                                });
+                            }
+                        }
+                    }
+                }
+            }
             files.sort_by(|a, b| a.path.cmp(&b.path));
             Ok(files)
         } else {
@@ -665,8 +800,17 @@ impl GitRepository {
     pub fn stage_file(&self, file: &ChangedFile) -> GitResult<()> {
         operations::stage_file(&self.context.root, file)
     }
+    pub fn stage_files(&self, files: &[ChangedFile]) -> GitResult<()> {
+        operations::stage_files(&self.context.root, files)
+    }
     pub fn unstage_file(&self, file: &ChangedFile) -> GitResult<()> {
         operations::unstage_file(&self.context.root, file)
+    }
+    pub fn unstage_files(&self, files: &[ChangedFile]) -> GitResult<()> {
+        operations::unstage_files(&self.context.root, files)
+    }
+    pub fn unstage_all(&self) -> GitResult<()> {
+        operations::unstage_all(&self.context.root)
     }
     pub fn commit(&self, message: &str) -> GitResult<String> {
         operations::commit(&self.context.root, message)
@@ -736,6 +880,9 @@ impl GitRepository {
     }
     pub fn discard_file(&self, file: &ChangedFile) -> GitResult<()> {
         operations::discard_file(&self.context.root, file)
+    }
+    pub fn discard_files(&self, files: &[ChangedFile]) -> GitResult<()> {
+        operations::discard_files(&self.context.root, files)
     }
     pub fn discard_all_unstaged(&self) -> GitResult<()> {
         operations::discard_all_unstaged(&self.context.root)
@@ -882,12 +1029,52 @@ impl GitRepository {
     pub fn resolve_conflict(&self, rel_path: &str, choice: &str) -> GitResult<()> {
         operations::resolve_conflict(&self.context.root, rel_path, choice)
     }
+    pub fn resolve_conflict_block(
+        &self,
+        rel_path: &str,
+        choice: &str,
+        conflict_index: Option<usize>,
+    ) -> GitResult<()> {
+        operations::resolve_conflict_block(&self.context.root, rel_path, choice, conflict_index)
+    }
     pub fn get_auth_state(&self, force_refresh: bool) -> RepoAuthState {
         auth::get_repo_auth_state(&self.context.root, force_refresh)
     }
     pub fn set_repo_account(&self, account_id: &str) -> GitResult<RepoAuthState> {
         auth::set_repo_account(&self.context.root, account_id)
     }
+}
+
+pub(crate) fn stash_untracked_parent(root: &Path, oid: &str) -> Option<String> {
+    let spec = format!("{}^3", oid.trim());
+    let raw = runner::read(root, &["show", "-s", "--format=%H%x00%P", &spec]).ok()?;
+    let text = String::from_utf8_lossy(&raw);
+    let (u_oid, u_parents) = text.split_once('\0')?;
+    let u_oid = u_oid.trim();
+    if !u_oid.is_empty() && u_parents.trim().is_empty() {
+        Some(u_oid.to_owned())
+    } else {
+        None
+    }
+}
+
+fn files_for_untracked_stash_parent(root: &Path, u_oid: &str) -> Vec<ChangedFile> {
+    let Ok(u_raw) = runner::read(
+        root,
+        &[
+            "diff-tree",
+            "--root",
+            "--no-commit-id",
+            "--raw",
+            "--numstat",
+            "-r",
+            "-z",
+            u_oid,
+        ],
+    ) else {
+        return Vec::new();
+    };
+    status::parse_diff_tree_raw_numstat_z(&u_raw)
 }
 
 fn index_spec(path: &Path) -> OsString {

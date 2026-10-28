@@ -389,6 +389,44 @@ fn stash_operations_push_pop_apply_drop() {
     assert!(snap.unstaged.is_empty());
     assert!(snap.staged.is_empty());
 
+    // Inspecting the stash commit should include both tracked and untracked files
+    let hist = repo.history(0, 50).unwrap();
+    let stash_commit = hist
+        .commits
+        .iter()
+        .find(|c| c.refs.iter().any(|r| r.starts_with("stash@")))
+        .expect("stash commit must exist in history");
+    let stash_files = repo.files_for_commit(&stash_commit.oid).unwrap();
+    assert_eq!(stash_files.len(), 2);
+    assert!(stash_files
+        .iter()
+        .any(|f| f.path == std::path::Path::new("file.txt") && f.status == FileStatus::Modified));
+    let untracked_entry = stash_files
+        .iter()
+        .find(|f| f.path == std::path::Path::new("untracked.txt"))
+        .expect("untracked file should be listed in stash commit files");
+    assert_eq!(untracked_entry.status, FileStatus::Added);
+    assert_eq!(untracked_entry.insertions, Some(1));
+    assert_eq!(untracked_entry.deletions, Some(0));
+
+    // Revision content and commit diff for untracked file in stash should resolve from stash^3
+    let rev_bytes = repo
+        .revision_content(&stash_commit.oid, std::path::Path::new("untracked.txt"))
+        .unwrap();
+    assert_eq!(rev_bytes.as_deref(), Some(&b"new file\n"[..]));
+    match repo
+        .diff_commit(
+            &stash_commit.oid,
+            Some(std::path::Path::new("untracked.txt")),
+        )
+        .unwrap()
+    {
+        FileDiff::Text { lines, .. } => {
+            assert!(lines.iter().any(|l| l.text == "new file"));
+        }
+        other => panic!("expected text diff for untracked stash file, got {other:?}"),
+    }
+
     // Apply stash
     repo.stash_apply(None).unwrap();
     let snap2 = repo.snapshot().unwrap();
@@ -1130,6 +1168,62 @@ fn conflict_resolution_operations_work() {
     repo.resolve_conflict("shared.txt", "ours").unwrap();
     let content = std::fs::read_to_string(dir.path().join("shared.txt")).unwrap();
     assert_eq!(content, "line 1 main\n");
+}
+
+#[test]
+fn conflict_resolution_per_block_works() {
+    let dir = repository();
+    let repo = GitRepository::open(dir.path()).unwrap();
+    commit_file(
+        dir.path(),
+        "multi.txt",
+        "top\nmiddle\nbottom\n",
+        "base multi",
+    );
+
+    let initial_branch = repo.snapshot().unwrap().branch.unwrap();
+    git(dir.path(), &["checkout", "-b", "feature-multi"]);
+    commit_file(
+        dir.path(),
+        "multi.txt",
+        "top feature\nmiddle\nbottom feature\n",
+        "feature multi edit",
+    );
+
+    git(dir.path(), &["checkout", &initial_branch]);
+    commit_file(
+        dir.path(),
+        "multi.txt",
+        "top main\nmiddle\nbottom main\n",
+        "main multi edit",
+    );
+
+    let _ = git_output(dir.path(), &["merge", "feature-multi"]);
+    // Write explicit 2-block conflict to verify per-block resolution deterministically
+    std::fs::write(
+        dir.path().join("multi.txt"),
+        "<<<<<<< HEAD\ntop main\n=======\ntop feature\n>>>>>>> feature-multi\nmiddle\n<<<<<<< HEAD\nbottom main\n=======\nbottom feature\n>>>>>>> feature-multi\n",
+    )
+    .unwrap();
+
+    // Resolve first conflict block (index 0) with "ours"
+    repo.resolve_conflict_block("multi.txt", "ours", Some(0))
+        .unwrap();
+    let after_first = std::fs::read_to_string(dir.path().join("multi.txt")).unwrap();
+    assert_eq!(
+        after_first,
+        "top main\nmiddle\n<<<<<<< HEAD\nbottom main\n=======\nbottom feature\n>>>>>>> feature-multi\n"
+    );
+    // File still has 1 remaining conflict, so repository stays conflicted
+    assert!(repo.snapshot().unwrap().conflicted);
+
+    // Resolve the remaining conflict block (now at index 0) with "theirs"
+    repo.resolve_conflict_block("multi.txt", "theirs", Some(0))
+        .unwrap();
+    let after_second = std::fs::read_to_string(dir.path().join("multi.txt")).unwrap();
+    assert_eq!(after_second, "top main\nmiddle\nbottom feature\n");
+    // All conflict blocks are resolved, so git add ran automatically and conflict is cleared
+    assert!(!repo.snapshot().unwrap().conflicted);
 }
 
 #[test]

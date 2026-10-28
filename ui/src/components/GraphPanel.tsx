@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { lazy, memo, Suspense, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
 import type { VirtualItem } from '@tanstack/react-virtual';
 import { VirtualHistoryList, type HistoryListHandle } from './VirtualHistoryList';
 import { Archive, GitBranch, Search, Tag, User, X } from 'lucide-react';
@@ -7,12 +7,13 @@ import { useI18n } from '../i18n';
 import type { GraphRow } from '../lib/types';
 import { confirmDialog } from '../lib/bridge';
 import { ContextMenu } from './ContextMenu';
-import { CreateTagModal } from './CreateTagModal';
-import { NewBranchModal } from './NewBranchModal';
-import { ResetModal } from './ResetModal';
 import { RefPopover, type ParsedRef } from './RefPopover';
 import { buildTree, flattenTree } from './FilesPanel';
 import './Lists.css';
+
+const CreateTagModal = lazy(() => import('./CreateTagModal').then((m) => ({ default: m.CreateTagModal })));
+const NewBranchModal = lazy(() => import('./NewBranchModal').then((m) => ({ default: m.NewBranchModal })));
+const ResetModal = lazy(() => import('./ResetModal').then((m) => ({ default: m.ResetModal })));
 
 const ROW_HEIGHT = 28;
 const NODE_Y = 14;
@@ -40,31 +41,29 @@ function shortHash(oid: string) {
   return oid.slice(0, 7);
 }
 
+const dateOnlyCache = new Map<number, string>();
+const compactDateCache = new Map<number, string>();
+
 export function formatDateOnly(timestamp: number): string {
+  const cached = dateOnlyCache.get(timestamp);
+  if (cached !== undefined) return cached;
   const d = new Date(timestamp * 1000);
   const pad = (n: number) => n.toString().padStart(2, '0');
-  return `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()}`;
+  const formatted = `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()}`;
+  if (dateOnlyCache.size > 1000) dateOnlyCache.clear();
+  dateOnlyCache.set(timestamp, formatted);
+  return formatted;
 }
 
 export function formatCompactDate(timestamp: number): string {
+  const cached = compactDateCache.get(timestamp);
+  if (cached !== undefined) return cached;
   const d = new Date(timestamp * 1000);
   const pad = (n: number) => n.toString().padStart(2, '0');
-  return `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
-}
-
-function relativeDate(timestamp: number) {
-  const seconds = Math.max(0, Math.round((Date.now() - timestamp * 1000) / 1000));
-  if (seconds < 60) return 'agora';
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `há ${minutes} min`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `há ${hours} h`;
-  const days = Math.floor(hours / 24);
-  if (days < 30) return `há ${days} d`;
-  const months = Math.floor(days / 30);
-  if (months < 12) return `há ${months} mês${months === 1 ? '' : 'es'}`;
-  const years = Math.floor(months / 12);
-  return `há ${years} ano${years === 1 ? '' : 's'}`;
+  const formatted = `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  if (compactDateCache.size > 1000) compactDateCache.clear();
+  compactDateCache.set(timestamp, formatted);
+  return formatted;
 }
 
 export function parseRefs(refs: string[], currentBranch: string | null): ParsedRef[] {
@@ -147,8 +146,8 @@ export function parseRefs(refs: string[], currentBranch: string | null): ParsedR
   return parsed;
 }
 
-function UncommittedLane({ targetLane, laneCount, width }: { targetLane: number; laneCount: number; width?: number }) {
-  const w = width ?? Math.max(40, GRAPH_LEFT + laneCount * LANE_GAP + 10);
+function UncommittedLane({ targetLane, laneCount }: { targetLane: number; laneCount: number }) {
+  const w = Math.max(40, GRAPH_LEFT + laneCount * LANE_GAP + 10);
   const laneX = (lane: number) => GRAPH_LEFT + lane * LANE_GAP;
   const x = laneX(targetLane);
   return (
@@ -164,18 +163,18 @@ interface RowGeometry {
   passingLanes: number[];
 }
 
+const EMPTY_GEOM: RowGeometry = { upperLanes: [], passingLanes: [] };
+
 const GraphLanes = memo(function GraphLanes({
   row,
   geom,
   laneCount,
-  width,
 }: {
   row: GraphRow;
   geom: RowGeometry;
   laneCount: number;
-  width?: number;
 }) {
-  const w = width ?? Math.max(40, GRAPH_LEFT + laneCount * LANE_GAP + 10);
+  const w = Math.max(40, GRAPH_LEFT + laneCount * LANE_GAP + 10);
   const laneX = (lane: number) => GRAPH_LEFT + lane * LANE_GAP;
 
   const paths: React.ReactNode[] = [];
@@ -299,12 +298,124 @@ const GraphLanes = memo(function GraphLanes({
   );
 });
 
-export const GraphPanel = memo(function GraphPanel() {
-  const history = useAppStore((state) => state.history);
-  const currentBranch = useAppStore((state) => state.snapshot?.branch ?? null);
+const UncommittedRow = memo(function UncommittedRow({
+  start,
+  isSelected,
+  targetLane,
+  laneCount,
+  onSelect,
+}: {
+  start: number;
+  isSelected: boolean;
+  targetLane: number;
+  laneCount: number;
+  onSelect: () => void;
+}) {
+  const { t } = useI18n();
   const totalLocalChanges = useAppStore((state) =>
     state.snapshot ? state.snapshot.staged.length + state.snapshot.unstaged.length : 0
   );
+  const statusSuffix =
+    totalLocalChanges === 0
+      ? t('history.clean')
+      : `(${totalLocalChanges} ${totalLocalChanges === 1 ? t('history.modified') : t('history.modifiedPlural')})`;
+
+  return (
+    <button
+      type="button"
+      role="listitem"
+      aria-current={isSelected ? 'true' : undefined}
+      className={`lists-graph-row lists-uncommitted-row ${isSelected ? 'lists-row-selected' : ''}`}
+      style={{ transform: `translate3d(0, ${start}px, 0)`, height: `${ROW_HEIGHT}px` }}
+      onClick={(e) => {
+        onSelect();
+        (e.currentTarget as HTMLElement).blur();
+      }}
+      title={t('history.uncommittedTitle')}
+    >
+      <div className="lists-col-graph">
+        <UncommittedLane
+          targetLane={targetLane}
+          laneCount={laneCount}
+        />
+      </div>
+      <div className="lists-col-divider" />
+      <div className="lists-col-msg">
+        <div
+          className="lists-msg-container"
+          title={`${t('history.uncommittedTitle')} ${statusSuffix}`}
+        >
+          <span className="lists-uncommitted-title">{t('history.uncommittedTitle')}</span>
+          <span className="lists-uncommitted-sub">{statusSuffix}</span>
+        </div>
+      </div>
+      <div className="lists-col-divider" />
+      <div className="lists-col-hash">
+        <span className="lists-meta-dash">—</span>
+      </div>
+      <div className="lists-col-divider" />
+      <div className="lists-col-author" title={t('history.uncommittedWorkingTree')}>
+        <span className="lists-meta-dash">{t('history.uncommittedWorkingTree')}</span>
+      </div>
+      <div className="lists-col-divider" />
+      <div className="lists-col-date">
+        <span className="lists-meta-dash">—</span>
+      </div>
+    </button>
+  );
+});
+
+const CommitHashBadge = memo(function CommitHashBadge({
+  oid,
+  title,
+  copiedLabel,
+}: {
+  oid: string;
+  title: string;
+  copiedLabel: string;
+}) {
+  const [copied, setCopied] = useState(false);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (timerRef.current) clearTimeout(timerRef.current);
+    };
+  }, []);
+
+  const handleCopy = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    try {
+      await navigator.clipboard.writeText(oid);
+    } catch {
+      const textarea = document.createElement('textarea');
+      textarea.value = oid;
+      document.body.appendChild(textarea);
+      textarea.select();
+      document.execCommand('copy');
+      document.body.removeChild(textarea);
+    }
+    setCopied(true);
+    if (timerRef.current) clearTimeout(timerRef.current);
+    timerRef.current = setTimeout(() => setCopied(false), 1500);
+  };
+
+  return (
+    <code
+      className={`lists-commit-hash ${copied ? 'is-copied' : ''}`}
+      onClick={(e) => void handleCopy(e)}
+      title={title}
+      role="button"
+      tabIndex={0}
+    >
+      {copied ? copiedLabel : shortHash(oid)}
+    </code>
+  );
+});
+
+export const GraphPanel = memo(function GraphPanel() {
+  const history = useAppStore((state) => state.history);
+  const currentBranch = useAppStore((state) => state.snapshot?.branch ?? null);
   const context = useAppStore((state) => state.context);
   const selectLocal = useAppStore((state) => state.selectLocal);
   const selectCommit = useAppStore((state) => state.selectCommit);
@@ -318,6 +429,8 @@ export const GraphPanel = memo(function GraphPanel() {
   const compareCommits = useAppStore((state) => state.compareCommits);
   const openInBrowser = useAppStore((state) => state.openInBrowser);
   const { t } = useI18n();
+
+  const panelRef = useRef<HTMLElement>(null);
 
   const [graphWidth, setGraphWidth] = useState<number>(() => {
     try {
@@ -352,29 +465,46 @@ export const GraphPanel = memo(function GraphPanel() {
     return 86;
   });
 
-  const effectiveGraphWidth = Math.max(
-    graphWidth,
-    GRAPH_LEFT + (history?.laneCount ?? 1) * LANE_GAP + 10
-  );
+  const minLaneGraphWidth = GRAPH_LEFT + (history?.laneCount ?? 1) * LANE_GAP + 10;
+  const effectiveGraphWidth = Math.max(graphWidth, minLaneGraphWidth);
 
   const handleGraphResizeMouseDown = (e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
     const startX = e.clientX;
     const startWidth = effectiveGraphWidth;
+    let latestWidth = startWidth;
+    let rafId: number | null = null;
     document.body.style.cursor = 'col-resize';
     document.body.style.userSelect = 'none';
 
     const onMouseMove = (ev: MouseEvent) => {
       const delta = ev.clientX - startX;
-      const newWidth = Math.max(40, Math.min(300, startWidth + delta));
-      setGraphWidth(newWidth);
-      try {
-        localStorage.setItem('Gitma:history-graph-width', String(newWidth));
-      } catch {}
+      latestWidth = Math.max(40, Math.min(300, startWidth + delta));
+      if (rafId === null) {
+        rafId = requestAnimationFrame(() => {
+          rafId = null;
+          panelRef.current?.style.setProperty(
+            '--col-graph-w',
+            `${Math.max(latestWidth, minLaneGraphWidth)}px`
+          );
+        });
+      }
     };
 
     const onMouseUp = () => {
+      if (rafId !== null) {
+        cancelAnimationFrame(rafId);
+        rafId = null;
+      }
+      panelRef.current?.style.setProperty(
+        '--col-graph-w',
+        `${Math.max(latestWidth, minLaneGraphWidth)}px`
+      );
+      setGraphWidth(latestWidth);
+      try {
+        localStorage.setItem('Gitma:history-graph-width', String(latestWidth));
+      } catch {}
       document.body.style.cursor = '';
       document.body.style.userSelect = '';
       window.removeEventListener('mousemove', onMouseMove);
@@ -391,20 +521,33 @@ export const GraphPanel = memo(function GraphPanel() {
     e.stopPropagation();
     const startX = e.clientX;
     const startAuthorWidth = authorWidth;
+    let latestAuthorWidth = startAuthorWidth;
+    let rafId: number | null = null;
     document.body.style.cursor = 'col-resize';
     document.body.style.userSelect = 'none';
 
     const onMouseMove = (ev: MouseEvent) => {
       const delta = ev.clientX - startX;
       // Ao arrastar para direita (delta > 0), a Mensagem expande e o Autor reduz
-      const newAuthorWidth = Math.max(60, Math.min(450, startAuthorWidth - delta));
-      setAuthorWidth(newAuthorWidth);
-      try {
-        localStorage.setItem('Gitma:history-author-width', String(newAuthorWidth));
-      } catch {}
+      latestAuthorWidth = Math.max(60, Math.min(450, startAuthorWidth - delta));
+      if (rafId === null) {
+        rafId = requestAnimationFrame(() => {
+          rafId = null;
+          panelRef.current?.style.setProperty('--col-author-w', `${latestAuthorWidth}px`);
+        });
+      }
     };
 
     const onMouseUp = () => {
+      if (rafId !== null) {
+        cancelAnimationFrame(rafId);
+        rafId = null;
+      }
+      panelRef.current?.style.setProperty('--col-author-w', `${latestAuthorWidth}px`);
+      setAuthorWidth(latestAuthorWidth);
+      try {
+        localStorage.setItem('Gitma:history-author-width', String(latestAuthorWidth));
+      } catch {}
       document.body.style.cursor = '';
       document.body.style.userSelect = '';
       window.removeEventListener('mousemove', onMouseMove);
@@ -422,24 +565,40 @@ export const GraphPanel = memo(function GraphPanel() {
     const startX = e.clientX;
     const startDateWidth = dateWidth;
     const startAuthorWidth = authorWidth;
+    let latestDateWidth = startDateWidth;
+    let latestAuthorWidth = startAuthorWidth;
+    let rafId: number | null = null;
     document.body.style.cursor = 'col-resize';
     document.body.style.userSelect = 'none';
 
     const onMouseMove = (ev: MouseEvent) => {
       const delta = ev.clientX - startX;
       // Ao arrastar para direita (delta > 0), o Autor expande para a direita e a Data encolhe
-      const newDateWidth = Math.max(50, Math.min(220, startDateWidth - delta));
-      const appliedDelta = startDateWidth - newDateWidth;
-      const newAuthorWidth = Math.max(60, Math.min(500, startAuthorWidth + appliedDelta));
-      setDateWidth(newDateWidth);
-      setAuthorWidth(newAuthorWidth);
-      try {
-        localStorage.setItem('Gitma:history-date-width', String(newDateWidth));
-        localStorage.setItem('Gitma:history-author-width', String(newAuthorWidth));
-      } catch {}
+      latestDateWidth = Math.max(50, Math.min(220, startDateWidth - delta));
+      const appliedDelta = startDateWidth - latestDateWidth;
+      latestAuthorWidth = Math.max(60, Math.min(500, startAuthorWidth + appliedDelta));
+      if (rafId === null) {
+        rafId = requestAnimationFrame(() => {
+          rafId = null;
+          panelRef.current?.style.setProperty('--col-date-w', `${latestDateWidth}px`);
+          panelRef.current?.style.setProperty('--col-author-w', `${latestAuthorWidth}px`);
+        });
+      }
     };
 
     const onMouseUp = () => {
+      if (rafId !== null) {
+        cancelAnimationFrame(rafId);
+        rafId = null;
+      }
+      panelRef.current?.style.setProperty('--col-date-w', `${latestDateWidth}px`);
+      panelRef.current?.style.setProperty('--col-author-w', `${latestAuthorWidth}px`);
+      setDateWidth(latestDateWidth);
+      setAuthorWidth(latestAuthorWidth);
+      try {
+        localStorage.setItem('Gitma:history-date-width', String(latestDateWidth));
+        localStorage.setItem('Gitma:history-author-width', String(latestAuthorWidth));
+      } catch {}
       document.body.style.cursor = '';
       document.body.style.userSelect = '';
       window.removeEventListener('mousemove', onMouseMove);
@@ -470,6 +629,7 @@ export const GraphPanel = memo(function GraphPanel() {
   const [compareBaseOid, setCompareBaseOid] = useState<string | null>(null);
 
   const [searchFilter, setSearchFilter] = useState('');
+  const deferredSearchFilter = useDeferredValue(searchFilter);
   const searchInputRef = useRef<HTMLInputElement>(null);
 
   const [refPopover, setRefPopover] = useState<{
@@ -495,16 +655,53 @@ export const GraphPanel = memo(function GraphPanel() {
   const sessionId = useAppStore((state) => state.session?.sessionId);
   const rows = history?.rows ?? [];
 
+  const searchableRows = useMemo(
+    () =>
+      rows.map((row) => ({
+        row,
+        haystack: `${row.commit.subject}\0${row.commit.author}\0${row.commit.oid}`.toLowerCase(),
+      })),
+    [rows]
+  );
+
+  const oidToRow = useMemo(() => {
+    const map = new Map<string, GraphRow>();
+    for (let i = 0; i < rows.length; i++) {
+      map.set(rows[i].commit.oid, rows[i]);
+    }
+    return map;
+  }, [rows]);
+
   const filteredRows = useMemo(() => {
-    if (!searchFilter.trim()) return rows;
-    const q = searchFilter.trim().toLowerCase();
-    return rows.filter((r) => {
-      const subj = r.commit.subject.toLowerCase();
-      const author = r.commit.author.toLowerCase();
-      const oid = r.commit.oid.toLowerCase();
-      return subj.includes(q) || author.includes(q) || oid.includes(q);
-    });
-  }, [rows, searchFilter]);
+    const q = deferredSearchFilter.trim().toLowerCase();
+    if (!q) return rows;
+    const matched: GraphRow[] = [];
+    for (let i = 0; i < searchableRows.length; i++) {
+      if (searchableRows[i].haystack.includes(q)) {
+        matched.push(searchableRows[i].row);
+      }
+    }
+    return matched;
+  }, [rows, searchableRows, deferredSearchFilter]);
+
+  const oidToFilteredIndex = useMemo(() => {
+    const map = new Map<string, number>();
+    for (let i = 0; i < filteredRows.length; i++) {
+      map.set(filteredRows[i].commit.oid, i);
+    }
+    return map;
+  }, [filteredRows]);
+
+  const parsedRefsByOid = useMemo(() => {
+    const map = new Map<string, ParsedRef[]>();
+    for (let i = 0; i < rows.length; i++) {
+      const c = rows[i].commit;
+      if (c.refs.length > 0) {
+        map.set(c.oid, parseRefs(c.refs, currentBranch));
+      }
+    }
+    return map;
+  }, [rows, currentBranch]);
 
   const totalCount = filteredRows.length + 1; // 1 for Uncommitted Changes
 
@@ -555,37 +752,71 @@ export const GraphPanel = memo(function GraphPanel() {
   const selectedIndex = useMemo(() => {
     if (context.kind === 'local') return 0;
     if (!selectedOid) return -1;
-    const index = filteredRows.findIndex((row) => row.commit.oid === selectedOid);
-    return index < 0 ? -1 : index + 1;
-  }, [context.kind, selectedOid, filteredRows]);
+    const index = oidToFilteredIndex.get(selectedOid);
+    return index === undefined ? -1 : index + 1;
+  }, [context.kind, selectedOid, oidToFilteredIndex]);
 
-  const [copiedOid, setCopiedOid] = useState<string | null>(null);
+  const handleSelectLocalRow = useCallback(() => {
+    setActivePane('history');
+    void selectLocal();
+  }, [setActivePane, selectLocal]);
 
-  const handleCopyHash = useCallback(async (oid: string) => {
-    try {
-      await navigator.clipboard.writeText(oid);
-      setCopiedOid(oid);
-      setTimeout(() => setCopiedOid((cur) => (cur === oid ? null : cur)), 1500);
-    } catch {
-      const textarea = document.createElement('textarea');
-      textarea.value = oid;
-      document.body.appendChild(textarea);
-      textarea.select();
-      document.execCommand('copy');
-      document.body.removeChild(textarea);
-      setCopiedOid(oid);
-      setTimeout(() => setCopiedOid((cur) => (cur === oid ? null : cur)), 1500);
-    }
-  }, []);
+  const keyNavRef = useRef({
+    activePane,
+    context,
+    filteredRows,
+    oidToFilteredIndex,
+    totalCount,
+    searchFilter,
+    hasMore: history?.hasMore ?? false,
+    hasOpenOverlay: Boolean(
+      contextMenu || refPopover || newBranchModal.isOpen || resetModal || createTagModal.isOpen
+    ),
+    selectLocal,
+    selectCommit,
+    loadMore,
+    setActivePane,
+  });
+  keyNavRef.current = {
+    activePane,
+    context,
+    filteredRows,
+    oidToFilteredIndex,
+    totalCount,
+    searchFilter,
+    hasMore: history?.hasMore ?? false,
+    hasOpenOverlay: Boolean(
+      contextMenu || refPopover || newBranchModal.isOpen || resetModal || createTagModal.isOpen
+    ),
+    selectLocal,
+    selectCommit,
+    loadMore,
+    setActivePane,
+  };
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      const {
+        activePane: curPane,
+        context: curContext,
+        filteredRows: curFilteredRows,
+        oidToFilteredIndex: curIndexMap,
+        totalCount: curTotalCount,
+        searchFilter: curSearchFilter,
+        hasMore: curHasMore,
+        hasOpenOverlay,
+        selectLocal: curSelectLocal,
+        selectCommit: curSelectCommit,
+        loadMore: curLoadMore,
+        setActivePane: curSetActivePane,
+      } = keyNavRef.current;
+
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f') {
         const activeElement = document.activeElement;
         const tagName = activeElement?.tagName?.toLowerCase();
-        if (activePane === 'history' || !['input', 'textarea', 'select'].includes(tagName ?? '')) {
+        if (curPane === 'history' || !['input', 'textarea', 'select'].includes(tagName ?? '')) {
           e.preventDefault();
-          setActivePane('history');
+          curSetActivePane('history');
           searchInputRef.current?.focus();
           searchInputRef.current?.select();
           return;
@@ -593,7 +824,7 @@ export const GraphPanel = memo(function GraphPanel() {
       }
 
       if (e.defaultPrevented || e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
-      if (activePane !== 'history') return;
+      if (curPane !== 'history') return;
       if (document.querySelector('.modal-backdrop')) return;
 
       const activeElement = document.activeElement;
@@ -605,32 +836,32 @@ export const GraphPanel = memo(function GraphPanel() {
         if (tagName === 'input' || tagName === 'textarea' || tagName === 'select') return;
         if (activeElement.getAttribute?.('contenteditable') === 'true') return;
       }
-      if (contextMenu || refPopover || newBranchModal.isOpen || resetModal || createTagModal.isOpen) return;
+      if (hasOpenOverlay) return;
 
       const currentIndex =
-        context.kind === 'local'
+        curContext.kind === 'local'
           ? 0
-          : context.kind === 'commit'
-          ? filteredRows.findIndex((r) => r.commit.oid === context.oid) + 1
+          : curContext.kind === 'commit'
+          ? ((curIndexMap.get(curContext.oid) ?? -2) + 1)
           : -1;
 
       if (e.key === 'ArrowDown') {
         e.preventDefault();
-        const nextIndex = currentIndex === -1 ? 0 : currentIndex + 1;
-        if (nextIndex < totalCount) {
+        const nextIndex = currentIndex < 0 ? 0 : currentIndex + 1;
+        if (nextIndex < curTotalCount) {
           if (document.activeElement instanceof HTMLElement) {
             document.activeElement.blur();
           }
           if (nextIndex === 0) {
-            void selectLocal();
+            void curSelectLocal();
             virtualizerRef.current?.scrollToIndex(0, { align: 'auto' });
           } else {
-            const nextRow = filteredRows[nextIndex - 1];
+            const nextRow = curFilteredRows[nextIndex - 1];
             if (nextRow) {
-              void selectCommit(nextRow.commit.oid);
+              void curSelectCommit(nextRow.commit.oid);
               virtualizerRef.current?.scrollToIndex(nextIndex, { align: 'auto' });
-              if (!searchFilter.trim() && nextIndex >= filteredRows.length - 5 && history?.hasMore) {
-                void loadMore();
+              if (!curSearchFilter.trim() && nextIndex >= curFilteredRows.length - 5 && curHasMore) {
+                void curLoadMore();
               }
             }
           }
@@ -643,23 +874,23 @@ export const GraphPanel = memo(function GraphPanel() {
           }
           const prevIndex = currentIndex - 1;
           if (prevIndex === 0) {
-            void selectLocal();
+            void curSelectLocal();
             virtualizerRef.current?.scrollToIndex(0, { align: 'auto' });
           } else {
-            const prevRow = filteredRows[prevIndex - 1];
+            const prevRow = curFilteredRows[prevIndex - 1];
             if (prevRow) {
-              void selectCommit(prevRow.commit.oid);
+              void curSelectCommit(prevRow.commit.oid);
               virtualizerRef.current?.scrollToIndex(prevIndex, { align: 'auto' });
             }
           }
         }
       } else if (e.key === 'ArrowRight' || e.key === 'l') {
         e.preventDefault();
-        setActivePane('files');
+        curSetActivePane('files');
         const store = useAppStore.getState();
         if (store.filesTab === 'explorer') return;
         const rawFiles =
-          context.kind === 'commit'
+          curContext.kind === 'commit'
             ? store.commitFiles
             : [...(store.snapshot?.staged ?? []), ...(store.snapshot?.unstaged ?? [])];
         const filesToPick =
@@ -674,86 +905,32 @@ export const GraphPanel = memo(function GraphPanel() {
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [
-    activePane,
-    context,
-    filteredRows,
-    totalCount,
-    searchFilter,
-    history?.hasMore,
-    selectLocal,
-    selectCommit,
-    loadMore,
-    contextMenu,
-    refPopover,
-    newBranchModal.isOpen,
-    resetModal,
-    createTagModal.isOpen,
-    setActivePane,
-  ]);
+  }, []);
+
+  const contextRef = useRef(context);
+  contextRef.current = context;
+  const activeComparePair =
+    context.kind === 'compare' ? `${context.baseOid}:${context.targetOid}` : null;
 
   const isLightTheme =
     typeof document !== 'undefined' &&
     document.documentElement.getAttribute('data-theme-type') === 'light';
 
+  const EMPTY_PARSED_REFS: ParsedRef[] = useMemo(() => [], []);
+
   const renderHistoryRow = useCallback(
-    (item: VirtualItem) => {
+    (item: VirtualItem, isRowSelected: boolean) => {
       // Row 0: Uncommitted changes
       if (item.index === 0) {
-        const isLocalActive = context.kind === 'local';
         return (
-          <button
-            type="button"
-            role="listitem"
-            aria-current={isLocalActive ? 'true' : undefined}
+          <UncommittedRow
             key="uncommitted-changes"
-            className={`lists-graph-row lists-uncommitted-row ${isLocalActive ? 'lists-row-selected' : ''}`}
-            style={{ transform: `translateY(${item.start}px)`, height: `${ROW_HEIGHT}px` }}
-            onClick={(e) => {
-              setActivePane('history');
-              void selectLocal();
-              (e.currentTarget as HTMLElement).blur();
-            }}
-            title={t('history.uncommittedTitle')}
-          >
-            <div className="lists-col-graph" style={{ width: `${effectiveGraphWidth}px` }}>
-              <UncommittedLane
-                targetLane={rows[0]?.lane ?? 0}
-                laneCount={history?.laneCount ?? 1}
-                width={effectiveGraphWidth}
-              />
-            </div>
-            <div className="lists-col-divider" />
-            <div className="lists-col-msg">
-              <div
-                className="lists-msg-container"
-                title={`${t('history.uncommittedTitle')} ${
-                  totalLocalChanges === 0
-                    ? t('history.clean')
-                    : `(${totalLocalChanges} ${totalLocalChanges === 1 ? t('history.modified') : t('history.modifiedPlural')})`
-                }`}
-              >
-                <span className="lists-uncommitted-title">{t('history.uncommittedTitle')}</span>
-                <span className="lists-uncommitted-sub">
-                  {totalLocalChanges === 0
-                    ? t('history.clean')
-                    : `(${totalLocalChanges} ${totalLocalChanges === 1 ? t('history.modified') : t('history.modifiedPlural')})`}
-                </span>
-              </div>
-            </div>
-            <div className="lists-col-divider" />
-            <div className="lists-col-hash">
-              <span className="lists-meta-dash">—</span>
-            </div>
-            <div className="lists-col-divider" />
-            <div className="lists-col-author" style={{ width: `${authorWidth}px` }} title={t('history.uncommittedWorkingTree')}>
-              <span className="lists-meta-dash">{t('history.uncommittedWorkingTree')}</span>
-            </div>
-            <div className="lists-col-divider" />
-            <div className="lists-col-date" style={{ width: `${dateWidth}px` }}>
-              <span className="lists-meta-dash">—</span>
-            </div>
-          </button>
+            start={item.start}
+            isSelected={isRowSelected}
+            targetLane={rows[0]?.lane ?? 0}
+            laneCount={history?.laneCount ?? 1}
+            onSelect={handleSelectLocalRow}
+          />
         );
       }
 
@@ -761,15 +938,16 @@ export const GraphPanel = memo(function GraphPanel() {
       const rowIndex = item.index - 1;
       const row = filteredRows[rowIndex];
       if (!row) return null;
-      const geom = geometryList[rowIndex] ?? { upperLanes: [], passingLanes: [] };
+      const geom = geometryList[rowIndex] ?? EMPTY_GEOM;
       const commit = row.commit;
-      const parsedRefs = commit.refs.length > 0 ? parseRefs(commit.refs, currentBranch) : [];
+      const parsedRefs = commit.refs.length > 0 ? (parsedRefsByOid.get(commit.oid) ?? EMPTY_PARSED_REFS) : EMPTY_PARSED_REFS;
+      const curCtx = contextRef.current;
       const isSelected =
-        (context.kind === 'commit' && context.oid === commit.oid) ||
-        (context.kind === 'compare' && (context.baseOid === commit.oid || context.targetOid === commit.oid)) ||
+        isRowSelected ||
+        (curCtx.kind === 'compare' && (curCtx.baseOid === commit.oid || curCtx.targetOid === commit.oid)) ||
         compareBaseOid === commit.oid;
-      const visibleRefs = parsedRefs.slice(0, 2);
-      const overflowRefs = parsedRefs.slice(2);
+      const visibleRefs = parsedRefs.length > 2 ? parsedRefs.slice(0, 2) : parsedRefs;
+      const overflowCount = Math.max(0, parsedRefs.length - 2);
       const laneColor = colourFor(row.lane);
       const isLight = isLightTheme;
 
@@ -780,15 +958,16 @@ export const GraphPanel = memo(function GraphPanel() {
           aria-current={isSelected ? 'true' : undefined}
           key={`${commit.oid}-${item.index}`}
           className={`lists-graph-row ${isSelected ? 'lists-row-selected' : ''}`}
-          style={{ transform: `translateY(${item.start}px)`, height: `${ROW_HEIGHT}px` }}
+          style={{ transform: `translate3d(0, ${item.start}px, 0)`, height: `${ROW_HEIGHT}px` }}
           onClick={(e) => {
             setActivePane('history');
+            const latestCtx = contextRef.current;
             if (compareBaseOid && compareBaseOid !== commit.oid) {
               void compareCommits(compareBaseOid, commit.oid);
               setCompareBaseOid(null);
             } else if (e.ctrlKey || e.metaKey) {
-              if (context.kind === 'commit' && context.oid !== commit.oid) {
-                void compareCommits(context.oid, commit.oid);
+              if (latestCtx.kind === 'commit' && latestCtx.oid !== commit.oid) {
+                void compareCommits(latestCtx.oid, commit.oid);
               } else {
                 void selectCommit(commit.oid);
               }
@@ -821,12 +1000,11 @@ export const GraphPanel = memo(function GraphPanel() {
           title={`${commit.subject} — ${commit.oid}`}
         >
           {/* Coluna 1: Grafo */}
-          <div className="lists-col-graph" style={{ width: `${effectiveGraphWidth}px` }}>
+          <div className="lists-col-graph">
             <GraphLanes
               row={row}
               geom={geom}
               laneCount={history?.laneCount ?? 1}
-              width={effectiveGraphWidth}
             />
           </div>
 
@@ -934,12 +1112,12 @@ export const GraphPanel = memo(function GraphPanel() {
                     );
                   })}
 
-                  {overflowRefs.length > 0 && (
+                  {overflowCount > 0 && (
                     <span
                       role="button"
                       tabIndex={0}
                       className="lists-ref-overflow"
-                      title={`${overflowRefs.length} ${t('history.moreRefs')}`}
+                      title={`${overflowCount} ${t('history.moreRefs')}`}
                       onClick={(e) => {
                         e.stopPropagation();
                         setContextMenu(null);
@@ -967,7 +1145,7 @@ export const GraphPanel = memo(function GraphPanel() {
                         }
                       }}
                     >
-                      +{overflowRefs.length}
+                      +{overflowCount}
                     </span>
                   )}
                   <span className="lists-ref-dash">-</span>
@@ -984,24 +1162,17 @@ export const GraphPanel = memo(function GraphPanel() {
 
           {/* Coluna 3: Hash */}
           <div className="lists-col-hash">
-            <code
-              className={`lists-commit-hash ${copiedOid === commit.oid ? 'is-copied' : ''}`}
-              onClick={(e) => {
-                e.stopPropagation();
-                void handleCopyHash(commit.oid);
-              }}
+            <CommitHashBadge
+              oid={commit.oid}
               title={t('files.clickToCopy')}
-              role="button"
-              tabIndex={0}
-            >
-              {copiedOid === commit.oid ? t('history.copied') : shortHash(commit.oid)}
-            </code>
+              copiedLabel={t('history.copied')}
+            />
           </div>
 
           <div className="lists-col-divider" />
 
           {/* Coluna 4: Autor */}
-          <div className="lists-col-author" style={{ width: `${authorWidth}px` }} title={`${t('history.colAuthor')}: ${commit.author}`}>
+          <div className="lists-col-author" title={`${t('history.colAuthor')}: ${commit.author}`}>
             <User size={11} className="lists-author-icon" />
             <span className="lists-graph-author">{commit.author}</span>
           </div>
@@ -1009,7 +1180,7 @@ export const GraphPanel = memo(function GraphPanel() {
           <div className="lists-col-divider" />
 
           {/* Coluna 5: Data */}
-          <div className="lists-col-date" style={{ width: `${dateWidth}px` }}>
+          <div className="lists-col-date">
             <time
               className="lists-graph-date"
               title={formatCompactDate(commit.timestamp)}
@@ -1021,31 +1192,38 @@ export const GraphPanel = memo(function GraphPanel() {
       );
     },
     [
-      context,
+      activeComparePair,
       rows,
-      totalLocalChanges,
-      effectiveGraphWidth,
-      authorWidth,
-      dateWidth,
       history?.laneCount,
       filteredRows,
       geometryList,
-      currentBranch,
+      parsedRefsByOid,
+      EMPTY_PARSED_REFS,
       isLightTheme,
       compareBaseOid,
-      copiedOid,
+      handleSelectLocalRow,
       setActivePane,
-      selectLocal,
       compareCommits,
       selectCommit,
       runOperation,
-      handleCopyHash,
       t,
     ]
   );
 
+  const panelVarsStyle = useMemo(
+    () =>
+      ({
+        '--col-graph-w': `${effectiveGraphWidth}px`,
+        '--col-author-w': `${authorWidth}px`,
+        '--col-date-w': `${dateWidth}px`,
+      }) as React.CSSProperties,
+    [effectiveGraphWidth, authorWidth, dateWidth]
+  );
+
   return (
     <section
+      ref={panelRef}
+      style={panelVarsStyle}
       className={`lists-panel lists-graph-panel ${activePane === 'history' ? 'is-pane-active' : ''}`}
       aria-label={t('history.title')}
       onClick={() => setActivePane('history')}
@@ -1168,7 +1346,7 @@ export const GraphPanel = memo(function GraphPanel() {
 
       {/* Cabeçalho de 5 colunas com separadores verticais contínuos e redimensionadores */}
       <div className="lists-graph-header" role="row">
-        <div className="lists-header-col-graph" style={{ width: `${effectiveGraphWidth}px` }}>
+        <div className="lists-header-col-graph">
           <span>{t('history.colGraph')}</span>
         </div>
         <div className="lists-col-divider lists-col-divider-resizable">
@@ -1196,7 +1374,7 @@ export const GraphPanel = memo(function GraphPanel() {
           <span>{t('history.colHash')}</span>
         </div>
         <div className="lists-col-divider" />
-        <div className="lists-header-col-author" style={{ width: `${authorWidth}px` }}>
+        <div className="lists-header-col-author">
           <span>{t('history.colAuthor')}</span>
         </div>
         <div className="lists-col-divider lists-col-divider-resizable">
@@ -1208,13 +1386,13 @@ export const GraphPanel = memo(function GraphPanel() {
             aria-orientation="vertical"
           />
         </div>
-        <div className="lists-header-col-date" style={{ width: `${dateWidth}px` }}>
+        <div className="lists-header-col-date">
           <span>{t('history.colDate')}</span>
         </div>
       </div>
 
       <VirtualHistoryList
-        key={`${sessionId}:${historyScope}`}
+        key={sessionId ?? 'none'}
         ref={virtualizerRef}
         count={totalCount}
         rowHeight={ROW_HEIGHT}
@@ -1366,7 +1544,7 @@ export const GraphPanel = memo(function GraphPanel() {
           }}
           onRevertCommit={(commitOid) => {
             setRefPopover(null);
-            const commitRow = rows.find((r) => r.commit.oid === commitOid);
+            const commitRow = oidToRow.get(commitOid);
             const subj = commitRow?.commit.subject ?? commitOid.slice(0, 7);
             if (
               window.confirm(
@@ -1405,7 +1583,7 @@ export const GraphPanel = memo(function GraphPanel() {
           }}
           onResetHead={(commitOid) => {
             setRefPopover(null);
-            const commitRow = rows.find((r) => r.commit.oid === commitOid);
+            const commitRow = oidToRow.get(commitOid);
             setResetModal({
               isOpen: true,
               commitOid,
@@ -1448,36 +1626,42 @@ export const GraphPanel = memo(function GraphPanel() {
       )}
 
       {createTagModal.isOpen && (
-        <CreateTagModal
-          isOpen={createTagModal.isOpen}
-          commitOid={createTagModal.commitOid}
-          onClose={() => setCreateTagModal({ isOpen: false, commitOid: '' })}
-          onSubmit={(params) =>
-            void runOperation('createTag', [], JSON.stringify(params))
-          }
-        />
+        <Suspense fallback={null}>
+          <CreateTagModal
+            isOpen={createTagModal.isOpen}
+            commitOid={createTagModal.commitOid}
+            onClose={() => setCreateTagModal({ isOpen: false, commitOid: '' })}
+            onSubmit={(params) =>
+              void runOperation('createTag', [], JSON.stringify(params))
+            }
+          />
+        </Suspense>
       )}
 
       {newBranchModal.isOpen && (
-        <NewBranchModal
-          isOpen={newBranchModal.isOpen}
-          startPoint={newBranchModal.startPoint}
-          onClose={() => setNewBranchModal({ isOpen: false })}
-          onSubmit={(params) => void runOperation('createBranch', [], JSON.stringify(params))}
-        />
+        <Suspense fallback={null}>
+          <NewBranchModal
+            isOpen={newBranchModal.isOpen}
+            startPoint={newBranchModal.startPoint}
+            onClose={() => setNewBranchModal({ isOpen: false })}
+            onSubmit={(params) => void runOperation('createBranch', [], JSON.stringify(params))}
+          />
+        </Suspense>
       )}
 
       {resetModal?.isOpen && (
-        <ResetModal
-          isOpen={resetModal.isOpen}
-          commitOid={resetModal.commitOid}
-          commitSubject={resetModal.commitSubject}
-          currentBranchName={currentBranch}
-          onClose={() => setResetModal(null)}
-          onConfirm={(mode) => {
-            void runOperation('reset', [], JSON.stringify({ commitOid: resetModal.commitOid, mode }));
-          }}
-        />
+        <Suspense fallback={null}>
+          <ResetModal
+            isOpen={resetModal.isOpen}
+            commitOid={resetModal.commitOid}
+            commitSubject={resetModal.commitSubject}
+            currentBranchName={currentBranch}
+            onClose={() => setResetModal(null)}
+            onConfirm={(mode) => {
+              void runOperation('reset', [], JSON.stringify({ commitOid: resetModal.commitOid, mode }));
+            }}
+          />
+        </Suspense>
       )}
     </section>
   );

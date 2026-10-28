@@ -100,6 +100,8 @@
   user-select: none;
   width: 100%;
   box-sizing: border-box;
+  contain: layout style paint;
+  will-change: transform;
 }
 .lists-graph-panel {
   height: 100%;
@@ -139,6 +141,7 @@
   box-sizing: border-box;
 }
 .lists-header-col-graph {
+  width: var(--col-graph-w, 64px);
   display: flex;
   align-items: center;
   padding-left: 14px;
@@ -184,6 +187,7 @@
   padding: 0 4px;
 }
 .lists-header-col-author {
+  width: var(--col-author-w, 110px);
   flex-shrink: 0;
   display: flex;
   align-items: center;
@@ -191,6 +195,7 @@
   overflow: hidden;
 }
 .lists-header-col-date {
+  width: var(--col-date-w, 86px);
   min-width: 50px;
   flex-shrink: 0;
   display: flex;
@@ -203,6 +208,7 @@
 
 /* Colunas das linhas de commits */
 .lists-col-graph {
+  width: var(--col-graph-w, 64px);
   display: flex;
   align-items: center;
   height: 100%;
@@ -296,6 +302,7 @@
   color: var(--muted);
 }
 .lists-col-author {
+  width: var(--col-author-w, 110px);
   flex-shrink: 0;
   display: inline-flex;
   align-items: center;
@@ -313,6 +320,7 @@
   font-size: 11.5px;
 }
 .lists-col-date {
+  width: var(--col-date-w, 86px);
   min-width: 50px;
   flex-shrink: 0;
   display: flex;
@@ -725,11 +733,12 @@
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  animation: popoverFadeIn 0.12s ease-out;
+  will-change: transform, opacity;
+  animation: popoverFadeIn 0.1s cubic-bezier(0.16, 1, 0.3, 1);
 }
 @keyframes popoverFadeIn {
-  from { opacity: 0; transform: scale(0.96); }
-  to { opacity: 1; transform: scale(1); }
+  from { opacity: 0; transform: translateY(-2px) scale(0.98); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
 }
 .ref-popover-header {
   padding: 8px 12px;
@@ -882,7 +891,7 @@
 }
 
 .lists-file-row { display: flex; height: 38px; align-items: center; width: 100%; }
-.lists-virtual-row { position: absolute; left: 0; right: 0; top: 0; height: 38px; }
+.lists-virtual-row { position: absolute; left: 0; right: 0; top: 0; height: 38px; contain: layout style paint; will-change: transform; }
 .lists-stage-checkbox { margin: 0 7px 0 12px; accent-color: var(--accent); cursor: pointer; }
 .lists-file-select {
   display: flex;
@@ -1929,7 +1938,7 @@
   background: transparent;
   border: none;
   cursor: pointer;
-  transition: all 0.15s ease;
+  transition: background-color 0.1s ease, color 0.1s ease;
   user-select: none;
   white-space: nowrap;
 }
@@ -2058,7 +2067,7 @@
   color: var(--muted);
   cursor: pointer;
   padding: 0;
-  transition: all 0.15s ease;
+  transition: background-color 0.1s ease, color 0.1s ease, border-color 0.1s ease;
 }
 
 .file-explorer-btn:hover {
@@ -2083,7 +2092,7 @@
   cursor: pointer;
   display: inline-flex;
   align-items: center;
-  transition: all 0.15s ease;
+  transition: background-color 0.1s ease, color 0.1s ease;
 }
 
 .file-explorer-scope-btn + .file-explorer-scope-btn {
@@ -2135,11 +2144,10 @@
   color: var(--muted);
   cursor: pointer;
   padding: 0;
-  transition: all 0.15s ease;
+  transition: background-color 0.1s ease, color 0.1s ease;
 }
 
 .file-explorer-action-btn:hover {
   background: var(--raised);
   color: var(--text);
 }
-

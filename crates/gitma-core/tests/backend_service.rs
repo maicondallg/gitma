@@ -513,3 +513,188 @@ fn repo_auth_state_can_be_queried_and_persisted() {
 
     backend.close(&session.session_id).unwrap();
 }
+
+#[test]
+fn conflicted_file_preview_and_block_resolution_work_via_backend() {
+    let dir = repo();
+    commit(dir.path(), "app.rs", "fn a() {}\nfn b() {}\n", "base");
+    git(dir.path(), &["checkout", "-b", "feat"]);
+    commit(
+        dir.path(),
+        "app.rs",
+        "fn a_feat() {}\nfn b_feat() {}\n",
+        "feat edit",
+    );
+    git(dir.path(), &["checkout", "-"]);
+    commit(
+        dir.path(),
+        "app.rs",
+        "fn a_main() {}\nfn b_main() {}\n",
+        "main edit",
+    );
+
+    // Trigger merge conflict
+    let _ = std::process::Command::new("git")
+        .args(["merge", "feat"])
+        .current_dir(dir.path())
+        .output();
+
+    std::fs::write(
+        dir.path().join("app.rs"),
+        "<<<<<<< HEAD\nfn a_main() {}\n=======\nfn a_feat() {}\n>>>>>>> feat\n<<<<<<< HEAD\nfn b_main() {}\n=======\nfn b_feat() {}\n>>>>>>> feat\n",
+    )
+    .unwrap();
+
+    let backend = Backend::new();
+    let session = backend.open(dir.path(), |_| {}).unwrap();
+    let snap = backend.snapshot(&session.session_id, 1).unwrap();
+    assert!(snap.conflicted);
+    assert!(!snap.staged.is_empty());
+    assert!(!snap.unstaged.is_empty());
+
+    // Both staged and unstaged entries for a conflicted file must return HEAD as original and worktree conflict markers as modified
+    let staged_preview = backend
+        .file_preview(&session.session_id, 2, &snap.staged[0].id)
+        .unwrap();
+    assert_eq!(staged_preview.kind, "conflict");
+    assert_eq!(staged_preview.original, "fn a_main() {}\nfn b_main() {}\n");
+    assert!(staged_preview.modified.contains("<<<<<<< HEAD"));
+
+    let unstaged_preview = backend
+        .file_preview(&session.session_id, 3, &snap.unstaged[0].id)
+        .unwrap();
+    assert_eq!(unstaged_preview.kind, "conflict");
+    assert_eq!(
+        unstaged_preview.original,
+        "fn a_main() {}\nfn b_main() {}\n"
+    );
+    assert!(unstaged_preview.modified.contains("<<<<<<< HEAD"));
+
+    // Resolve block 0 with "ours"
+    let payload_block0 = serde_json::json!({
+        "path": "app.rs",
+        "choice": "ours",
+        "conflictIndex": 0
+    })
+    .to_string();
+    backend
+        .apply_operation(
+            &session.session_id,
+            4,
+            Operation::ResolveConflict,
+            &[],
+            &payload_block0,
+        )
+        .unwrap();
+
+    let snap2 = backend.snapshot(&session.session_id, 5).unwrap();
+    assert!(snap2.conflicted);
+
+    // Resolve remaining block (index 0) with "theirs"
+    let payload_block1 = serde_json::json!({
+        "path": "app.rs",
+        "choice": "theirs",
+        "conflictIndex": 0
+    })
+    .to_string();
+    backend
+        .apply_operation(
+            &session.session_id,
+            6,
+            Operation::ResolveConflict,
+            &[],
+            &payload_block1,
+        )
+        .unwrap();
+
+    let snap3 = backend.snapshot(&session.session_id, 7).unwrap();
+    assert!(!snap3.conflicted);
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("app.rs")).unwrap(),
+        "fn a_main() {}\nfn b_feat() {}\n"
+    );
+
+    backend.close(&session.session_id).unwrap();
+}
+
+#[test]
+fn stash_with_untracked_files_lists_and_previews_all_files() {
+    let dir = repo();
+    commit(dir.path(), "tracked.txt", "line 1\n", "initial");
+
+    std::fs::write(dir.path().join("tracked.txt"), "line 1\nline 2\n").unwrap();
+    std::fs::write(dir.path().join("untracked_a.txt"), "hello untracked\n").unwrap();
+    std::fs::create_dir_all(dir.path().join("src")).unwrap();
+    std::fs::write(
+        dir.path().join("src/untracked_b.rs"),
+        "fn main() {}\n// second line\n",
+    )
+    .unwrap();
+
+    let backend = Backend::new();
+    let session = backend.open(dir.path(), |_| {}).unwrap();
+
+    let stash_payload = serde_json::json!({
+        "message": "stash untracked test",
+        "include_untracked": true
+    })
+    .to_string();
+    backend
+        .apply_operation(
+            &session.session_id,
+            1,
+            Operation::StashPush,
+            &[],
+            &stash_payload,
+        )
+        .unwrap();
+
+    let hist = backend
+        .history(&session.session_id, 2, 0, Some(true))
+        .unwrap();
+    let stash_row = hist
+        .rows
+        .iter()
+        .find(|r| r.commit.refs.iter().any(|rf| rf.starts_with("stash@")))
+        .expect("stash row should be present in history");
+    let stash_oid = &stash_row.commit.oid;
+
+    let commit_files = backend
+        .commit_files(&session.session_id, 3, stash_oid)
+        .unwrap();
+    assert_eq!(commit_files.files.len(), 3);
+    assert_eq!(commit_files.stats.files_changed, 3);
+    assert_eq!(commit_files.stats.insertions, 4);
+
+    let untracked_a = commit_files
+        .files
+        .iter()
+        .find(|f| f.path_display == "untracked_a.txt")
+        .expect("untracked_a.txt must be visible in stash commit_files");
+    assert_eq!(untracked_a.status, "added");
+    assert_eq!(untracked_a.insertions, Some(1));
+
+    let untracked_b = commit_files
+        .files
+        .iter()
+        .find(|f| f.path_display == "src/untracked_b.rs")
+        .expect("src/untracked_b.rs must be visible in stash commit_files");
+    assert_eq!(untracked_b.status, "added");
+    assert_eq!(untracked_b.insertions, Some(2));
+
+    let preview_a = backend
+        .file_preview(&session.session_id, 4, &untracked_a.id)
+        .unwrap();
+    assert_eq!(preview_a.kind, "text");
+    assert_eq!(preview_a.original, "");
+    assert_eq!(preview_a.modified, "hello untracked\n");
+
+    let preview_b = backend
+        .file_preview(&session.session_id, 5, &untracked_b.id)
+        .unwrap();
+    assert_eq!(preview_b.kind, "text");
+    assert_eq!(preview_b.original, "");
+    assert_eq!(preview_b.modified, "fn main() {}\n// second line\n");
+
+    backend.close(&session.session_id).unwrap();
+}

@@ -1,6 +1,7 @@
-import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
+  Check,
   ChevronDown,
   ChevronUp,
   Clock,
@@ -17,18 +18,78 @@ import {
 } from 'lucide-react';
 import { useAppStore } from '../store/app';
 import { languageForPath, monaco } from '../lib/monaco';
-import '../lib/editorTheme';
+import { applyMonacoTheme } from '../lib/editorTheme';
 import { useI18n } from '../i18n';
-import { applyTheme, getThemeById, getActiveThemeId } from '../lib/theme';
+import { getActiveThemeId, getThemeById } from '../lib/theme';
 import { getBridge } from '../lib/bridge';
-import type { BlameLine, DiffHunk } from '../lib/types';
+import type { BlameLine, DiffHunk, Session } from '../lib/types';
 import { formatFullDate } from './FilesPanel';
+
+const shortDateCache = new Map<number, string>();
+const PER_SESSION_BLAME_CACHE_LIMIT = 16;
+const sessionBlameCache = new WeakMap<Session, Map<string, BlameLine[]>>();
+
+function readCachedBlame(session: Session | null, key: string): BlameLine[] | null {
+  if (!session) return null;
+  return sessionBlameCache.get(session)?.get(key) ?? null;
+}
+
+function writeCachedBlame(session: Session, key: string, lines: BlameLine[]) {
+  let cache = sessionBlameCache.get(session);
+  if (!cache) {
+    cache = new Map();
+    sessionBlameCache.set(session, cache);
+  }
+  cache.delete(key);
+  cache.set(key, lines);
+  if (cache.size > PER_SESSION_BLAME_CACHE_LIMIT) {
+    cache.delete(cache.keys().next().value!);
+  }
+}
+
+interface VisibleBlameItem {
+  kind: 'line';
+  line: BlameLine;
+  top: number;
+  height: number;
+}
+interface VisibleBlameFold {
+  kind: 'fold';
+  id: string;
+  count: number;
+  top: number;
+  height: number;
+}
+type VisibleBlameEntry = VisibleBlameItem | VisibleBlameFold;
+
+function sameVisibleBlameEntries(a: VisibleBlameEntry[], b: VisibleBlameEntry[]): boolean {
+  if (a === b) return true;
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    const left = a[i];
+    const right = b[i];
+    if (left.kind !== right.kind || left.top !== right.top || left.height !== right.height) {
+      return false;
+    }
+    if (left.kind === 'fold' && right.kind === 'fold') {
+      if (left.id !== right.id || left.count !== right.count) return false;
+    } else if (left.kind === 'line' && right.kind === 'line') {
+      if (left.line !== right.line) return false;
+    }
+  }
+  return true;
+}
 
 function formatDateShort(timestamp: number): string {
   if (!timestamp) return '';
+  const cached = shortDateCache.get(timestamp);
+  if (cached !== undefined) return cached;
   const d = new Date(timestamp * 1000);
   const pad = (n: number) => n.toString().padStart(2, '0');
-  return `${pad(d.getDate())}/${pad(d.getMonth() + 1)}`;
+  const formatted = `${pad(d.getDate())}/${pad(d.getMonth() + 1)}`;
+  if (shortDateCache.size > 500) shortDateCache.clear();
+  shortDateCache.set(timestamp, formatted);
+  return formatted;
 }
 
 function parseHunkDisplayInfo(hunk?: DiffHunk) {
@@ -48,6 +109,67 @@ function parseHunkDisplayInfo(hunk?: DiffHunk) {
   }
 
   return { rangeText, scopeText, isSingle };
+}
+
+export interface ConflictBlock {
+  index: number;
+  startLine: number;
+  sepLine: number;
+  endLine: number;
+  oursLabel: string;
+  theirsLabel: string;
+  oursLines: string[];
+  theirsLines: string[];
+}
+
+export function parseConflictBlocks(content: string | null | undefined): ConflictBlock[] {
+  if (!content) return [];
+  const lines = content.replace(/\r\n/g, '\n').split('\n');
+  const blocks: ConflictBlock[] = [];
+  let i = 0;
+
+  while (i < lines.length) {
+    if (lines[i].startsWith('<<<<<<<')) {
+      const startIdx = i;
+      const oursLabel = lines[i].slice(7).trim() || 'HEAD';
+      let baseIdx: number | null = null;
+      let sepIdx: number | null = null;
+      let endIdx: number | null = null;
+      let j = i + 1;
+
+      while (j < lines.length) {
+        if (lines[j].startsWith('|||||||') && baseIdx === null && sepIdx === null) {
+          baseIdx = j;
+        } else if (lines[j].startsWith('=======') && sepIdx === null) {
+          sepIdx = j;
+        } else if (lines[j].startsWith('>>>>>>>') && sepIdx !== null) {
+          endIdx = j;
+          break;
+        }
+        j++;
+      }
+
+      if (sepIdx !== null && endIdx !== null) {
+        const oursEnd = baseIdx ?? sepIdx;
+        const theirsLabel = lines[endIdx].slice(7).trim() || 'Incoming';
+        blocks.push({
+          index: blocks.length,
+          startLine: startIdx + 1,
+          sepLine: sepIdx + 1,
+          endLine: endIdx + 1,
+          oursLabel,
+          theirsLabel,
+          oursLines: lines.slice(startIdx + 1, oursEnd),
+          theirsLines: lines.slice(sepIdx + 1, endIdx),
+        });
+        i = endIdx + 1;
+        continue;
+      }
+    }
+    i++;
+  }
+
+  return blocks;
 }
 
 interface MonacoViewModelWithHiddenAreas {
@@ -86,8 +208,15 @@ export const DiffPanel = memo(function DiffPanel() {
   const modelSource = useRef<{ sessionId: string | undefined; version: string; kind: string; fileId: string | undefined } | null>(null);
   const [diffPreparing, setDiffPreparing] = useState(false);
   const session = useAppStore((s) => s.session);
+  const snapshotRevision = useAppStore((s) => s.snapshot?.revision ?? 0);
   const requestedPreview = useAppStore((s) => s.preview);
   const requestedFile = useAppStore((s) => s.selectedFile);
+  const [editorReadyNeeded, setEditorReadyNeeded] = useState(() => Boolean(requestedFile || requestedPreview));
+  useLayoutEffect(() => {
+    if ((requestedFile || requestedPreview) && !editorReadyNeeded) {
+      setEditorReadyNeeded(true);
+    }
+  }, [requestedFile, requestedPreview, editorReadyNeeded]);
   const [displayed, setDisplayed] = useState<{ file: typeof requestedFile; preview: typeof requestedPreview; sessionId: string | undefined } | null>(null);
   const currentDisplay = displayed?.sessionId === session?.sessionId ? displayed : null;
   const preview = currentDisplay?.preview ?? null;
@@ -105,21 +234,6 @@ export const DiffPanel = memo(function DiffPanel() {
   const setExpandedDiff = useAppStore((s) => s.setExpandedDiff);
   const blameOpen = useAppStore((s) => s.blameOpen);
   const setBlameOpen = useAppStore((s) => s.setBlameOpen);
-
-  interface VisibleBlameItem {
-    kind: 'line';
-    line: BlameLine;
-    top: number;
-    height: number;
-  }
-  interface VisibleBlameFold {
-    kind: 'fold';
-    id: string;
-    count: number;
-    top: number;
-    height: number;
-  }
-  type VisibleBlameEntry = VisibleBlameItem | VisibleBlameFold;
 
   const [blameLines, setBlameLines] = useState<BlameLine[]>([]);
   const [visibleBlameItems, setVisibleBlameItems] = useState<VisibleBlameEntry[]>([]);
@@ -140,8 +254,45 @@ export const DiffPanel = memo(function DiffPanel() {
   }, [expandedDiff, setExpandedDiff]);
 
   const [currentHunkIndex, setCurrentHunkIndex] = useState(0);
+  const [currentConflictIndex, setCurrentConflictIndex] = useState(0);
   const previewRef = useRef(preview);
   previewRef.current = preview;
+
+  const conflictBlocks = useMemo(
+    () => (preview?.kind === 'conflict' ? parseConflictBlocks(preview.modified) : []),
+    [preview?.kind, preview?.modified]
+  );
+  const conflictBlocksRef = useRef<ConflictBlock[]>(conflictBlocks);
+  conflictBlocksRef.current = conflictBlocks;
+  const safeConflictIndex =
+    conflictBlocks.length > 0 ? Math.min(currentConflictIndex, conflictBlocks.length - 1) : 0;
+  const activeConflict = conflictBlocks[safeConflictIndex] ?? null;
+
+  const jumpToConflict = useCallback((index: number) => {
+    const blocks = conflictBlocksRef.current;
+    if (!blocks || !blocks[index]) return;
+    setCurrentConflictIndex(index);
+    const block = blocks[index];
+    const modEditor = editor.current?.getModifiedEditor?.();
+    if (modEditor) {
+      modEditor.revealLineInCenter?.(block.startLine);
+      modEditor.setPosition?.({ lineNumber: block.startLine, column: 1 });
+      modEditor.focus?.();
+    }
+  }, []);
+
+  const handlePrevConflict = useCallback(() => {
+    if (safeConflictIndex > 0) {
+      jumpToConflict(safeConflictIndex - 1);
+    }
+  }, [safeConflictIndex, jumpToConflict]);
+
+  const handleNextConflict = useCallback(() => {
+    const blocks = conflictBlocksRef.current;
+    if (blocks && safeConflictIndex < blocks.length - 1) {
+      jumpToConflict(safeConflictIndex + 1);
+    }
+  }, [safeConflictIndex, jumpToConflict]);
 
   const jumpToHunk = useCallback((index: number) => {
     const hunks = previewRef.current?.hunks;
@@ -270,8 +421,12 @@ export const DiffPanel = memo(function DiffPanel() {
         }
         case 'n':
         case ']': {
+          const conflicts = conflictBlocksRef.current;
           const hunks = previewRef.current?.hunks;
-          if (hunks && hunks.length > 0) {
+          if (conflicts && conflicts.length > 0) {
+            e.preventDefault();
+            handleNextConflict();
+          } else if (hunks && hunks.length > 0) {
             e.preventDefault();
             handleNextHunk();
           } else {
@@ -291,8 +446,12 @@ export const DiffPanel = memo(function DiffPanel() {
         }
         case 'p':
         case '[': {
+          const conflicts = conflictBlocksRef.current;
           const hunks = previewRef.current?.hunks;
-          if (hunks && hunks.length > 0) {
+          if (conflicts && conflicts.length > 0) {
+            e.preventDefault();
+            handlePrevConflict();
+          } else if (hunks && hunks.length > 0) {
             e.preventDefault();
             handlePrevHunk();
           } else {
@@ -350,6 +509,8 @@ export const DiffPanel = memo(function DiffPanel() {
     blameOpen,
     compactDiff,
     diffMode,
+    handleNextConflict,
+    handlePrevConflict,
     handleNextHunk,
     handlePrevHunk,
     handleStageCurrentHunk,
@@ -362,10 +523,15 @@ export const DiffPanel = memo(function DiffPanel() {
 
   useEffect(() => {
     setCurrentHunkIndex(0);
-  }, [preview?.fileId, preview?.version]);
+    setCurrentConflictIndex(0);
+  }, [preview?.fileId]);
+
+  useEffect(() => {
+    setCurrentHunkIndex(0);
+  }, [preview?.version]);
 
   useLayoutEffect(() => {
-    if (!host.current) return;
+    if (!editorReadyNeeded || !host.current) return;
     const diffEditor = monaco.editor.createDiffEditor(host.current, {
       automaticLayout: true,
       contextmenu: false,
@@ -379,6 +545,7 @@ export const DiffPanel = memo(function DiffPanel() {
       renderOverviewRuler: false,
       renderIndicators: true,
       diffAlgorithm: 'legacy',
+      maxComputationTime: 1000,
       ignoreTrimWhitespace: false,
       renderMarginRevertIcon: false,
       lineNumbers: 'on',
@@ -406,9 +573,16 @@ export const DiffPanel = memo(function DiffPanel() {
 
     const modEditor = diffEditor.getModifiedEditor?.();
     const cursorSub = modEditor?.onDidChangeCursorPosition?.((e) => {
+      const line = e.position.lineNumber;
+      const conflicts = conflictBlocksRef.current;
+      if (conflicts && conflicts.length > 0) {
+        const cIdx = conflicts.findIndex((c) => line >= c.startLine && line <= c.endLine);
+        if (cIdx !== -1) {
+          setCurrentConflictIndex(cIdx);
+        }
+      }
       const hunks = previewRef.current?.hunks;
       if (!hunks || hunks.length === 0) return;
-      const line = e.position.lineNumber;
       const idx = hunks.findIndex(
         (h) => line >= h.newStart && line <= h.newStart + Math.max(1, h.newLines) - 1
       );
@@ -418,7 +592,7 @@ export const DiffPanel = memo(function DiffPanel() {
     });
 
     try {
-      applyTheme(getThemeById(getActiveThemeId()));
+      applyMonacoTheme(getThemeById(getActiveThemeId()));
     } catch {}
     return () => {
       cursorSub?.dispose?.();
@@ -429,7 +603,7 @@ export const DiffPanel = memo(function DiffPanel() {
       models.current = null;
       modelSource.current = null;
     };
-  }, []);
+  }, [editorReadyNeeded]);
 
   useEffect(() => {
     editor.current?.updateOptions({ renderSideBySide: diffMode === 'split' });
@@ -453,10 +627,15 @@ export const DiffPanel = memo(function DiffPanel() {
 
   useEffect(() => {
     const hunk = preview?.hunks?.[currentHunkIndex];
+    const activeConflictBlock = preview?.kind === 'conflict' ? activeConflict : null;
+    const rangeStart = activeConflictBlock ? activeConflictBlock.startLine : hunk?.newStart;
+    const rangeLines = activeConflictBlock
+      ? activeConflictBlock.endLine - activeConflictBlock.startLine + 1
+      : hunk?.newLines;
     const diffEditor = editor.current;
     const panel = host.current;
     const modified = diffEditor?.getModifiedEditor();
-    if (!hunk || !panel || !diffEditor || !modified) return;
+    if (rangeStart === undefined || rangeLines === undefined || !panel || !diffEditor || !modified) return;
 
     const highlight = document.createElement('div');
     highlight.className = 'diff-hunk-highlight';
@@ -471,11 +650,11 @@ export const DiffPanel = memo(function DiffPanel() {
       }
       const panelRect = panel.getBoundingClientRect();
       const editorRect = editorNode.getBoundingClientRect();
-      const startLine = Math.max(1, hunk.newStart);
-      const endLine = Math.max(startLine, hunk.newStart + Math.max(1, hunk.newLines) - 1);
-      const editorTop = editorRect.top - panelRect.top - modified.getScrollTop();
-      const top = editorTop + modified.getTopForLineNumber(startLine);
-      const bottom = editorTop + modified.getBottomForLineNumber(endLine);
+      const startLine = Math.max(1, rangeStart);
+      const endLine = Math.max(startLine, rangeStart + Math.max(1, rangeLines) - 1);
+      const editorTop = editorRect.top - panelRect.top - (modified.getScrollTop?.() ?? 0);
+      const top = editorTop + (modified.getTopForLineNumber?.(startLine) ?? 0);
+      const bottom = editorTop + (modified.getBottomForLineNumber?.(endLine) ?? 0);
       const visibleTop = Math.max(0, top);
       const visibleBottom = Math.min(panelRect.height, bottom);
       const isVisible = visibleBottom > visibleTop;
@@ -496,12 +675,12 @@ export const DiffPanel = memo(function DiffPanel() {
       });
     };
     const subscriptions = [
-      modified.onDidScrollChange(scheduleUpdate),
-      modified.onDidLayoutChange(scheduleUpdate),
-      modified.onDidChangeHiddenAreas(scheduleUpdate),
-      modified.onDidChangeModel(scheduleUpdate),
-      diffEditor.onDidUpdateDiff(scheduleUpdate),
-    ];
+      modified.onDidScrollChange?.(scheduleUpdate),
+      modified.onDidLayoutChange?.(scheduleUpdate),
+      modified.onDidChangeHiddenAreas?.(scheduleUpdate),
+      modified.onDidChangeModel?.(scheduleUpdate),
+      diffEditor.onDidUpdateDiff?.(scheduleUpdate),
+    ].filter((s): s is monaco.IDisposable => Boolean(s));
     const resizeObserver = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(scheduleUpdate) : null;
     resizeObserver?.observe(panel);
     scheduleUpdate();
@@ -511,11 +690,21 @@ export const DiffPanel = memo(function DiffPanel() {
       resizeObserver?.disconnect();
       highlight.remove();
     };
-  }, [preview?.hunks, preview?.version, currentHunkIndex, diffMode]);
+  }, [preview?.hunks, preview?.version, preview?.kind, currentHunkIndex, activeConflict, diffMode]);
+
+  const blameCommitOid = context?.kind === 'commit' ? context.oid : undefined;
 
   useEffect(() => {
     if (!blameOpen || !selectedFile || !session) {
-      setBlameLines([]);
+      setBlameLines((prev) => (prev.length === 0 ? prev : []));
+      setBlameLoading(false);
+      return;
+    }
+
+    const cacheKey = `${blameCommitOid ?? `wt:${snapshotRevision}`}\0${selectedFile.pathDisplay}`;
+    const cached = readCachedBlame(session, cacheKey);
+    if (cached) {
+      setBlameLines(cached);
       setBlameLoading(false);
       return;
     }
@@ -523,11 +712,11 @@ export const DiffPanel = memo(function DiffPanel() {
     let active = true;
     setBlameLoading(true);
 
-    const commitOid = context?.kind === 'commit' ? context.oid : undefined;
     const reqId = Date.now();
     getBridge()
-      .getBlame(session.sessionId, reqId, selectedFile.pathDisplay, commitOid)
+      .getBlame(session.sessionId, reqId, selectedFile.pathDisplay, blameCommitOid)
       .then((res) => {
+        writeCachedBlame(session, cacheKey, res.lines);
         if (!active) return;
         setBlameLines(res.lines);
         setBlameLoading(false);
@@ -541,32 +730,31 @@ export const DiffPanel = memo(function DiffPanel() {
     return () => {
       active = false;
     };
-  }, [blameOpen, selectedFile?.pathDisplay, context?.kind === 'commit' ? context.oid : null, session]);
+  }, [blameOpen, selectedFile?.pathDisplay, blameCommitOid, snapshotRevision, session]);
 
   const updateVisibleBlame = useCallback(() => {
     const diffEditor = editor.current;
     if (!diffEditor || !blameOpen || blameLines.length === 0) {
-      setVisibleBlameItems([]);
+      setVisibleBlameItems((prev) => (prev.length === 0 ? prev : []));
       return;
     }
     const modEditor = diffEditor.getModifiedEditor?.();
     if (!modEditor) return;
 
     if (!modEditor.getVisibleRanges) {
-      setVisibleBlameItems(
-        blameLines.map((line, idx) => ({
-          kind: 'line',
-          line,
-          top: idx * 20,
-          height: 20,
-        }))
-      );
+      const fallbackItems: VisibleBlameEntry[] = blameLines.map((line, idx) => ({
+        kind: 'line',
+        line,
+        top: idx * 20,
+        height: 20,
+      }));
+      setVisibleBlameItems((prev) => (sameVisibleBlameEntries(prev, fallbackItems) ? prev : fallbackItems));
       return;
     }
 
     const visibleRanges = modEditor.getVisibleRanges();
     if (!visibleRanges || visibleRanges.length === 0) {
-      setVisibleBlameItems([]);
+      setVisibleBlameItems((prev) => (prev.length === 0 ? prev : []));
       return;
     }
 
@@ -628,7 +816,7 @@ export const DiffPanel = memo(function DiffPanel() {
       prevEndLine = range.endLineNumber;
     }
 
-    setVisibleBlameItems(items);
+    setVisibleBlameItems((prev) => (sameVisibleBlameEntries(prev, items) ? prev : items));
   }, [blameOpen, blameLines]);
 
   useEffect(() => {
@@ -739,8 +927,9 @@ export const DiffPanel = memo(function DiffPanel() {
         const modifiedEditor = target.getModifiedEditor();
         const expectedHiddenAreas = viewModel!.unchangedRegions?.get().length ?? 0;
 
+        let revealed = false;
         const revealWhenFolded = () => {
-          if (disposed) return;
+          if (disposed || revealed) return;
           const changes = target.getLineChanges();
           if (changes === null) return;
           if (expectedHiddenAreas > 0 && (
@@ -748,6 +937,7 @@ export const DiffPanel = memo(function DiffPanel() {
             hiddenAreaCount(modifiedEditor) < expectedHiddenAreas
           )) return;
 
+          revealed = true;
           const firstChange = changes[0];
           const firstHunk = requestedPreview.hunks?.[0];
           const line = Math.max(1, Math.min(modified.getLineCount(),
@@ -766,10 +956,10 @@ export const DiffPanel = memo(function DiffPanel() {
           modifiedEditor.onDidChangeHiddenAreas(revealWhenFolded),
           target.onDidUpdateDiff(revealWhenFolded),
         );
-        if (host.current) host.current.style.visibility = 'hidden';
         attachModels(viewModel!);
         viewModelAttached = true;
         revealWhenFolded();
+        if (!revealed && host.current) host.current.style.visibility = 'hidden';
       }).catch(() => {
         if (disposed) return;
         if (host.current) host.current.style.visibility = '';
@@ -785,7 +975,7 @@ export const DiffPanel = memo(function DiffPanel() {
         nextModels.modified.dispose();
       }
     };
-  }, [session?.sessionId, requestedPreview?.version, requestedPreview?.kind, requestedFile?.id, requestedFile?.area, compactDiff]);
+  }, [editorReadyNeeded, session?.sessionId, requestedPreview?.version, requestedPreview?.kind, requestedFile?.id, requestedFile?.area, compactDiff]);
 
   const label = selectedFile
     ? selectedFile.oldPathDisplay
@@ -807,11 +997,11 @@ export const DiffPanel = memo(function DiffPanel() {
           <bdo dir="ltr">{label}</bdo>
         </span>
         {selectedFile && <button type="button" className="diff-file-history-button"
-          onClick={() => openFileHistory(selectedFile.pathDisplay)} title={t('fileHistory.title')}>
+          onClick={() => openFileHistory(selectedFile.pathDisplay)} title={t('fileHistory.title')} aria-label={t('fileHistory.button')}>
           <History size={14} /><span>{t('fileHistory.button')}</span>
         </button>}
         {selectedFile && <button type="button" className="diff-file-history-button"
-          onClick={() => void runOperation('openEditor', [], selectedFile.pathDisplay)} title={t('fileMenu.openEditor')}>
+          onClick={() => void runOperation('openEditor', [], selectedFile.pathDisplay)} title={t('fileMenu.openEditor')} aria-label={t('files.openEditor')}>
           <Code2 size={14} /><span>{t('files.openEditor')}</span>
         </button>}
         <div className="mode-switch" role="group" aria-label="Layout do diff">
@@ -820,6 +1010,7 @@ export const DiffPanel = memo(function DiffPanel() {
             className={blameOpen ? 'active' : ''}
             onClick={() => setBlameOpen(!blameOpen)}
             title={blameOpen ? t('diff.blameActive') : t('diff.toggleBlame')}
+            aria-label={t('diff.toggleBlame')}
             aria-pressed={blameOpen}
           >
             <History size={14} />
@@ -832,6 +1023,7 @@ export const DiffPanel = memo(function DiffPanel() {
                 className={compactDiff ? 'active' : ''}
                 onClick={() => setCompactDiff(!compactDiff)}
                 title={compactDiff ? t('diff.compactDiffActive') : t('diff.compactDiffInactive')}
+                aria-label={t('diff.onlyChanges')}
                 aria-pressed={compactDiff}
               >
                 <FoldVertical size={14} />
@@ -842,6 +1034,7 @@ export const DiffPanel = memo(function DiffPanel() {
                 className={diffMode === 'unified' ? 'active' : ''}
                 onClick={() => setDiffMode('unified')}
                 title={t('diff.unified')}
+                aria-label={t('diff.unified')}
                 aria-pressed={diffMode === 'unified'}
               >
                 <Rows3 size={14} />
@@ -852,6 +1045,7 @@ export const DiffPanel = memo(function DiffPanel() {
                 className={diffMode === 'split' ? 'active' : ''}
                 onClick={() => setDiffMode('split')}
                 title={t('diff.split')}
+                aria-label={t('diff.split')}
                 aria-pressed={diffMode === 'split'}
               >
                 <Columns2 size={14} />
@@ -966,6 +1160,173 @@ export const DiffPanel = memo(function DiffPanel() {
           </div>
         </div>
       )}
+      {isConflict && selectedFile && (
+        <div className="diff-conflict-banner">
+          <div className="diff-conflict-banner-title">
+            <AlertTriangle size={15} className="diff-conflict-banner-icon" />
+            <span>{t('conflicts.banner')}</span>
+          </div>
+          <div className="diff-conflict-banner-actions">
+            <button
+              type="button"
+              className="btn btn-secondary"
+              onClick={() => void resolveConflict(selectedFile.pathDisplay, 'ours')}
+              title={t('conflicts.acceptOurs')}
+            >
+              {t('conflicts.acceptOurs')}
+            </button>
+            <button
+              type="button"
+              className="btn btn-secondary"
+              onClick={() => void resolveConflict(selectedFile.pathDisplay, 'theirs')}
+              title={t('conflicts.acceptTheirs')}
+            >
+              {t('conflicts.acceptTheirs')}
+            </button>
+            <button
+              type="button"
+              className="btn btn-secondary"
+              onClick={() => void resolveConflict(selectedFile.pathDisplay, 'both')}
+              title={t('conflicts.acceptBoth')}
+            >
+              {t('conflicts.acceptBoth')}
+            </button>
+            <button
+              type="button"
+              className="btn btn-primary"
+              onClick={() => void resolveConflict(selectedFile.pathDisplay, 'mark_resolved')}
+              title={t('conflicts.markResolved')}
+            >
+              {t('conflicts.markResolved')}
+            </button>
+          </div>
+        </div>
+      )}
+      {isConflict && selectedFile && activeConflict && (
+        <div className="diff-conflict-resolver" data-testid="diff-conflict-resolver">
+          <div className="diff-conflict-resolver-header">
+            <div className="diff-conflict-resolver-info">
+              <span className="conflict-block-badge">
+                {t('conflicts.blockBadge', {
+                  current: safeConflictIndex + 1,
+                  total: conflictBlocks.length,
+                })}
+              </span>
+              <span className="hunk-range-pill">
+                {t('diff.hunkLines', {
+                  range: `${activeConflict.startLine}–${activeConflict.endLine}`,
+                })}
+              </span>
+              <span className="conflict-choose-prompt">{t('conflicts.chooseSidePrompt')}</span>
+            </div>
+            <div className="diff-conflict-resolver-controls">
+              {conflictBlocks.length > 1 && (
+                <div className="diff-conflict-pills" role="tablist">
+                  {conflictBlocks.map((block, idx) => (
+                    <button
+                      key={block.index}
+                      type="button"
+                      className={`diff-conflict-pill ${idx === safeConflictIndex ? 'active' : ''}`}
+                      onClick={() => jumpToConflict(idx)}
+                    >
+                      #{idx + 1}
+                    </button>
+                  ))}
+                </div>
+              )}
+              {conflictBlocks.length > 1 && (
+                <div className="diff-hunk-nav">
+                  <button
+                    type="button"
+                    className="hunk-nav-btn"
+                    disabled={safeConflictIndex <= 0}
+                    onClick={handlePrevConflict}
+                    title={t('conflicts.prevConflict')}
+                    aria-label={t('conflicts.prevConflict')}
+                  >
+                    <ChevronUp size={14} />
+                  </button>
+                  <button
+                    type="button"
+                    className="hunk-nav-btn"
+                    disabled={safeConflictIndex >= conflictBlocks.length - 1}
+                    onClick={handleNextConflict}
+                    title={t('conflicts.nextConflict')}
+                    aria-label={t('conflicts.nextConflict')}
+                  >
+                    <ChevronDown size={14} />
+                  </button>
+                </div>
+              )}
+              <button
+                type="button"
+                className="diff-conflict-both-btn"
+                data-testid="conflict-block-both"
+                onClick={() =>
+                  void resolveConflict(selectedFile.pathDisplay, 'both', activeConflict.index)
+                }
+                title={t('conflicts.combineBothBlocks')}
+              >
+                {t('conflicts.combineBothBlocks')}
+              </button>
+            </div>
+          </div>
+          <div className="diff-conflict-cards">
+            <button
+              type="button"
+              className="diff-conflict-card diff-conflict-card-ours"
+              data-testid="conflict-card-ours"
+              onClick={() =>
+                void resolveConflict(selectedFile.pathDisplay, 'ours', activeConflict.index)
+              }
+            >
+              <div className="diff-conflict-card-header">
+                <div className="diff-conflict-card-side">
+                  <span className="diff-conflict-side-badge ours">
+                    {t('conflicts.currentSideLabel')}
+                  </span>
+                  <code className="diff-conflict-ref">{activeConflict.oursLabel}</code>
+                </div>
+                <span className="diff-conflict-card-cta">
+                  <Check size={12} />
+                  <span>{t('conflicts.chooseOursBlock')}</span>
+                </span>
+              </div>
+              <pre className="diff-conflict-card-code">
+                {activeConflict.oursLines.length > 0
+                  ? activeConflict.oursLines.join('\n')
+                  : t('conflicts.emptySide')}
+              </pre>
+            </button>
+            <button
+              type="button"
+              className="diff-conflict-card diff-conflict-card-theirs"
+              data-testid="conflict-card-theirs"
+              onClick={() =>
+                void resolveConflict(selectedFile.pathDisplay, 'theirs', activeConflict.index)
+              }
+            >
+              <div className="diff-conflict-card-header">
+                <div className="diff-conflict-card-side">
+                  <span className="diff-conflict-side-badge theirs">
+                    {t('conflicts.incomingSideLabel')}
+                  </span>
+                  <code className="diff-conflict-ref">{activeConflict.theirsLabel}</code>
+                </div>
+                <span className="diff-conflict-card-cta">
+                  <Check size={12} />
+                  <span>{t('conflicts.chooseTheirsBlock')}</span>
+                </span>
+              </div>
+              <pre className="diff-conflict-card-code">
+                {activeConflict.theirsLines.length > 0
+                  ? activeConflict.theirsLines.join('\n')
+                  : t('conflicts.emptySide')}
+              </pre>
+            </button>
+          </div>
+        </div>
+      )}
       <div className={`diff-body ${blameOpen && !unavailable ? 'has-blame' : ''}`}>
         {blameOpen && !unavailable && (
           <div
@@ -1067,62 +1428,6 @@ export const DiffPanel = memo(function DiffPanel() {
                 : t('diff.unavailable')}
             </strong>
             <span>{preview.message ?? t('diff.noTextPreview')}</span>
-          </div>
-        )}
-        {isConflict && selectedFile && (
-          <div className="diff-conflict-banner" style={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            flexWrap: 'wrap',
-            gap: '8px',
-            padding: '8px 12px',
-            background: 'rgba(234, 179, 8, 0.12)',
-            borderBottom: '1px solid rgba(234, 179, 8, 0.3)',
-            color: 'var(--text)'
-          }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '12px', fontWeight: 500 }}>
-              <AlertTriangle size={15} style={{ color: '#eab308' }} />
-              <span>{t('conflicts.banner')}</span>
-            </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-              <button
-                type="button"
-                className="btn btn-secondary"
-                onClick={() => void resolveConflict(selectedFile.pathDisplay, 'ours')}
-                title={t('conflicts.acceptOurs')}
-                style={{ fontSize: '11px', padding: '4px 8px' }}
-              >
-                {t('conflicts.acceptOurs')}
-              </button>
-              <button
-                type="button"
-                className="btn btn-secondary"
-                onClick={() => void resolveConflict(selectedFile.pathDisplay, 'theirs')}
-                title={t('conflicts.acceptTheirs')}
-                style={{ fontSize: '11px', padding: '4px 8px' }}
-              >
-                {t('conflicts.acceptTheirs')}
-              </button>
-              <button
-                type="button"
-                className="btn btn-secondary"
-                onClick={() => void resolveConflict(selectedFile.pathDisplay, 'both')}
-                title={t('conflicts.acceptBoth')}
-                style={{ fontSize: '11px', padding: '4px 8px' }}
-              >
-                {t('conflicts.acceptBoth')}
-              </button>
-              <button
-                type="button"
-                className="btn btn-primary"
-                onClick={() => void resolveConflict(selectedFile.pathDisplay, 'mark_resolved')}
-                title={t('conflicts.markResolved')}
-                style={{ fontSize: '11px', padding: '4px 10px' }}
-              >
-                {t('conflicts.markResolved')}
-              </button>
-            </div>
           </div>
         )}
         <div ref={host} className="monaco-host" hidden={!editorPreview || (editorPreview.kind !== 'text' && editorPreview.kind !== 'conflict')} />

@@ -20,7 +20,7 @@ import {
 import { useAppStore } from '../store/app';
 import { useI18n } from '../i18n';
 import { getBridge } from '../lib/bridge';
-import type { Area, FileEntry, RepoFileEntry } from '../lib/types';
+import type { Area, FileEntry, RepoFileEntry, Session } from '../lib/types';
 import { buildTree, flattenTree, getDescendantFiles } from './FilesPanel';
 import { FileContextMenu } from './FileContextMenu';
 import { DirContextMenu } from './DirContextMenu';
@@ -28,6 +28,27 @@ import './Lists.css';
 
 const FLAT_ROW_HEIGHT = 36;
 const TREE_ROW_HEIGHT = 26;
+const PER_SESSION_TREE_CACHE_LIMIT = 8;
+
+const sessionRepoFilesCache = new WeakMap<Session, Map<string, RepoFileEntry[]>>();
+
+function readCachedRepoFiles(session: Session | null, key: string): RepoFileEntry[] | null {
+  if (!session) return null;
+  return sessionRepoFilesCache.get(session)?.get(key) ?? null;
+}
+
+function writeCachedRepoFiles(session: Session, key: string, files: RepoFileEntry[]) {
+  let cache = sessionRepoFilesCache.get(session);
+  if (!cache) {
+    cache = new Map();
+    sessionRepoFilesCache.set(session, cache);
+  }
+  cache.delete(key);
+  cache.set(key, files);
+  if (cache.size > PER_SESSION_TREE_CACHE_LIMIT) {
+    cache.delete(cache.keys().next().value!);
+  }
+}
 
 const CODE_EXTENSIONS = new Set([
   'ts', 'tsx', 'js', 'jsx', 'rs', 'py', 'go', 'c', 'cpp', 'h', 'hpp', 'java',
@@ -49,7 +70,7 @@ export const FileExplorer = memo(function FileExplorer() {
   const snapshot = useAppStore((state) => state.snapshot);
   const selectedFile = useAppStore((state) => state.selectedFile);
   const selectFile = useAppStore((state) => state.selectFile);
-  const preview = useAppStore((state) => state.preview);
+  const previewFileId = useAppStore((state) => state.preview?.fileId ?? null);
   const prefetchFile = useAppStore((state) => state.prefetchFile);
   const openFileHistory = useAppStore((state) => state.openFileHistory);
   const runOperation = useAppStore((state) => state.runOperation);
@@ -59,16 +80,22 @@ export const FileExplorer = memo(function FileExplorer() {
   const activePane = useAppStore((state) => state.activePane);
   const setActivePane = useAppStore((state) => state.setActivePane);
   const filesTab = useAppStore((state) => state.filesTab);
-  const refreshing = useAppStore((state) => state.refreshing);
   const openInBrowser = useAppStore((state) => state.openInBrowser);
   const restoreCommitFile = useAppStore((state) => state.restoreCommitFile);
 
-  const [rawFiles, setRawFiles] = useState<RepoFileEntry[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const [filter, setFilter] = useState('');
   const [scope, setScope] = useState<'worktree' | 'commit'>('worktree');
   const [collapsedDirs, setCollapsedDirs] = useState<Set<string>>(new Set());
+
+  const commitOid = scope === 'commit' && context.kind === 'commit' ? context.oid : null;
+  const revision = snapshot?.revision ?? 0;
+  const cacheKey = commitOid ?? `wt:${revision}`;
+
+  const [rawFiles, setRawFiles] = useState<RepoFileEntry[]>(
+    () => readCachedRepoFiles(session, cacheKey) ?? []
+  );
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const [fileContextMenu, setFileContextMenu] = useState<{
     x: number;
@@ -94,38 +121,47 @@ export const FileExplorer = memo(function FileExplorer() {
   const viewportRef = useRef<HTMLDivElement>(null);
   const requestIdRef = useRef(0);
 
-  const commitOid = scope === 'commit' && context.kind === 'commit' ? context.oid : null;
-
-  const loadFiles = useCallback(() => {
-    if (!session) return;
-    const bridge = getBridge();
-    if (!bridge.getRepoFiles) return;
-
-    const reqId = ++requestIdRef.current;
-    setLoading(true);
-    setError(null);
-
-    bridge.getRepoFiles(session.sessionId, reqId, commitOid)
-      .then((res) => {
-        if (reqId === requestIdRef.current) {
-          setRawFiles(res.files);
-        }
-      })
-      .catch((err) => {
-        if (reqId === requestIdRef.current) {
-          setError(String(err));
-        }
-      })
-      .finally(() => {
-        if (reqId === requestIdRef.current) {
+  const loadFiles = useCallback(
+    (force = false) => {
+      if (!session) return;
+      if (!force) {
+        const cached = readCachedRepoFiles(session, cacheKey);
+        if (cached) {
+          setRawFiles(cached);
           setLoading(false);
+          setError(null);
+          return;
         }
-      });
-  }, [session, commitOid]);
+      }
+      const bridge = getBridge();
+      if (!bridge.getRepoFiles) return;
+
+      const reqId = ++requestIdRef.current;
+      setLoading(true);
+      setError(null);
+
+      bridge
+        .getRepoFiles(session.sessionId, reqId, commitOid)
+        .then((res) => {
+          writeCachedRepoFiles(session, cacheKey, res.files);
+          if (reqId === requestIdRef.current) {
+            setRawFiles(res.files);
+            setLoading(false);
+          }
+        })
+        .catch((err) => {
+          if (reqId === requestIdRef.current) {
+            setError(String(err));
+            setLoading(false);
+          }
+        });
+    },
+    [session, commitOid, cacheKey]
+  );
 
   useEffect(() => {
-    loadFiles();
-  }, [loadFiles, refreshing]);
+    loadFiles(false);
+  }, [loadFiles]);
 
   const deferredFilter = useDeferredValue(filter);
 
@@ -155,11 +191,22 @@ export const FileExplorer = memo(function FileExplorer() {
     });
   }, [rawFiles, snapshot?.staged, snapshot?.unstaged, commitOid]);
 
+  const searchableEntries = useMemo(
+    () => allEntries.map((entry) => ({ entry, pathLower: entry.pathDisplay.toLowerCase() })),
+    [allEntries]
+  );
+
   const filteredEntries = useMemo(() => {
     const q = deferredFilter.trim().toLowerCase();
     if (!q) return allEntries;
-    return allEntries.filter((f) => f.pathDisplay.toLowerCase().includes(q));
-  }, [allEntries, deferredFilter]);
+    const matched: FileEntry[] = [];
+    for (let i = 0; i < searchableEntries.length; i++) {
+      if (searchableEntries[i].pathLower.includes(q)) {
+        matched.push(searchableEntries[i].entry);
+      }
+    }
+    return matched;
+  }, [allEntries, searchableEntries, deferredFilter]);
 
   const isTree = fileViewMode === 'tree';
 
@@ -210,12 +257,12 @@ export const FileExplorer = memo(function FileExplorer() {
 
   // Prefetch next and previous files in list for instantaneous preview on arrow navigation
   useEffect(() => {
-    if (!selectedFile || preview?.fileId !== selectedFile.id) return;
+    if (!selectedFile || previewFileId !== selectedFile.id) return;
     const index = visibleFiles.findIndex((f) => f.pathDisplay === selectedFile.pathDisplay);
     if (index < 0) return;
     if (visibleFiles[index + 1]) prefetchFile(visibleFiles[index + 1]);
     if (visibleFiles[index - 1]) prefetchFile(visibleFiles[index - 1]);
-  }, [selectedFile?.pathDisplay, preview?.fileId, visibleFiles, prefetchFile]);
+  }, [selectedFile?.pathDisplay, selectedFile?.id, previewFileId, visibleFiles, prefetchFile]);
 
   const toggleDir = useCallback((dirPath: string) => {
     setCollapsedDirs((prev) => {
@@ -252,6 +299,23 @@ export const FileExplorer = memo(function FileExplorer() {
     void runOperation('openEditor', [], file.pathDisplay);
   }, [runOperation]);
 
+  const navRef = useRef({
+    activePane,
+    filesTab,
+    visibleFiles,
+    selectFile,
+    runOperation,
+    setActivePane,
+  });
+  navRef.current = {
+    activePane,
+    filesTab,
+    visibleFiles,
+    selectFile,
+    runOperation,
+    setActivePane,
+  };
+
   useEffect(() => {
     let previewTimer: ReturnType<typeof setTimeout> | null = null;
     let previewDeferred = false;
@@ -267,7 +331,7 @@ export const FileExplorer = memo(function FileExplorer() {
         const file = useAppStore.getState().selectedFile;
         if (!file) return;
         previewInFlight = true;
-        void selectFile(file).finally(() => {
+        void navRef.current.selectFile(file).finally(() => {
           previewInFlight = false;
           if (pressedArrows.size > 0) schedulePreview();
         });
@@ -280,13 +344,21 @@ export const FileExplorer = memo(function FileExplorer() {
       if (!previewDeferred) return;
       previewDeferred = false;
       const file = useAppStore.getState().selectedFile;
-      if (file) void selectFile(file);
+      if (file) void navRef.current.selectFile(file);
     };
 
     const handleKeyDown = (e: KeyboardEvent) => {
-      const currentTab = useAppStore.getState().filesTab;
+      const {
+        activePane: curPane,
+        filesTab: propTab,
+        visibleFiles: curVisibleFiles,
+        selectFile: curSelectFile,
+        runOperation: curRunOperation,
+        setActivePane: curSetActivePane,
+      } = navRef.current;
+      const currentTab = useAppStore.getState().filesTab ?? propTab;
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f') {
-        if (activePane === 'files' && currentTab === 'explorer') {
+        if (curPane === 'files' && currentTab === 'explorer') {
           e.preventDefault();
           searchInputRef.current?.focus();
           searchInputRef.current?.select();
@@ -295,7 +367,7 @@ export const FileExplorer = memo(function FileExplorer() {
       }
 
       if (e.defaultPrevented || e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
-      if (activePane !== 'files' || currentTab !== 'explorer') return;
+      if (curPane !== 'files' || currentTab !== 'explorer') return;
       if (document.querySelector('.modal-backdrop')) return;
 
       const activeElement = document.activeElement;
@@ -311,7 +383,7 @@ export const FileExplorer = memo(function FileExplorer() {
 
       if (e.key === 'ArrowLeft' || e.key === 'h') {
         e.preventDefault();
-        setActivePane('history');
+        curSetActivePane('history');
         return;
       }
 
@@ -325,20 +397,20 @@ export const FileExplorer = memo(function FileExplorer() {
         if (document.activeElement instanceof HTMLElement) {
           document.activeElement.blur();
         }
-        if (visibleFiles.length === 0) return;
+        if (curVisibleFiles.length === 0) return;
         const currentFile = useAppStore.getState().selectedFile;
-        const curIdx = visibleFiles.findIndex((f) => f.id === currentFile?.id || f.pathDisplay === currentFile?.pathDisplay);
-        const nextIdx = curIdx === -1 ? 0 : Math.min(visibleFiles.length - 1, curIdx + 1);
-        if (visibleFiles[nextIdx] && (curIdx === -1 || nextIdx !== curIdx)) {
+        const curIdx = curVisibleFiles.findIndex((f) => f.id === currentFile?.id || f.pathDisplay === currentFile?.pathDisplay);
+        const nextIdx = curIdx === -1 ? 0 : Math.min(curVisibleFiles.length - 1, curIdx + 1);
+        if (curVisibleFiles[nextIdx] && (curIdx === -1 || nextIdx !== curIdx)) {
           if (e.repeat) {
             previewDeferred = true;
             schedulePreview();
-            void selectFile(visibleFiles[nextIdx], { deferPreview: true });
+            void curSelectFile(curVisibleFiles[nextIdx], { deferPreview: true });
           } else {
             previewDeferred = false;
             if (previewTimer !== null) clearTimeout(previewTimer);
             previewTimer = null;
-            void selectFile(visibleFiles[nextIdx]);
+            void curSelectFile(curVisibleFiles[nextIdx]);
           }
         }
       } else if (e.key === 'ArrowUp') {
@@ -346,27 +418,27 @@ export const FileExplorer = memo(function FileExplorer() {
         if (document.activeElement instanceof HTMLElement) {
           document.activeElement.blur();
         }
-        if (visibleFiles.length === 0) return;
+        if (curVisibleFiles.length === 0) return;
         const currentFile = useAppStore.getState().selectedFile;
-        const curIdx = visibleFiles.findIndex((f) => f.id === currentFile?.id || f.pathDisplay === currentFile?.pathDisplay);
+        const curIdx = curVisibleFiles.findIndex((f) => f.id === currentFile?.id || f.pathDisplay === currentFile?.pathDisplay);
         const prevIdx = curIdx === -1 ? 0 : Math.max(0, curIdx - 1);
-        if (visibleFiles[prevIdx] && (curIdx === -1 || prevIdx !== curIdx)) {
+        if (curVisibleFiles[prevIdx] && (curIdx === -1 || prevIdx !== curIdx)) {
           if (e.repeat) {
             previewDeferred = true;
             schedulePreview();
-            void selectFile(visibleFiles[prevIdx], { deferPreview: true });
+            void curSelectFile(curVisibleFiles[prevIdx], { deferPreview: true });
           } else {
             previewDeferred = false;
             if (previewTimer !== null) clearTimeout(previewTimer);
             previewTimer = null;
-            void selectFile(visibleFiles[prevIdx]);
+            void curSelectFile(curVisibleFiles[prevIdx]);
           }
         }
       } else if (e.key === 'Enter') {
         const file = useAppStore.getState().selectedFile;
         if (file) {
           e.preventDefault();
-          void runOperation('openEditor', [], file.pathDisplay);
+          void curRunOperation('openEditor', [], file.pathDisplay);
         }
       }
     };
@@ -394,14 +466,7 @@ export const FileExplorer = memo(function FileExplorer() {
       previewDeferred = false;
       if (previewTimer !== null) clearTimeout(previewTimer);
     };
-  }, [
-    activePane,
-    filesTab,
-    visibleFiles,
-    selectFile,
-    runOperation,
-    setActivePane,
-  ]);
+  }, []);
 
   const handleFileContextMenu = useCallback((e: React.MouseEvent, file: FileEntry) => {
     e.preventDefault();
@@ -548,7 +613,7 @@ export const FileExplorer = memo(function FileExplorer() {
           <button
             type="button"
             className="file-explorer-btn"
-            onClick={loadFiles}
+            onClick={() => loadFiles(true)}
             disabled={loading}
             title="Recarregar arquivos"
             aria-label="Recarregar arquivos"
@@ -593,7 +658,7 @@ export const FileExplorer = memo(function FileExplorer() {
                     <div
                       key={node.id}
                       className="lists-virtual-row lists-tree-row"
-                      style={{ transform: `translateY(${item.start}px)`, height: `${TREE_ROW_HEIGHT}px` }}
+                      style={{ transform: `translate3d(0, ${item.start}px, 0)`, height: `${TREE_ROW_HEIGHT}px` }}
                       onContextMenu={(e) => handleDirContextMenu(e, node.name, node.fullPath, descendantFiles)}
                     >
                       <button
@@ -620,7 +685,7 @@ export const FileExplorer = memo(function FileExplorer() {
                   <div
                     key={file.id}
                     className="lists-virtual-row lists-tree-row"
-                    style={{ transform: `translateY(${item.start}px)`, height: `${TREE_ROW_HEIGHT}px` }}
+                    style={{ transform: `translate3d(0, ${item.start}px, 0)`, height: `${TREE_ROW_HEIGHT}px` }}
                     onContextMenu={(e) => handleFileContextMenu(e, file)}
                   >
                     <div
@@ -631,6 +696,7 @@ export const FileExplorer = memo(function FileExplorer() {
                         type="button"
                         aria-current={isSelected ? 'true' : undefined}
                         className={`lists-file-select is-tree-select ${isSelected ? 'lists-row-selected' : ''}`}
+                        onPointerEnter={() => prefetchFile(file)}
                         onClick={() => handleFileClick(file)}
                         onDoubleClick={() => handleFileDoubleClick(file)}
                         title={file.pathDisplay}
@@ -684,7 +750,7 @@ export const FileExplorer = memo(function FileExplorer() {
                 <div
                   key={file.id}
                   className="lists-virtual-row"
-                  style={{ transform: `translateY(${item.start}px)`, height: `${FLAT_ROW_HEIGHT}px` }}
+                  style={{ transform: `translate3d(0, ${item.start}px, 0)`, height: `${FLAT_ROW_HEIGHT}px` }}
                   onContextMenu={(e) => handleFileContextMenu(e, file)}
                 >
                   <div className="lists-file-row" style={{ paddingLeft: '8px' }}>
@@ -692,6 +758,7 @@ export const FileExplorer = memo(function FileExplorer() {
                       type="button"
                       aria-current={isSelected ? 'true' : undefined}
                       className={`lists-file-select ${isSelected ? 'lists-row-selected' : ''}`}
+                      onPointerEnter={() => prefetchFile(file)}
                       onClick={() => handleFileClick(file)}
                       onDoubleClick={() => handleFileDoubleClick(file)}
                       title={file.pathDisplay}

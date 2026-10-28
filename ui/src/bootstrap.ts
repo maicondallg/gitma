@@ -3,21 +3,16 @@ import { applyTheme, getActiveThemeId, getThemeById } from './lib/theme';
 import { getLanguage, setLanguage } from './i18n';
 import { useAppStore } from './store/app';
 
-export async function initializeApplication() {
-  // Apply saved theme and language as early as possible
+export function initializeAppearance() {
   try {
     applyTheme(getThemeById(getActiveThemeId()));
     setLanguage(getLanguage());
   } catch {}
-  // Preload DiffPanel/Monaco chunk in idle time so it is warm when needed
-  if (typeof window !== 'undefined') {
-    const preload = () => { void import('./components/DiffPanel').catch(() => {}); };
-    if ('requestIdleCallback' in window) {
-      window.requestIdleCallback(preload, { timeout: 1500 });
-    } else {
-      setTimeout(preload, 200);
-    }
-  }
+}
+
+export async function initializeApplication() {
+  // Ensure saved theme and language are applied
+  initializeAppearance();
   const params = new URLSearchParams(window.location.search);
   let repo = params.get('repo');
   let fixture = params.get('fixture');
@@ -42,5 +37,15 @@ export async function initializeApplication() {
     await useAppStore.getState().openRepository(repo);
   } else {
     await useAppStore.getState().restoreSavedTabs();
+  }
+
+  // Preload DiffPanel/Monaco chunk only AFTER initial workspace/tabs settle so cold start never competes with 2.4MB JS parse
+  if (typeof window !== 'undefined') {
+    const preload = () => { void import('./components/DiffPanel').catch(() => {}); };
+    if ('requestIdleCallback' in window) {
+      window.requestIdleCallback(preload, { timeout: 2500 });
+    } else {
+      setTimeout(preload, 600);
+    }
   }
 }
