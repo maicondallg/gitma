@@ -170,6 +170,7 @@ export interface AppState {
   refreshing: boolean;
   opening: boolean;
   operation: Operation | null;
+  operationsBySession?: Record<string, Operation>;
   notice: Notice | null;
   fileHistoryPath: string | null;
   reflogOpen: boolean;
@@ -261,10 +262,11 @@ let selectionToken = 0;
 let contextToken = 0;
 let historyScopeToken = 0;
 let openToken = 0;
-let refreshInFlight = false;
-let queuedRefresh: { reason: RefreshReason; event?: RepoChanged } | null = null;
-let writeChain: Promise<void> = Promise.resolve();
-let writeReserved = false;
+const refreshInFlightBySession = new Set<string>();
+const queuedRefreshBySession = new Map<string, { reason: RefreshReason; event?: RepoChanged }>();
+const manualRefreshingSessions = new Set<string>();
+const writeChainBySession = new Map<string, Promise<void>>();
+const writeReservedBySession = new Set<string>();
 let loadingMore: { sessionId: string; historyKey: string; page: number; token: number } | null = null;
 let unlisten: (() => void) | null = null;
 // Commit contents are immutable. Keep an LRU UI cache so revisiting history
@@ -299,6 +301,8 @@ function evictSessionCaches(sessionId: string) {
     if (key.startsWith(prefix)) previewPrefetches.delete(key);
   }
   localPreviewEpoch.delete(sessionId);
+  queuedRefreshBySession.delete(sessionId);
+  manualRefreshingSessions.delete(sessionId);
 }
 function remember<T>(cache: Map<string, T>, key: string, value: T, limit: number) {
   cache.delete(key);
@@ -355,7 +359,10 @@ const NO_FILE_OPERATIONS = new Set<Operation>([
 ]);
 const NO_REFRESH_OPERATIONS = new Set<Operation>(['openTerminal', 'openEditor', 'revealFile', 'openBrowser']);
 const MAX_COMMAND_LOGS = 10;
-function mergeRefresh(current: typeof queuedRefresh, next: { reason: RefreshReason; event?: RepoChanged }) {
+function mergeRefresh(
+  current: { reason: RefreshReason; event?: RepoChanged } | null,
+  next: { reason: RefreshReason; event?: RepoChanged }
+) {
   if (!current) return next;
   const reason = priority[next.reason] >= priority[current.reason] ? next.reason : current.reason;
   const scopes = [current.event?.scope, next.event?.scope];
@@ -482,9 +489,77 @@ export const useAppStore = create<AppState>((set, get) => {
             remotes: current.remotes,
             authState: current.authState,
             filesTab: current.filesTab,
+            commandLogs: current.commandLogs,
           }
         : t
     );
+  }
+
+  function omitSessions(
+    map: Record<string, Operation> | undefined,
+    sessionIds: string[]
+  ): Record<string, Operation> {
+    const next = { ...(map ?? {}) };
+    for (const id of sessionIds) {
+      delete next[id];
+    }
+    return next;
+  }
+
+  function setSessionOperation(sessionId: string, op: Operation | null) {
+    set((s) => {
+      const prev = s.operationsBySession ?? {};
+      const isActive = s.session?.sessionId === sessionId;
+      if ((op === null && !(sessionId in prev)) || (op !== null && prev[sessionId] === op)) {
+        if (isActive && s.operation !== op) {
+          return { operation: op };
+        }
+        return {};
+      }
+      const next = { ...prev };
+      if (op) {
+        next[sessionId] = op;
+      } else {
+        delete next[sessionId];
+      }
+      return {
+        operationsBySession: next,
+        ...(isActive ? { operation: op } : {}),
+      };
+    });
+  }
+
+  function setSessionManualRefreshing(sessionId: string, value: boolean) {
+    if (value) {
+      manualRefreshingSessions.add(sessionId);
+    } else {
+      manualRefreshingSessions.delete(sessionId);
+    }
+    const current = get();
+    if (current.session?.sessionId === sessionId && current.refreshing !== value) {
+      set({ refreshing: value });
+    }
+  }
+
+  function appendCommandLog(sessionId: string, entry: CommandLogEntry) {
+    set((s) => {
+      const isActive = s.session?.sessionId === sessionId;
+      const nextTabs = s.tabs.map((t) => {
+        if (t.session.sessionId !== sessionId) return t;
+        const baseLogs = isActive ? s.commandLogs : (t.commandLogs ?? []);
+        return {
+          ...t,
+          commandLogs: [...baseLogs.slice(-(MAX_COMMAND_LOGS - 1)), entry],
+        };
+      });
+      if (isActive) {
+        return {
+          commandLogs: [...s.commandLogs.slice(-(MAX_COMMAND_LOGS - 1)), entry],
+          tabs: nextTabs,
+        };
+      }
+      return { tabs: nextTabs };
+    });
   }
 
   async function previewFile(file: FileEntry | null, requestId: number) {
@@ -520,64 +595,122 @@ export const useAppStore = create<AppState>((set, get) => {
     }
   }
 
-  async function doRefresh(reason: RefreshReason, event?: RepoChanged) {
+  async function doRefresh(sessionId: string, reason: RefreshReason, event?: RepoChanged) {
     const before = get();
-    if (!before.session) return;
+    const isBeforeActive = before.session?.sessionId === sessionId;
+    const beforeTab = before.tabs.find((t) => t.session.sessionId === sessionId);
+    if (!isBeforeActive && !beforeTab) return;
+
+    const beforeHistory = isBeforeActive ? before.history : (beforeTab?.history ?? null);
     const requestId = ++nextRequestId;
     const initialScopeToken = historyScopeToken;
     const initialAllBranches = before.historyScope !== 'current';
-    const pendingInitialHistory = !before.history
-      ? getBridge().getHistory(before.session.sessionId, requestId, 0, initialAllBranches)
+    const pendingInitialHistory = !beforeHistory
+      ? getBridge().getHistory(sessionId, requestId, 0, initialAllBranches)
       : null;
     pendingInitialHistory?.catch(() => undefined);
     const showRefreshing = reason === 'manual';
     if (showRefreshing) {
-      set({ refreshing: true });
+      setSessionManualRefreshing(sessionId, true);
     }
     try {
-      const snapshot = await getBridge().getSnapshot(before.session.sessionId, requestId);
+      const snapshot = await getBridge().getSnapshot(sessionId, requestId);
       const current = get();
-      if (current.session?.sessionId !== before.session.sessionId || snapshot.requestId !== requestId) return;
-      const branchChanged = current.snapshot?.branch !== snapshot.branch;
-      const historyChanged = current.snapshot?.historyKey !== snapshot.historyKey || branchChanged;
-      const isRepoSelected = current.selectedFile?.area === 'repo';
-      const files = current.context.kind === 'local' ? localFiles(snapshot) : current.commitFiles;
+      const isActiveNow = current.session?.sessionId === sessionId;
+      const currentTab = current.tabs.find((t) => t.session.sessionId === sessionId);
+      if ((!isActiveNow && !currentTab) || snapshot.requestId !== requestId) return;
+
+      const currentSnapshot = isActiveNow ? current.snapshot : currentTab!.snapshot;
+      const currentContext = isActiveNow ? current.context : currentTab!.context;
+      const currentCommitFiles = isActiveNow ? current.commitFiles : currentTab!.commitFiles;
+      const currentSelectedFile = isActiveNow ? current.selectedFile : currentTab!.selectedFile;
+      const currentHistory = isActiveNow ? current.history : currentTab!.history;
+
+      const branchChanged = currentSnapshot?.branch !== snapshot.branch;
+      const historyChanged = currentSnapshot?.historyKey !== snapshot.historyKey || branchChanged;
+      const isRepoSelected = currentSelectedFile?.area === 'repo';
+      const files = currentContext.kind === 'local' ? localFiles(snapshot) : currentCommitFiles;
       const selectedFile = isRepoSelected
-        ? current.selectedFile
-        : (current.selectedFile && files.find((f) => sameFile(f, current.selectedFile))) || null;
-      const selectionLost = !isRepoSelected && current.context.kind === 'local' && !!current.selectedFile && !selectedFile;
-      const snapshotChanged = current.snapshot?.revision !== snapshot.revision;
-      if (snapshotChanged) invalidateLocalPreviews(before.session.sessionId);
-      if (snapshotChanged || current.snapshot?.historyKey !== snapshot.historyKey || !sameFile(current.selectedFile, selectedFile)) {
+        ? currentSelectedFile
+        : (currentSelectedFile && files.find((f) => sameFile(f, currentSelectedFile))) || null;
+      const selectionLost = !isRepoSelected && currentContext.kind === 'local' && !!currentSelectedFile && !selectedFile;
+      const snapshotChanged = currentSnapshot?.revision !== snapshot.revision;
+      if (snapshotChanged) invalidateLocalPreviews(sessionId);
+      if (snapshotChanged || currentSnapshot?.historyKey !== snapshot.historyKey || !sameFile(currentSelectedFile, selectedFile)) {
         const update = selectionLost ? { snapshot, selectedFile, preview: null } : { snapshot, selectedFile };
-        set((s) =>
-          branchChanged
-            ? { ...update, tabs: s.tabs.map((t) => (t.id === s.activeTabId ? { ...t, ...update } : t)) }
-            : update
-        );
+        if (isActiveNow) {
+          set((s) =>
+            branchChanged
+              ? { ...update, tabs: s.tabs.map((t) => (t.session.sessionId === sessionId ? { ...t, ...update } : t)) }
+              : update
+          );
+        } else {
+          set((s) => ({
+            tabs: s.tabs.map((t) => (t.session.sessionId === sessionId ? { ...t, ...update } : t)),
+          }));
+        }
       }
-      const selectedPath = current.selectedFile?.pathDisplay;
-      const changedSelectedPath = !!selectedPath && !!event?.paths.some((path) => path === selectedPath || selectedPath.startsWith(`${path}/`) || path.startsWith(`${selectedPath}/`));
-      const shouldPreview = reason === 'manual' || reason === 'mutation' || (reason === 'focus' ? snapshotChanged : (!event || event.scope !== 'worktree' || changedSelectedPath));
-      if (current.context.kind === 'local' && shouldPreview) void previewFile(selectedFile, requestId);
-      if (historyChanged || !current.history) {
+      if (isActiveNow) {
+        const selectedPath = currentSelectedFile?.pathDisplay;
+        const changedSelectedPath = !!selectedPath && !!event?.paths.some((path) => path === selectedPath || selectedPath.startsWith(`${path}/`) || path.startsWith(`${selectedPath}/`));
+        const shouldPreview = reason === 'manual' || reason === 'mutation' || (reason === 'focus' ? snapshotChanged : (!event || event.scope !== 'worktree' || changedSelectedPath));
+        if (currentContext.kind === 'local' && shouldPreview) void previewFile(selectedFile, requestId);
+      }
+      if (historyChanged || !currentHistory) {
         const scopeToken = historyScopeToken;
         const allBranches = get().historyScope !== 'current';
         const history = pendingInitialHistory && scopeToken === initialScopeToken && allBranches === initialAllBranches
           ? await pendingInitialHistory
-          : await getBridge().getHistory(before.session.sessionId, requestId, 0, allBranches);
-        if (scopeToken === historyScopeToken && get().session?.sessionId === before.session.sessionId && history.requestId === requestId && get().snapshot?.historyKey === snapshot.historyKey) {
-          set({ history });
+          : await getBridge().getHistory(sessionId, requestId, 0, allBranches);
+        if (scopeToken === historyScopeToken && history.requestId === requestId) {
+          const latest = get();
+          if (latest.session?.sessionId === sessionId && latest.snapshot?.historyKey === snapshot.historyKey) {
+            set({ history });
+          } else {
+            const latestTab = latest.tabs.find((t) => t.session.sessionId === sessionId);
+            if (latestTab && latestTab.snapshot?.historyKey === snapshot.historyKey) {
+              set((s) => ({
+                tabs: s.tabs.map((t) => (t.session.sessionId === sessionId ? { ...t, history } : t)),
+              }));
+            }
+          }
         }
       }
-      if ((reason === 'manual' || reason === 'mutation' || !get().authState) && getBridge().getAuthState) {
+      if (isActiveNow && get().session?.sessionId === sessionId && (reason === 'manual' || reason === 'mutation' || !get().authState) && getBridge().getAuthState) {
         void get().loadAuthState?.(false);
       }
     } catch (error) {
-      if (get().session?.sessionId === before.session.sessionId) set({ notice: asError(error) });
+      if (get().session?.sessionId === sessionId) set({ notice: asError(error) });
     } finally {
-      if (showRefreshing && get().refreshing && get().session?.sessionId === before.session.sessionId) {
-        set({ refreshing: false });
+      if (showRefreshing) {
+        setSessionManualRefreshing(sessionId, false);
+      }
+    }
+  }
+
+  async function refreshSession(sessionId: string, reason: RefreshReason = 'manual', event?: RepoChanged) {
+    if (refreshInFlightBySession.has(sessionId)) {
+      queuedRefreshBySession.set(
+        sessionId,
+        mergeRefresh(queuedRefreshBySession.get(sessionId) ?? null, { reason, event })
+      );
+      return;
+    }
+    refreshInFlightBySession.add(sessionId);
+    try {
+      await doRefresh(sessionId, reason, event);
+    } finally {
+      refreshInFlightBySession.delete(sessionId);
+      const queued = queuedRefreshBySession.get(sessionId);
+      queuedRefreshBySession.delete(sessionId);
+      if (queued) {
+        const latest = get();
+        const stillOpen =
+          latest.session?.sessionId === sessionId ||
+          latest.tabs.some((t) => t.session.sessionId === sessionId);
+        if (stillOpen) {
+          void refreshSession(sessionId, queued.reason, queued.event);
+        }
       }
     }
   }
@@ -623,6 +756,7 @@ export const useAppStore = create<AppState>((set, get) => {
       remotes: [],
       authState: null,
       filesTab: 'changes',
+      commandLogs: [],
     };
 
     const newTabs = [...currentTabs, newTab];
@@ -650,6 +784,9 @@ export const useAppStore = create<AppState>((set, get) => {
         remotes: [],
         authState: null,
         filesTab: 'changes',
+        commandLogs: [],
+        operation: null,
+        refreshing: false,
         notice: session.warning ?? null,
       });
     }
@@ -666,7 +803,7 @@ export const useAppStore = create<AppState>((set, get) => {
       });
     }
 
-    if (options?.activate !== false) await get().refresh('manual');
+    if (options?.activate !== false) await refreshSession(session.sessionId, 'manual');
   }
 
   const pendingAuthRequests = new Map<string, Promise<void>>();
@@ -811,7 +948,10 @@ export const useAppStore = create<AppState>((set, get) => {
     },
     commandLogs: [],
     clearCommandLogs() {
-      set({ commandLogs: [] });
+      set((s) => ({
+        commandLogs: [],
+        tabs: s.tabs.map((t) => (t.id === s.activeTabId ? { ...t, commandLogs: [] } : t)),
+      }));
     },
     async runGitCommand(command) {
       const trimmed = command.trim();
@@ -899,7 +1039,8 @@ export const useAppStore = create<AppState>((set, get) => {
         return;
       }
 
-      await state.runOperation('openBrowser', [], webUrl);
+      if (get().session?.sessionId !== state.session.sessionId) return;
+      await get().runOperation('openBrowser', [], webUrl);
     },
     async restoreCommitFile(commitOid, path) {
       const state = get();
@@ -947,10 +1088,10 @@ export const useAppStore = create<AppState>((set, get) => {
     refreshing: false,
     opening: false,
     operation: null,
+    operationsBySession: {},
     notice: null,
 
     async openRepository(path, options) {
-      if (writeReserved || get().operation) return;
       const token = ++openToken;
       if (options?.activate !== false) set({ opening: true });
       try {
@@ -995,7 +1136,6 @@ export const useAppStore = create<AppState>((set, get) => {
     },
 
     async cloneRepository(source, destination) {
-      if (writeReserved || get().operation) return;
       const bridge = getBridge();
       if (!bridge.cloneRepository) {
         set({ notice: { category: 'validation', message: 'Clonagem não suportada neste ambiente.' } });
@@ -1016,7 +1156,6 @@ export const useAppStore = create<AppState>((set, get) => {
     },
 
     async initRepository(path, defaultBranch) {
-      if (writeReserved || get().operation) return;
       const bridge = getBridge();
       if (!bridge.initRepository) {
         set({ notice: { category: 'validation', message: 'Inicialização não suportada neste ambiente.' } });
@@ -1048,7 +1187,6 @@ export const useAppStore = create<AppState>((set, get) => {
     },
 
     async openRepositories(paths) {
-      if (writeReserved || get().operation) return;
       const bridge = getBridge();
       let targetPaths = paths;
       if (!targetPaths || targetPaths.length === 0) {
@@ -1095,10 +1233,12 @@ export const useAppStore = create<AppState>((set, get) => {
       const tabToClose = current.tabs.find((t) => t.id === tabId);
       if (!tabToClose) return;
 
-      evictSessionCaches(tabToClose.session.sessionId);
-      void getBridge().closeRepository(tabToClose.session.sessionId);
+      const closedSessionId = tabToClose.session.sessionId;
+      evictSessionCaches(closedSessionId);
+      void getBridge().closeRepository(closedSessionId);
 
       const remainingTabs = current.tabs.filter((t) => t.id !== tabId);
+      const nextOps = omitSessions(current.operationsBySession, [closedSessionId]);
 
       if (current.activeTabId === tabId) {
         const closedIndex = current.tabs.findIndex((t) => t.id === tabId);
@@ -1118,11 +1258,16 @@ export const useAppStore = create<AppState>((set, get) => {
             commitMessage: '',
             remotes: [],
             authState: null,
+            commandLogs: [],
+            operationsBySession: nextOps,
+            operation: null,
+            refreshing: false,
           });
           saveOpenTabs([], 'home');
         } else {
           const nextIndex = Math.min(closedIndex, remainingTabs.length - 1);
           const nextTab = remainingTabs[nextIndex];
+          const nextSessionId = nextTab.session.sessionId;
           set({
             tabs: remainingTabs,
             activeTabId: nextTab.id,
@@ -1138,16 +1283,21 @@ export const useAppStore = create<AppState>((set, get) => {
             commitMessage: nextTab.commitMessage,
             remotes: nextTab.remotes ?? [],
             authState: nextTab.authState ?? null,
+            filesTab: nextTab.filesTab ?? 'changes',
+            commandLogs: nextTab.commandLogs ?? [],
+            operationsBySession: nextOps,
+            operation: nextOps[nextSessionId] ?? null,
+            refreshing: manualRefreshingSessions.has(nextSessionId),
           });
           saveOpenTabs(remainingTabs.map((t) => t.path), nextTab.id);
           if (!nextTab.snapshot) {
-            await get().refresh('manual');
+            await refreshSession(nextSessionId, 'manual');
           } else {
-            void get().refresh('focus');
+            void refreshSession(nextSessionId, 'focus');
           }
         }
       } else {
-        set({ tabs: remainingTabs });
+        set({ tabs: remainingTabs, operationsBySession: nextOps });
         saveOpenTabs(remainingTabs.map((t) => t.path), current.activeTabId);
       }
     },
@@ -1247,12 +1397,15 @@ export const useAppStore = create<AppState>((set, get) => {
     async closeOtherTabs(tabId) {
       const current = get();
       const tabsToClose = current.tabs.filter((t) => t.id !== tabId);
+      const closedSessionIds: string[] = [];
       for (const t of tabsToClose) {
+        closedSessionIds.push(t.session.sessionId);
         evictSessionCaches(t.session.sessionId);
         void getBridge().closeRepository(t.session.sessionId);
       }
       const remaining = current.tabs.filter((t) => t.id === tabId);
-      set({ tabs: remaining });
+      const nextOps = omitSessions(current.operationsBySession, closedSessionIds);
+      set({ tabs: remaining, operationsBySession: nextOps });
       saveOpenTabs(remaining.map((t) => t.path), tabId);
 
       if (current.activeTabId !== tabId && remaining.length > 0) {
@@ -1265,13 +1418,16 @@ export const useAppStore = create<AppState>((set, get) => {
       const index = current.tabs.findIndex((t) => t.id === tabId);
       if (index === -1 || index >= current.tabs.length - 1) return;
       const tabsToClose = current.tabs.slice(index + 1);
+      const closedSessionIds: string[] = [];
       for (const t of tabsToClose) {
+        closedSessionIds.push(t.session.sessionId);
         evictSessionCaches(t.session.sessionId);
         void getBridge().closeRepository(t.session.sessionId);
       }
       const remaining = current.tabs.slice(0, index + 1);
       const wasActiveClosed = tabsToClose.some((t) => t.id === current.activeTabId);
-      set({ tabs: remaining });
+      const nextOps = omitSessions(current.operationsBySession, closedSessionIds);
+      set({ tabs: remaining, operationsBySession: nextOps });
       saveOpenTabs(remaining.map((t) => t.path), wasActiveClosed ? tabId : current.activeTabId);
 
       if (wasActiveClosed) {
@@ -1303,6 +1459,9 @@ export const useAppStore = create<AppState>((set, get) => {
           remotes: [],
           authState: null,
           filesTab: 'changes',
+          commandLogs: [],
+          operation: null,
+          refreshing: false,
         });
         saveOpenTabs(updatedTabs.map((t) => t.path), 'home');
         return;
@@ -1315,6 +1474,10 @@ export const useAppStore = create<AppState>((set, get) => {
         { path: targetTab.path, name: targetTab.name, lastOpened: Date.now() },
         ...current.recentRepos.filter((r) => r.path !== targetTab.path),
       ].slice(0, 20);
+
+      const targetSessionId = targetTab.session.sessionId;
+      const targetOp = current.operationsBySession?.[targetSessionId] ?? null;
+      const targetRefreshing = manualRefreshingSessions.has(targetSessionId);
 
       set({
         tabs: updatedTabs,
@@ -1333,6 +1496,9 @@ export const useAppStore = create<AppState>((set, get) => {
         remotes: targetTab.remotes ?? [],
         authState: targetTab.authState ?? null,
         filesTab: targetTab.filesTab ?? 'changes',
+        commandLogs: targetTab.commandLogs ?? [],
+        operation: targetOp,
+        refreshing: targetRefreshing,
         notice: null,
       });
 
@@ -1340,9 +1506,9 @@ export const useAppStore = create<AppState>((set, get) => {
       saveRecentRepos(updatedRecents);
 
       if (!targetTab.snapshot) {
-        await get().refresh('manual');
+        await refreshSession(targetSessionId, 'manual');
       } else {
-        void get().refresh('focus');
+        void refreshSession(targetSessionId, 'focus');
       }
     },
 
@@ -1421,14 +1587,9 @@ export const useAppStore = create<AppState>((set, get) => {
     },
 
     async refresh(reason = 'manual', event) {
-      if (refreshInFlight) { queuedRefresh = mergeRefresh(queuedRefresh, { reason, event }); return; }
-      refreshInFlight = true;
-      try { await doRefresh(reason, event); }
-      finally {
-        refreshInFlight = false;
-        const queued = queuedRefresh; queuedRefresh = null;
-        if (queued) void get().refresh(queued.reason, queued.event);
-      }
+      const sessionId = event?.sessionId ?? get().session?.sessionId;
+      if (!sessionId) return;
+      await refreshSession(sessionId, reason, event);
     },
     async selectLocal() {
       if (get().context.kind === 'local') return;
@@ -1577,9 +1738,17 @@ export const useAppStore = create<AppState>((set, get) => {
       finally { if (loadingMore?.sessionId === state.session.sessionId && loadingMore.page === requestedPage && loadingMore.token === token) loadingMore = null; }
     },
     async runOperation(operation, fileIds, customMessage) {
-      if (writeReserved || get().operation || get().opening) return;
       const initial = get();
       if (!initial.session) return;
+      const targetSession = initial.session;
+      const sessionId = targetSession.sessionId;
+      if (
+        writeReservedBySession.has(sessionId) ||
+        initial.operationsBySession?.[sessionId] ||
+        initial.operation
+      ) {
+        return;
+      }
       if (operation === 'commit' || operation === 'commitAmend') {
         if (initial.context.kind !== 'local') return;
         if (operation === 'commit') {
@@ -1593,29 +1762,37 @@ export const useAppStore = create<AppState>((set, get) => {
         }
         if (initial.snapshot?.conflicted) { notify({ category: 'validation', message: 'Resolva os conflitos antes do commit.' }, set); return; }
       }
-      writeReserved = true;
-      set({ operation });
+      const targetTab = initial.tabs.find((t) => t.session.sessionId === sessionId);
+      const repoLabel = targetTab?.name ?? targetSession.name;
+      const ids = fileIds ?? (NO_FILE_OPERATIONS.has(operation) ? [] : initial.selectedFile ? [initial.selectedFile.id] : []);
+      const initialCommitMessage = initial.commitMessage;
+      const messageToSend = customMessage !== undefined
+        ? (operation === 'mergeBranch' && initial.mergeStrategy !== 'default' && !customMessage.startsWith('{'))
+          ? JSON.stringify({ branch: customMessage, strategy: initial.mergeStrategy })
+          : (operation === 'openEditor' && !customMessage.startsWith('{'))
+            ? JSON.stringify({ path: customMessage, editor: initial.preferredEditor })
+            : customMessage
+        : (operation === 'commit' || operation === 'commitAmend')
+          ? initialCommitMessage
+          : operation === 'pull'
+            ? initial.pullStrategy
+            : operation === 'openEditor'
+              ? JSON.stringify({ path: '', editor: initial.preferredEditor })
+              : '';
+
+      writeReservedBySession.add(sessionId);
+      setSessionOperation(sessionId, operation);
+
       const execute = async () => {
-        const state = get(); if (!state.session) return;
-        const ids = fileIds ?? (NO_FILE_OPERATIONS.has(operation) ? [] : state.selectedFile ? [state.selectedFile.id] : []);
-        const messageToSend = customMessage !== undefined
-          ? (operation === 'mergeBranch' && state.mergeStrategy !== 'default' && !customMessage.startsWith('{'))
-            ? JSON.stringify({ branch: customMessage, strategy: state.mergeStrategy })
-            : (operation === 'openEditor' && !customMessage.startsWith('{'))
-              ? JSON.stringify({ path: customMessage, editor: state.preferredEditor })
-              : customMessage
-          : (operation === 'commit' || operation === 'commitAmend')
-            ? state.commitMessage
-            : operation === 'pull'
-              ? state.pullStrategy
-              : operation === 'openEditor'
-                ? JSON.stringify({ path: '', editor: state.preferredEditor })
-                : '';
         const requestId = ++nextRequestId;
         const logCmd = formatGitLogCommand(operation, ids, messageToSend);
+        let shouldRefreshAfter = false;
         try {
-          const result = await getBridge().applyOperation(state.session.sessionId, requestId, operation, ids, messageToSend);
-          if (get().session?.sessionId === state.session.sessionId) {
+          const result = await getBridge().applyOperation(sessionId, requestId, operation, ids, messageToSend);
+          const latest = get();
+          const isActive = latest.session?.sessionId === sessionId;
+          const tabExists = isActive || latest.tabs.some((t) => t.session.sessionId === sessionId);
+          if (tabExists) {
             if (!NO_REFRESH_OPERATIONS.has(operation)) {
               const entry: CommandLogEntry = {
                 id: String(requestId),
@@ -1625,22 +1802,37 @@ export const useAppStore = create<AppState>((set, get) => {
                 timestamp: Date.now(),
                 isCustomCli: operation === 'gitCommand',
               };
-              set((s) => ({
-                commandLogs: [...s.commandLogs.slice(-(MAX_COMMAND_LOGS - 1)), entry],
-              }));
-              invalidateLocalPreviews(state.session.sessionId);
+              appendCommandLog(sessionId, entry);
+              invalidateLocalPreviews(sessionId);
+              shouldRefreshAfter = true;
             }
             if (operation !== 'gitCommand') {
-              notify({ category: 'success', message: result.message }, set);
+              const noticeMessage = isActive ? result.message : `[${repoLabel}] ${result.message}`;
+              notify({ category: 'success', message: noticeMessage }, set);
             }
-            if ((operation === 'commit' || operation === 'commitAmend') && get().commitMessage === state.commitMessage) {
-              set({ commitMessage: '' });
+            if (operation === 'commit' || operation === 'commitAmend') {
+              set((s) => {
+                const activeMatch = s.session?.sessionId === sessionId && s.commitMessage === initialCommitMessage;
+                return {
+                  ...(activeMatch ? { commitMessage: '' } : {}),
+                  tabs: s.tabs.map((t) =>
+                    t.session.sessionId === sessionId && t.commitMessage === initialCommitMessage
+                      ? { ...t, commitMessage: '' }
+                      : t
+                  ),
+                };
+              });
             }
-            set({ operation: null });
-            if (!NO_REFRESH_OPERATIONS.has(operation)) await get().refresh('mutation');
+            setSessionOperation(sessionId, null);
+            if (shouldRefreshAfter) {
+              await refreshSession(sessionId, 'mutation');
+            }
           }
         } catch (error) {
-          if (get().session?.sessionId === state.session.sessionId) {
+          const latest = get();
+          const isActive = latest.session?.sessionId === sessionId;
+          const tabExists = isActive || latest.tabs.some((t) => t.session.sessionId === sessionId);
+          if (tabExists) {
             const err = asError(error);
             if (!NO_REFRESH_OPERATIONS.has(operation)) {
               const entry: CommandLogEntry = {
@@ -1651,22 +1843,29 @@ export const useAppStore = create<AppState>((set, get) => {
                 timestamp: Date.now(),
                 isCustomCli: operation === 'gitCommand',
               };
-              set((s) => ({
-                commandLogs: [...s.commandLogs.slice(-(MAX_COMMAND_LOGS - 1)), entry],
-              }));
+              appendCommandLog(sessionId, entry);
             }
-            notify(err, set);
+            notify(
+              isActive ? err : { ...err, message: `[${repoLabel}] ${err.message}` },
+              set
+            );
           }
-        }
-        finally {
-          writeReserved = false;
-          if (get().operation && get().session?.sessionId === state.session.sessionId) {
-            set({ operation: null });
-          }
+        } finally {
+          writeReservedBySession.delete(sessionId);
+          setSessionOperation(sessionId, null);
         }
       };
-      writeChain = writeChain.then(execute, execute);
-      await writeChain;
+
+      const prevChain = writeChainBySession.get(sessionId) ?? Promise.resolve();
+      const nextChain = prevChain.then(execute, execute);
+      writeChainBySession.set(sessionId, nextChain);
+      try {
+        await nextChain;
+      } finally {
+        if (writeChainBySession.get(sessionId) === nextChain) {
+          writeChainBySession.delete(sessionId);
+        }
+      }
     },
     setCommitMessage: (commitMessage) => set({ commitMessage }),
     setDiffMode: (diffMode) => set({ diffMode }),

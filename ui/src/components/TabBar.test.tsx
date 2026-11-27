@@ -412,4 +412,44 @@ describe('TabBar component', () => {
 
     expect(setGroupName).toHaveBeenCalledWith('#10b981', 'Novos Serviços');
   });
+
+  it('shows operation spinner only on busy background tab and keeps new tab button enabled', () => {
+    useAppStore.setState(
+      state({
+        activeTabId: '/repo/b',
+        session: { sessionId: 's-/repo/b', root: '/repo/b', name: 'Repo B' },
+        operation: null,
+        operationsBySession: { 's-/repo/a': 'push' },
+      })
+    );
+
+    render(<TabBar />);
+
+    const tabA = screen.getByText('Repo A').closest('.tab-item')!;
+    const tabB = screen.getByText('Repo B').closest('.tab-item')!;
+    expect(tabA.querySelector('.tab-op-indicator')).toBeInTheDocument();
+    expect(tabB.querySelector('.tab-op-indicator')).not.toBeInTheDocument();
+
+    const newTabBtn = screen.getByRole('button', { name: /Abrir novo repositório|Nova aba/i });
+    expect(newTabBtn).not.toBeDisabled();
+  });
+
+  it('keeps new tab button enabled even while active tab has an ongoing operation', () => {
+    useAppStore.setState(
+      state({
+        activeTabId: '/repo/a',
+        session: { sessionId: 's-/repo/a', root: '/repo/a', name: 'Repo A' },
+        operation: 'push',
+        operationsBySession: { 's-/repo/a': 'push' },
+      })
+    );
+
+    render(<TabBar />);
+
+    const tabA = screen.getByText('Repo A').closest('.tab-item')!;
+    expect(tabA.querySelector('.tab-op-indicator')).toBeInTheDocument();
+
+    const newTabBtn = screen.getByRole('button', { name: /Abrir novo repositório|Nova aba/i });
+    expect(newTabBtn).not.toBeDisabled();
+  });
 });

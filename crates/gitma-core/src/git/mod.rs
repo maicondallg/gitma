@@ -405,7 +405,7 @@ impl GitRepository {
         oid: &str,
         known_parents: Option<&[String]>,
     ) -> GitResult<Vec<ChangedFile>> {
-        let may_have_stash_untracked = known_parents.map_or(true, |p| p.len() >= 3);
+        let may_have_stash_untracked = known_parents.is_none_or(|p| p.len() >= 3);
         let (raw, untracked_parent) = if may_have_stash_untracked && self.has_stash_ref() {
             std::thread::scope(|scope| {
                 let untracked_parent =
@@ -714,7 +714,7 @@ impl GitRepository {
                     is_tracked: true,
                 })
                 .collect::<Vec<_>>();
-            let may_have_stash_untracked = known_parents.map_or(true, |p| p.len() >= 3);
+            let may_have_stash_untracked = known_parents.is_none_or(|p| p.len() >= 3);
             if may_have_stash_untracked && self.has_stash_ref() {
                 if let Some(u_oid) = stash_untracked_parent(&self.context.root, oid) {
                     if let Ok(u_raw) = runner::read(

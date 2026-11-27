@@ -649,3 +649,201 @@ describe('history pagination coordination', () => {
   });
 });
 
+describe('multi-repository concurrency', () => {
+  it('allows operations in repo B while a slow push is running in repo A and completes cleanly in background', async () => {
+    const { store, adapter } = await setup();
+    await store.getState().openRepository('/demo/repo-a');
+    await store.getState().openRepository('/demo/repo-b');
+
+    const repoATab = store.getState().tabs.find((t) => t.path === '/demo/repo-a')!;
+    const repoBTab = store.getState().tabs.find((t) => t.path === '/demo/repo-b')!;
+    const repoASessionId = repoATab.session.sessionId;
+    const repoBSessionId = repoBTab.session.sessionId;
+
+    const pushADeferred = deferred<{ sessionId: string; requestId: number; message: string }>();
+    const originalApply = adapter.applyOperation;
+    const executedOps: Array<{ sessionId: string; operation: string }> = [];
+    adapter.applyOperation = async (sessionId, requestId, operation, ids, message) => {
+      executedOps.push({ sessionId, operation });
+      if (sessionId === repoASessionId && operation === 'push') {
+        return pushADeferred.promise;
+      }
+      return originalApply(sessionId, requestId, operation, ids, message);
+    };
+
+    // Start slow push in repo A
+    await store.getState().switchTab(repoATab.id);
+    const pushPromise = store.getState().runOperation('push');
+    expect(store.getState().operation).toBe('push');
+    expect(store.getState().operationsBySession?.[repoASessionId]).toBe('push');
+
+    // Switch to repo B while repo A is still pushing
+    await store.getState().switchTab(repoBTab.id);
+    expect(store.getState().operation).toBeNull();
+
+    // Perform stage, commit, and pull in repo B without waiting for repo A
+    const unstagedB = store.getState().snapshot!.unstaged[0];
+    await store.getState().runOperation('stage', [unstagedB.id]);
+    store.getState().setCommitMessage('Commit in repo B while repo A pushes');
+    await store.getState().runOperation('commit');
+    await store.getState().runOperation('pull');
+
+    expect(executedOps).toEqual([
+      { sessionId: repoASessionId, operation: 'push' },
+      { sessionId: repoBSessionId, operation: 'stage' },
+      { sessionId: repoBSessionId, operation: 'commit' },
+      { sessionId: repoBSessionId, operation: 'pull' },
+    ]);
+    expect(store.getState().commitMessage).toBe('');
+    expect(store.getState().commandLogs.map((l) => l.command)).toEqual([
+      'git add <file>',
+      'git commit -m "Commit in repo B while repo A pushes"',
+      'git pull --ff-only',
+    ]);
+
+    // Switching back to repo A still shows push in progress and blocks duplicate writes on repo A
+    await store.getState().switchTab(repoATab.id);
+    expect(store.getState().operation).toBe('push');
+    await store.getState().runOperation('pull');
+    expect(executedOps).toHaveLength(4);
+
+    // Switch back to repo B and finish repo A's push in the background
+    await store.getState().switchTab(repoBTab.id);
+    pushADeferred.resolve({ sessionId: repoASessionId, requestId: 999, message: 'Push concluído' });
+    await pushPromise;
+
+    expect(store.getState().operationsBySession?.[repoASessionId]).toBeUndefined();
+    expect(store.getState().operation).toBeNull();
+    expect(store.getState().notice).toEqual({ category: 'success', message: '[repo-a] Push concluído' });
+    // Repo B's console logs are untouched, while repo A's tab logged its own push
+    expect(store.getState().commandLogs).toHaveLength(3);
+    const updatedRepoA = store.getState().tabs.find((t) => t.id === repoATab.id)!;
+    expect(updatedRepoA.commandLogs?.some((l) => l.command === 'git push')).toBe(true);
+
+    // Switching back to repo A shows it unlocked and ready
+    await store.getState().switchTab(repoATab.id);
+    expect(store.getState().operation).toBeNull();
+    expect(store.getState().commandLogs.some((l) => l.command === 'git push')).toBe(true);
+  });
+
+  it('clears operation and surfaces error notice when a background operation fails', async () => {
+    const { store, adapter } = await setup();
+    await store.getState().openRepository('/demo/repo-err-a');
+    await store.getState().openRepository('/demo/repo-err-b');
+
+    const tabA = store.getState().tabs.find((t) => t.path === '/demo/repo-err-a')!;
+    const tabB = store.getState().tabs.find((t) => t.path === '/demo/repo-err-b')!;
+    let rejectPush!: (err: unknown) => void;
+    const pushPromiseRaw = new Promise<never>((_resolve, reject) => { rejectPush = reject; });
+
+    adapter.applyOperation = async (sessionId) => {
+      if (sessionId === tabA.session.sessionId) return pushPromiseRaw;
+      return { sessionId, requestId: 1, message: 'OK' };
+    };
+
+    await store.getState().switchTab(tabA.id);
+    const running = store.getState().runOperation('push');
+    await store.getState().switchTab(tabB.id);
+
+    rejectPush({ category: 'diverged', message: 'Push rejeitado' });
+    await running;
+
+    expect(store.getState().operationsBySession?.[tabA.session.sessionId]).toBeUndefined();
+    expect(store.getState().notice).toEqual({ category: 'diverged', message: '[repo-err-a] Push rejeitado' });
+
+    await store.getState().switchTab(tabA.id);
+    expect(store.getState().operation).toBeNull();
+    expect(store.getState().commandLogs[0]?.status).toBe('error');
+  });
+
+  it('does not block repo B refresh while repo A snapshot is slow and never leaves refreshing stuck', async () => {
+    const { store, adapter } = await setup();
+    await store.getState().openRepository('/demo/ref-a');
+    await store.getState().openRepository('/demo/ref-b');
+
+    const tabA = store.getState().tabs.find((t) => t.path === '/demo/ref-a')!;
+    const tabB = store.getState().tabs.find((t) => t.path === '/demo/ref-b')!;
+    const originalSnapshot = adapter.getSnapshot;
+    const slowSnapA = deferred<Awaited<ReturnType<typeof originalSnapshot>>>();
+    let blockA = false;
+    let snapARequestId = 0;
+    let snapBCallsWhileABlocked = 0;
+
+    adapter.getSnapshot = async (sessionId, requestId) => {
+      if (sessionId === tabA.session.sessionId && blockA) {
+        snapARequestId = requestId;
+        return slowSnapA.promise;
+      }
+      if (sessionId === tabB.session.sessionId && blockA) {
+        snapBCallsWhileABlocked++;
+      }
+      return originalSnapshot(sessionId, requestId);
+    };
+
+    await store.getState().switchTab(tabA.id);
+    // Let the unawaited focus refresh triggered by switchTab finish before starting the slow manual refresh
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    blockA = true;
+    const refreshA = store.getState().refresh('manual');
+    expect(store.getState().refreshing).toBe(true);
+
+    // Switch to repo B while repo A refresh is still pending
+    await store.getState().switchTab(tabB.id);
+    expect(store.getState().refreshing).toBe(false);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    // Manual refresh on repo B finishes immediately without waiting for repo A
+    await store.getState().refresh('manual');
+    expect(store.getState().refreshing).toBe(false);
+    expect(snapBCallsWhileABlocked).toBeGreaterThanOrEqual(2);
+
+    // Resolve repo A's slow refresh while still on repo B
+    blockA = false;
+    const freshSnapA = await originalSnapshot(tabA.session.sessionId, snapARequestId);
+    slowSnapA.resolve({ ...freshSnapA, revision: 777 });
+    await refreshA;
+
+    // Repo A's tab snapshot updated in background and refreshing is cleared
+    const updatedTabA = store.getState().tabs.find((t) => t.id === tabA.id)!;
+    expect(updatedTabA.snapshot?.revision).toBe(777);
+
+    await store.getState().switchTab(tabA.id);
+    expect(store.getState().refreshing).toBe(false);
+    expect(store.getState().snapshot?.revision).toBe(777);
+  });
+
+  it('allows opening a new repository and closing a busy tab cleanly during an ongoing operation', async () => {
+    const { store, adapter } = await setup();
+    await store.getState().openRepository('/demo/busy-a');
+    const tabA = store.getState().tabs.find((t) => t.path === '/demo/busy-a')!;
+
+    const pushA = deferred<{ sessionId: string; requestId: number; message: string }>();
+    const originalApply = adapter.applyOperation;
+    adapter.applyOperation = async (sessionId, requestId, op, ids, msg) => {
+      if (sessionId === tabA.session.sessionId && op === 'push') return pushA.promise;
+      return originalApply(sessionId, requestId, op, ids, msg);
+    };
+
+    const running = store.getState().runOperation('push');
+    expect(store.getState().operation).toBe('push');
+
+    // Opening a new repository tab is NOT blocked by busy-a's push
+    await store.getState().openRepository('/demo/new-c');
+    expect(store.getState().activeTabId).toBe('/demo/new-c');
+    expect(store.getState().operation).toBeNull();
+    expect(store.getState().operationsBySession?.[tabA.session.sessionId]).toBe('push');
+
+    // Closing busy-a while push is still in flight cleans up cleanly without ghost notices
+    await store.getState().closeTab(tabA.id);
+    expect(store.getState().operationsBySession?.[tabA.session.sessionId]).toBeUndefined();
+
+    store.getState().dismissNotice();
+    pushA.resolve({ sessionId: tabA.session.sessionId, requestId: 1, message: 'Push concluído' });
+    await running;
+
+    expect(store.getState().notice).toBeNull();
+    expect(store.getState().operationsBySession?.[tabA.session.sessionId]).toBeUndefined();
+  });
+});
+

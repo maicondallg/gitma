@@ -13,6 +13,7 @@ import {
   Globe,
   History,
   Home,
+  Loader2,
   Palette,
   Plus,
   RotateCcw,
@@ -97,6 +98,7 @@ export const TabBar = memo(function TabBar() {
   const openRemotesModal = useAppStore((s) => s.openRemotesModal);
   const opening = useAppStore((s) => s.opening);
   const operation = useAppStore((s) => s.operation);
+  const operationsBySession = useAppStore((s) => s.operationsBySession);
   const runOperation = useAppStore((s) => s.runOperation);
   const openTerminal = useAppStore((s) => s.openTerminal);
   const { t } = useI18n();
@@ -759,6 +761,9 @@ export const TabBar = memo(function TabBar() {
                 const isActive = tab.id === activeTabId;
                 const branch = isActive ? activeBranch : tab.snapshot?.branch;
                 const isSliding = slidingIndex === index;
+                const tabOperation = isActive
+                  ? (operation ?? operationsBySession?.[tab.session.sessionId] ?? null)
+                  : (operationsBySession?.[tab.session.sessionId] ?? null);
 
                 return (
                   <div
@@ -895,6 +900,16 @@ export const TabBar = memo(function TabBar() {
                       </span>
                     )}
 
+                    {tabOperation && (
+                      <span
+                        className="tab-op-indicator"
+                        title={t(`operations.${tabOperation}`)}
+                        aria-label={t(`operations.${tabOperation}`)}
+                      >
+                        <Loader2 size={11} className="spin" aria-hidden="true" />
+                      </span>
+                    )}
+
                     <button
                       type="button"
                       className="tab-close"
@@ -920,7 +935,7 @@ export const TabBar = memo(function TabBar() {
           type="button"
           className="tab-new"
           onClick={() => void openRepository()}
-          disabled={opening || !!operation}
+          disabled={opening}
           title={t('tabs.newTab')}
           aria-label={t('tabs.newTab')}
         >
@@ -936,6 +951,7 @@ export const TabBar = memo(function TabBar() {
                 type="button"
                 className="tab-bar-badge-btn behind-badge"
                 onClick={() => void runOperation('pull')}
+                disabled={!!operation}
                 title={t('sync.pullBehind', { count: behind })}
                 aria-label={t('sync.pullBehind', { count: behind })}
                 style={{

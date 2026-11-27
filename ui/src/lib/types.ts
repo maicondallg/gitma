@@ -221,6 +221,7 @@ export interface TabItem {
   remotes?: RemoteEntry[];
   authState?: RepoAuthState | null;
   filesTab?: 'changes' | 'explorer';
+  commandLogs?: CommandLogEntry[];
 }
 
 export interface RecentRepo {

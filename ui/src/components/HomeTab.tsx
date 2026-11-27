@@ -51,7 +51,6 @@ export function HomeTab() {
   const removeRecentRepo = useAppStore((s) => s.removeRecentRepo);
   const clearRecentRepos = useAppStore((s) => s.clearRecentRepos);
   const opening = useAppStore((s) => s.opening);
-  const operation = useAppStore((s) => s.operation);
 
   const [filter, setFilter] = useState('');
   const [selectMode, setSelectMode] = useState(false);
@@ -134,7 +133,7 @@ export function HomeTab() {
                 type="button"
                 className="home-primary-btn"
                 onClick={() => void openRepositories()}
-                disabled={opening || !!operation}
+                disabled={opening}
                 title={t('home.openLocalRepoTitle')}
               >
                 {opening ? (
@@ -161,7 +160,7 @@ export function HomeTab() {
                 type="button"
                 className="home-primary-btn home-secondary-action-btn"
                 onClick={() => setShowCloneModal(true)}
-                disabled={opening || !!operation}
+                disabled={opening}
                 title={t('home.cloneRepoDesc')}
               >
                 <Download size={18} />
@@ -175,7 +174,7 @@ export function HomeTab() {
                 type="button"
                 className="home-primary-btn home-secondary-action-btn"
                 onClick={() => setShowInitModal(true)}
-                disabled={opening || !!operation}
+                disabled={opening}
                 title={t('home.initRepoDesc')}
               >
                 <FolderPlus size={18} />
@@ -325,7 +324,7 @@ export function HomeTab() {
                   type="button"
                   className="open-button"
                   onClick={() => void openRepositories()}
-                  disabled={opening || !!operation}
+                  disabled={opening}
                 >
                   <FolderOpen size={15} />
                   <span>{t('home.openLocalRepo')}</span>

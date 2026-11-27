@@ -189,6 +189,13 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
   white-space: nowrap;
   min-width: 0;
 }
+.tab-op-indicator {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--accent);
+  flex-shrink: 0;
+}
 .tab-close {
   display: flex;
   align-items: center;
